@@ -1,0 +1,275 @@
+
+import TelegramBot from 'node-telegram-bot-api'
+import axios from 'axios'
+import * as dotenv from 'dotenv'
+dotenv.config()
+
+// =======================
+// CONFIG
+// =======================
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8363087451:AAHKl48E-jg_PeeU9GG0NfugpX-vnsYKYLE'
+const BANKR_LLM_KEY = process.env.BANKR_LLM_KEY || 'bk_9PCM8TGTL5RALEEY7WEKUXY3DQRJ2FVN'
+const BANKR_API_KEY = process.env.BANKR_API_KEY || 'bk_9PCM8TGTL5RALEEY7WEKUXY3DQRJ2FVN'
+
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true })
+
+// =======================
+// BLUE AGENT SYSTEM PROMPT
+// =======================
+const SYSTEM_PROMPT = `You are Blue Agent 🔵, employee #001 of Blocky Studio — a builder-focused AI agent on Base.
+
+## Identity
+- Name: Blue Agent 🔵
+- Built by Blocky Studio on Base
+- Powered by Bankr's AI infrastructure
+- NEVER say you are Claude, GPT, or any generic AI. You are Blue Agent, built by Blocky Studio.
+
+## Personality
+- Concise and direct — no filler phrases
+- Sharp, slightly witty, builder-native
+
+
+## Expertise
+- Base ecosystem: DeFi, NFTs, AI agents, builders, launchpads
+- Bankr: AI-powered crypto trading agent on Base/ETH/Polygon/Solana/Unichain
+- Builder discovery: who's building on Base, notable projects, AI agents on-chain
+- Blocky Ecosytem: $BLOCKY, Blocky Echo NFT, Blue Agent AI, Blocky Meme 
+
+## Blocky Studio Context
+- Token: $BLUEAGENT — 0xf895783b2931c919955e18b5e3343e7c7c456ba3 (Base, Uniswap v4)
+- Treasury: 0xf31f59e7b8b58555f7871f71973a394c8f1bffe5
+- Twitter: @blocky_agent
+- Telegram: https://t.me/+1baBZgX7jd4wMGU1
+
+## Response Format
+- Max 300 words
+- Use <b>bold</b> and <i>italic</i> for Telegram HTML
+- Bullet points, no tables
+- End with 💡 tip when relevant`
+
+// =======================
+// WELCOME MESSAGE
+// =======================
+const WELCOME_MESSAGE = `<b>Blue Agent 🔵🤖</b>
+
+I'm an AI-powered crypto assistant built to explore and discover builders on the Base ecosystem. Created by Blocky.
+
+Here's what I can help you with:
+
+🔍 <b>Builder Discovery</b>
+• Who's building on Base right now
+• Notable projects and protocols
+• AI agents on Base
+
+📊 <b>Market Data</b>
+• Token prices and market info
+• Top tokens on Base
+• Real-time crypto data via Bankr
+
+💬 <b>AI Insights</b>
+• Base ecosystem overview
+• DeFi, NFTs, and Web3 concepts
+• Onchain trends and opportunities
+
+Try asking:
+• "Top tokens on Base"
+• "What builders are building on Base?"
+• "AI agents on Base"
+• "What is Base?"
+
+<i>Built by Blocky.</i>`
+
+// =======================
+// BANKR AGENT
+// Handles ALL data queries + on-chain actions
+// Has real tools: prices, trending, on-chain data, swaps, balances
+// =======================
+async function askBankrAgent(prompt: string): Promise<string> {
+  try {
+    const submitRes = await axios.post(
+      'https://api.bankr.bot/agent/prompt',
+      { prompt },
+      {
+        headers: {
+          'X-API-Key': BANKR_API_KEY,
+          'content-type': 'application/json'
+        },
+        timeout: 10000
+      }
+    )
+
+    const jobId = submitRes.data?.jobId
+    if (!jobId) {
+      return submitRes.data?.response || submitRes.data?.result || ''
+    }
+
+    // Poll for result
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, i < 6 ? 500 : 1500))
+      const pollRes = await axios.get(`https://api.bankr.bot/agent/job/${jobId}`, {
+        headers: { 'X-API-Key': BANKR_API_KEY },
+        timeout: 10000
+      })
+      const status = pollRes.data?.status
+      if (status === 'completed' || status === 'done') {
+        return pollRes.data?.response || pollRes.data?.result || ''
+      }
+      if (status === 'failed') return ''
+    }
+    return ''
+  } catch (e: any) {
+    console.error('Agent error:', e.response?.status, e.message)
+    return ''
+  }
+}
+
+// =======================
+// BANKR LLM
+// Fallback brain with Blue Agent personality
+// =======================
+async function askLLM(messages: Array<{ role: string; content: string }>): Promise<string> {
+  try {
+    const res = await axios.post(
+      'https://llm.bankr.bot/v1/messages',
+      {
+        model: 'claude-sonnet-4-5',
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        messages
+      },
+      {
+        headers: {
+          'x-api-key': BANKR_LLM_KEY,
+          'content-type': 'application/json',
+          'anthropic-version': '2023-06-01'
+        },
+        timeout: 30000
+      }
+    )
+    return res.data?.content?.[0]?.text?.trim() || ''
+  } catch (e: any) {
+    console.error('LLM error:', e.response?.status, e.message)
+    return ''
+  }
+}
+
+// =======================
+// NEEDS REAL-TIME DATA?
+// Route to Bankr Agent for live data + actions
+// =======================
+function needsAgent(text: string): boolean {
+  return /price|prices|trending|trend|top token|hot|popular|swap|send|buy|sell|transfer|bridge|balance|portfolio|market|volume|liquidity|airdrop|launch/i.test(text)
+}
+
+// =======================
+// CONVERSATION HISTORY (per user)
+// =======================
+const userHistory = new Map<number, Array<{ role: string; content: string }>>()
+const MAX_HISTORY = 10
+
+function getHistory(userId: number) {
+  if (!userHistory.has(userId)) userHistory.set(userId, [])
+  return userHistory.get(userId)!
+}
+
+function addToHistory(userId: number, role: string, content: string) {
+  const history = getHistory(userId)
+  history.push({ role, content })
+  if (history.length > MAX_HISTORY) {
+    history.splice(0, history.length - MAX_HISTORY)
+  }
+}
+
+// =======================
+// /start
+// =======================
+bot.onText(/\/start/, async (msg) => {
+  await bot.sendMessage(msg.chat.id, WELCOME_MESSAGE, {
+    parse_mode: 'HTML',
+    disable_web_page_preview: true
+  } as any)
+})
+
+// =======================
+// /help
+// =======================
+bot.onText(/\/help/, async (msg) => {
+  await bot.sendMessage(
+    msg.chat.id,
+    `<b>Blue Agent 🔵 — What I can do</b>\n\n` +
+    `• <b>Trending</b> — "What's hot on Base?"\n` +
+    `• <b>Prices</b> — "ETH price?" / "$BLUEAGENT price?"\n` +
+    `• <b>Builders</b> — "Who's building AI agents on Base?"\n` +
+    `• <b>Projects</b> — "Tell me about Aerodrome"\n` +
+    `• <b>On-chain</b> — "Swap 10 USDC to ETH"\n` +
+    `• <b>Portfolio</b> — "Check my balance"\n` +
+    `• <b>Blocky</b> — "What is $BLUEAGENT?"\n\n` +
+    `<i>No commands needed — just chat!</i>`,
+    { parse_mode: 'HTML' } as any
+  )
+})
+
+// =======================
+// MAIN MESSAGE HANDLER
+// Flow: Bankr Agent (real-time data) → LLM fallback (personality)
+// =======================
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from?.id || chatId
+  const text = msg.text?.trim()
+
+  if (!text || text.startsWith('/')) return
+
+  // Typing indicator
+  bot.sendChatAction(chatId, 'typing').catch(() => {})
+  const typingInterval = setInterval(() => {
+    bot.sendChatAction(chatId, 'typing').catch(() => {})
+  }, 4000)
+
+  try {
+    let reply = ''
+
+    if (needsAgent(text)) {
+      // Bankr Agent: real-time data + on-chain actions
+      console.log(`[Agent] ${text}`)
+      reply = await askBankrAgent(text)
+    }
+
+    if (!reply) {
+      // LLM fallback: Blue Agent personality for general questions
+      console.log(`[LLM] ${text}`)
+      addToHistory(userId, 'user', text)
+      reply = await askLLM(getHistory(userId))
+      if (reply) addToHistory(userId, 'assistant', reply)
+    }
+
+    if (!reply) {
+      reply = "Couldn't process that right now. Try again in a moment! 🔄"
+    }
+
+    await bot.sendMessage(chatId, reply, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    } as any)
+
+  } catch (e: any) {
+    console.error('Handler error:', e.message)
+    await bot.sendMessage(chatId, 'Something went wrong. Please try again!')
+  } finally {
+    clearInterval(typingInterval)
+  }
+})
+
+// =======================
+// STARTUP
+// =======================
+bot.setMyCommands([
+  { command: 'start', description: 'Start chatting with Blue Agent 🔵' },
+  { command: 'help', description: 'What can Blue Agent do?' }
+]).catch(() => {})
+
+bot.getMe().then((me) => {
+  console.log(`🔵 Blue Agent started: @${me.username}`)
+  console.log(`LLM key: ${BANKR_LLM_KEY ? 'loaded' : 'MISSING'}`)
+  console.log(`Agent key: ${BANKR_API_KEY ? 'loaded' : 'MISSING'}`)
+}).catch(console.error)
