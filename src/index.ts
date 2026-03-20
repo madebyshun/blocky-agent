@@ -144,8 +144,8 @@ async function askBankrAgent(prompt: string): Promise<string> {
     }
 
     // Poll for result — up to ~60s
-    for (let i = 0; i < 30; i++) {
-      const delay = i < 6 ? 500 : i < 15 ? 1500 : 3000
+    for (let i = 0; i < 15; i++) {
+      const delay = i < 5 ? 500 : 1500
       await new Promise(r => setTimeout(r, delay))
       const pollRes = await axios.get(`https://api.bankr.bot/agent/job/${jobId}`, {
         headers: { 'X-API-Key': BANKR_API_KEY },
@@ -264,7 +264,45 @@ const TRACKED_X_ACCOUNTS = [
 // Route to Bankr Agent for live data + actions
 // =======================
 function needsAgent(text: string): boolean {
-  return /price|prices|trending|trend|top token|hot|popular|swap|send|buy|sell|transfer|bridge|balance|portfolio|market|volume|liquidity|airdrop|launch|twitter|tweet|x\.com|news|update|latest|what.*said|who.*said|post|nft|mint|floor|polymarket|bet|odds|predict|leverage|long|short|margin|position|order|limit|deploy|token|contract|wallet|onchain|on-chain/i.test(text)
+  // Only route to Bankr Agent for actions that need real tools
+  // Research/info queries → LLM (faster)
+  return /swap|send|transfer|bridge|buy\s+\$?\w+|sell\s+\$?\w+|balance|portfolio|my\s+wallet|my\s+position|leverage|long|short|margin|open\s+position|limit\s+order|polymarket\s+bet|place\s+bet|deploy\s+token|mint\s+nft|check\s+wallet|latest.*from\s+@|what.*@\w+.*said|price\s+of\s+\$?\w+|\$\w+\s+price|twitter|tweet|news.*today|update.*today|latest.*today/i.test(text)
+}
+
+function isTrendingQuery(text: string): boolean {
+  return /trending|top token|hot|what.*(on|in)\s*base|top.*base|base.*top/i.test(text)
+}
+
+// DexScreener fallback for trending when Bankr Agent fails
+async function fetchTrendingFallback(): Promise<string> {
+  try {
+    const res = await axios.get(
+      'https://api.dexscreener.com/latest/dex/search?q=USDC+base&rankBy=volume&order=desc',
+      { timeout: 8000 }
+    )
+    const EXCLUDE = ['WETH','cbETH','cbBTC','USDC','USDbC','DAI','USDT']
+    const pairs = (res.data?.pairs || [])
+      .filter((p: any) => p.chainId === 'base')
+      .filter((p: any) => !EXCLUDE.includes(p.baseToken?.symbol))
+      .filter((p: any) => (p.volume?.h24 || 0) > 50000)
+      .sort((a: any, b: any) => (b.volume?.h24 || 0) - (a.volume?.h24 || 0))
+      .slice(0, 8)
+
+    if (!pairs.length) return ''
+
+    const lines = pairs.map((p: any) => {
+      const price = p.priceUsd ? `$${parseFloat(p.priceUsd).toFixed(6)}` : 'N/A'
+      const change = p.priceChange?.h24 != null
+        ? (p.priceChange.h24 >= 0 ? `↑${p.priceChange.h24.toFixed(1)}%` : `↓${Math.abs(p.priceChange.h24).toFixed(1)}%`)
+        : ''
+      const vol = p.volume?.h24 ? `Vol: $${(p.volume.h24/1000).toFixed(1)}K` : ''
+      return `• <b>${p.baseToken.name} (${p.baseToken.symbol})</b>: ${price} ${change} ${vol}`.trim()
+    }).join('\n')
+
+    return `<b>Trending on Base 🔥</b>\n\n${lines}\n\n<i>Source: DexScreener</i>`
+  } catch (e) {
+    return ''
+  }
 }
 
 // =======================
@@ -667,10 +705,9 @@ bot.on('message', async (msg) => {
       const agentRaw = await askBankrAgent(agentPrompt)
       if (agentRaw) {
         reply = formatAgentReply(agentRaw)
-      } else {
-        // Agent failed — tell user honestly instead of hallucinating
-        reply = "⚠️ Couldn't fetch live data right now. Bankr Agent might be slow.\n\nTry again in a moment! 🔵"
       }
+
+      // Agent failed → fall through to LLM below
     }
 
     if (!reply) {
