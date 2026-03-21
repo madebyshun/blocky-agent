@@ -973,21 +973,24 @@ bot.on('message', async (msg) => {
 // STARTUP
 // =======================
 // Public commands
+// Public commands
 bot.setMyCommands([
-  { command: 'start', description: 'Start chatting with Blue Agent 🟦' },
-  { command: 'help', description: 'What can Blue Agent do?' },
-  { command: 'news', description: '📰 Latest from Base builders on X' },
-  { command: 'launch', description: '🚀 Deploy a new token on Base' }
+  { command: 'start', description: 'Start' },
+  { command: 'help', description: 'Help' },
+  { command: 'score', description: 'Builder Score (@handle)' },
+  { command: 'news', description: 'Base builder feed' },
+  { command: 'launch', description: 'Deploy token on Base' }
 ]).catch(() => {})
 
 // Owner-only commands
 bot.setMyCommands([
-  { command: 'start', description: 'Start chatting with Blue Agent 🟦' },
-  { command: 'help', description: 'What can Blue Agent do?' },
-  { command: 'news', description: '📰 Latest from Base builders on X' },
-  { command: 'launch', description: '🚀 Deploy a new token on Base' },
-  { command: 'model', description: '🤖 View AI models' },
-  { command: 'status', description: '📊 Full health check' }
+  { command: 'start', description: 'Start' },
+  { command: 'help', description: 'Help' },
+  { command: 'score', description: 'Builder Score (@handle)' },
+  { command: 'news', description: 'Base builder feed' },
+  { command: 'launch', description: 'Deploy token on Base' },
+  { command: 'model', description: 'AI models' },
+  { command: 'status', description: 'Health check' }
 ], { scope: { type: 'chat', chat_id: OWNER_ID } } as any).catch(() => {})
 
 bot.getMe().then((me) => {
