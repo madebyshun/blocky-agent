@@ -186,16 +186,20 @@ async function askBankrAgent(prompt: string, maxPolls = 15): Promise<string> {
 // Multi-model fallback: claude-sonnet → gemini-flash → gpt-mini
 // =======================
 const LLM_MODELS = [
-  // Anthropic (confirmed working)
+  // Primary — best quality/speed balance
   'claude-sonnet-4-5',
   'claude-sonnet-4.6',
-  'claude-haiku-4.5',
-  // Google (confirmed working)
+  // Fast fallbacks
   'gemini-2.5-flash',
   'gemini-3-flash',
-  // OpenAI
+  'gemini-3.1-pro',
+  'qwen3.5-flash',      // fast + cheap
+  // Light models
+  'claude-haiku-4.5',
   'gpt-5-mini',
   'gpt-5-nano',
+  'minimax-m2.5',       // long context
+  'minimax-m2.7',
 ]
 
 async function askLLM(messages: Array<{ role: string; content: string }>): Promise<string> {
