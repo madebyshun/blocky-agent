@@ -41,7 +41,8 @@ Not a chatbot. A builder's sidekick.
 ## Blocky Ecosystem
 - **$BLOCKY** — Blocky Studio ecosystem token — 0x1E11dC42b7916621EEE1874da5664d75A0D74b07 (Base)
 - **$BLUEAGENT** — Blue Agent AI token — 0xf895783b2931c919955e18b5e3343e7c7c456ba3 (Base, Uniswap v4)
-- Treasury: 0xf31f59e7b8b58555f7871f71973a394c8f1bffe5
+- Blocky Studio Treasury (NOT user wallet): 0xf31f59e7b8b58555f7871f71973a394c8f1bffe5
+- IMPORTANT: When user asks "my wallet" or "check my balance" — ask them to provide their wallet address. Never assume the treasury address is the user's wallet.
 - Twitter: @blocky_agent
 - Telegram: https://t.me/+1baBZgX7jd4wMGU1
 - $BLOCKY = Blocky Studio ecosystem token | $BLUEAGENT = Blue Agent product token
@@ -323,12 +324,13 @@ function buildXPrompt(userText: string): string {
 // LAUNCH WIZARD STATE (per user)
 // =======================
 interface LaunchState {
-  step: 'name' | 'symbol' | 'description' | 'image' | 'wallet' | 'confirm'
+  step: 'name' | 'symbol' | 'description' | 'image' | 'fee' | 'fee_value' | 'confirm'
   name?: string
   symbol?: string
   description?: string
   image?: string
-  wallet?: string
+  feeType?: 'x' | 'farcaster' | 'ens' | 'wallet' | 'skip'
+  feeValue?: string
 }
 
 const launchSessions = new Map<number, LaunchState>()
@@ -371,46 +373,47 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
 
   if (state.step === 'image') {
     state.image = text.toLowerCase() === 'skip' ? '' : text
-    state.step = 'wallet'
+    state.step = 'fee'
     launchSessions.set(userId, state)
     await bot.sendMessage(chatId,
       `✅ Image: ${state.image ? `<a href="${state.image}">link</a>` : '(none)'}\n\n` +
-      `💰 Enter <b>wallet address</b> to receive fees (0x...):\n` +
-      `<i>or type <b>skip</b> to use default</i>`,
-      { parse_mode: 'HTML', disable_web_page_preview: true } as any
+      `💰 <b>Fee recipient</b> — who receives trading fees?\n\nChoose type or type <b>skip</b>:`,
+      {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '𝕏 X handle', callback_data: 'fee_x' },
+              { text: '🟣 Farcaster', callback_data: 'fee_farcaster' }
+            ],
+            [
+              { text: '🔷 ENS name', callback_data: 'fee_ens' },
+              { text: '👛 Wallet 0x', callback_data: 'fee_wallet' }
+            ],
+            [
+              { text: '⏭ Skip', callback_data: 'fee_skip' }
+            ]
+          ]
+        }
+      } as any
     )
     return
   }
 
-  if (state.step === 'wallet') {
-    const isValidAddress = /^0x[a-fA-F0-9]{40}$/.test(text)
-    if (text.toLowerCase() === 'skip') {
-      state.wallet = ''
-    } else if (isValidAddress) {
-      state.wallet = text
-    } else {
-      await bot.sendMessage(chatId,
-        `⚠️ Invalid wallet address. Enter a valid <b>0x...</b> address or type <b>skip</b>:`,
-        { parse_mode: 'HTML' } as any
-      )
-      return
-    }
-
+  if (state.step === 'fee_value') {
+    state.feeValue = text
     state.step = 'confirm'
     launchSessions.set(userId, state)
-
+    const feeDisplay = state.feeType === 'skip' || !state.feeValue ? '(default)' : `${state.feeValue} (${state.feeType})`
     const summary = `🚀 <b>Confirm Token Launch</b>\n\n` +
       `• Name: <b>${state.name}</b>\n` +
       `• Symbol: <b>$${state.symbol}</b>\n` +
       `• Description: <i>${state.description || '(none)'}</i>\n` +
       `• Image: ${state.image ? `<a href="${state.image}">link</a>` : '(none)'}\n` +
-      `• Fee wallet: <code>${state.wallet || '(default)'}</code>\n\n` +
+      `• Fee recipient: <code>${feeDisplay}</code>\n\n` +
       `Type <b>confirm</b> to deploy or <b>cancel</b> to abort:`
-
-    await bot.sendMessage(chatId, summary, {
-      parse_mode: 'HTML',
-      disable_web_page_preview: true
-    } as any)
+    await bot.sendMessage(chatId, summary, { parse_mode: 'HTML', disable_web_page_preview: true } as any)
     return
   }
 
@@ -436,7 +439,9 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
       if (state.name) args.push('--name', state.name)
       if (state.symbol) args.push('--symbol', state.symbol)
       if (state.image) args.push('--image', state.image)
-      if (state.wallet) args.push('--fee-recipient', state.wallet)
+      if (state.feeValue && state.feeType && state.feeType !== 'skip') {
+        args.push('--fee', state.feeValue, '--fee-type', state.feeType)
+      }
 
       console.log(`[Launch] Running: bankr ${args.join(' ')}`)
 
@@ -905,6 +910,52 @@ bot.onText(/\/news/, async (msg) => {
 })
 
 // =======================
+// =======================
+// CALLBACK QUERY HANDLER (for inline buttons)
+// =======================
+bot.on('callback_query', async (query) => {
+  const chatId = query.message?.chat.id
+  const data = query.data
+  if (!chatId || !data) return
+  await bot.answerCallbackQuery(query.id).catch(() => {})
+
+  // Fee type selection for /launch
+  if (['fee_x', 'fee_farcaster', 'fee_ens', 'fee_wallet', 'fee_skip'].includes(data)) {
+    const userId2 = query.from?.id
+    if (!userId2) return
+    const state = launchSessions.get(userId2)
+    if (!state) return
+
+    if (data === 'fee_skip') {
+      state.feeType = 'skip'
+      state.feeValue = ''
+      state.step = 'confirm'
+      launchSessions.set(userId2, state)
+      const summary = `🚀 <b>Confirm Token Launch</b>\n\n` +
+        `• Name: <b>${state.name}</b>\n• Symbol: <b>$${state.symbol}</b>\n` +
+        `• Description: <i>${state.description || '(none)'}</i>\n` +
+        `• Image: ${state.image ? `<a href="${state.image}">link</a>` : '(none)'}\n` +
+        `• Fee recipient: (default)\n\nType <b>confirm</b> to deploy or <b>cancel</b> to abort:`
+      await bot.sendMessage(chatId, summary, { parse_mode: 'HTML', disable_web_page_preview: true } as any)
+    } else {
+      const feeTypeMap: Record<string, string> = {
+        fee_x: 'x', fee_farcaster: 'farcaster', fee_ens: 'ens', fee_wallet: 'wallet'
+      }
+      const promptMap: Record<string, string> = {
+        fee_x: 'Enter your <b>X/Twitter handle</b> (e.g. @blocky_agent):',
+        fee_farcaster: 'Enter your <b>Farcaster handle</b> (e.g. @shun):',
+        fee_ens: 'Enter your <b>ENS name</b> (e.g. shun.eth):',
+        fee_wallet: 'Enter your <b>wallet address</b> (0x...):'
+      }
+      state.feeType = feeTypeMap[data] as any
+      state.step = 'fee_value'
+      launchSessions.set(userId2, state)
+      await bot.sendMessage(chatId, promptMap[data], { parse_mode: 'HTML' } as any)
+    }
+    return
+  }
+})
+
 // MAIN MESSAGE HANDLER
 // Flow: Bankr Agent (real-time data) → LLM fallback (personality)
 // =======================
