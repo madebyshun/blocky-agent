@@ -186,25 +186,29 @@ async function askBankrAgent(prompt: string, maxPolls = 15): Promise<string> {
 // Fallback brain with Blue Agent personality
 // Multi-model fallback: claude-sonnet → gemini-flash → gpt-mini
 // =======================
-const LLM_MODELS = [
-  // Primary — best quality/speed balance
-  'claude-sonnet-4-5',
-  'claude-sonnet-4.6',
-  // Fast fallbacks
-  'gemini-2.5-flash',
-  'gemini-3-flash',
-  'gemini-3.1-pro',
-  'qwen3.5-flash',      // fast + cheap
-  // Light models
-  'claude-haiku-4.5',
-  'gpt-5-mini',
-  'gpt-5-nano',
-  'minimax-m2.5',       // long context
-  'minimax-m2.7',
-]
+// Model tiers by cost/quality
+const MODELS_LIGHT = ['gpt-5-nano', 'gemini-2.5-flash', 'qwen3.5-flash', 'gpt-5-mini']
+const MODELS_MID   = ['claude-haiku-4.5', 'gemini-3-flash', 'minimax-m2.5', 'gpt-5-mini']
+const MODELS_FULL  = ['claude-sonnet-4-5', 'claude-sonnet-4.6', 'gemini-2.5-flash', 'claude-haiku-4.5', 'gpt-5-mini', 'gpt-5-nano']
+
+// Smart model selection based on query complexity
+function selectModels(text: string): string[] {
+  if (/score|analyze|explain|compare|research|what is|how does|tell me about|deep|detail/i.test(text)) {
+    return MODELS_FULL
+  }
+  if (/builder|base|defi|nft|agent|protocol|project|ecosystem|trend/i.test(text)) {
+    return MODELS_MID
+  }
+  return MODELS_LIGHT
+}
+
+const LLM_MODELS = MODELS_FULL // for /model command display
 
 async function askLLM(messages: Array<{ role: string; content: string }>): Promise<string> {
-  for (const model of LLM_MODELS) {
+  const lastMsg = messages[messages.length - 1]?.content || ''
+  const modelsToTry = selectModels(lastMsg)
+
+  for (const model of modelsToTry) {
     try {
       const res = await axios.post(
         'https://llm.bankr.bot/v1/messages',
@@ -497,7 +501,7 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
 // CONVERSATION HISTORY (per user)
 // =======================
 const userHistory = new Map<number, Array<{ role: string; content: string }>>()
-const MAX_HISTORY = 10
+const MAX_HISTORY = 6
 
 function getHistory(userId: number) {
   if (!userHistory.has(userId)) userHistory.set(userId, [])
