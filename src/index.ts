@@ -930,17 +930,24 @@ async function runBuilderScore(chatId: number, handle: string) {
   const typingInterval = setInterval(() => bot.sendChatAction(chatId, 'typing').catch(() => {}), 4000)
 
   try {
-    const prompt = `Score @${handle} as a Base builder (0-100). Check their X posts.
-Reply in this format only:
+    const prompt = `Score @${handle} as a Base/crypto builder. Check their X/Twitter profile, posts, bio, and activity.
+Reply in this EXACT format only (no extra text):
 SCORE: X/100
 TIER: Explorer|Builder|Shipper|Founder|Legend
 Consistency: X/25
 Technical: X/25
 Builder focus: X/25
 Community: X/25
-SUMMARY: one sentence`
+SUMMARY: one sentence
 
-    // Retry up to 3 times via Bankr Agent (same as production)
+Scoring guide:
+- Consistency (0-25): posting frequency, regularity, showing up — how often they share work
+- Technical (0-25): code quality, smart contracts, technical depth of posts, GitHub mentions
+- Builder focus (0-25): projects shipped, building in public, Base/onchain activity, products launched
+- Community (0-25): followers, engagement, replies, community recognition, reputation on X and Farcaster
+- SUMMARY: one punchy sentence about who this builder is`
+
+    // Retry up to 3 times via Bankr Agent
     let result = ''
     for (let attempt = 1; attempt <= 3; attempt++) {
       result = await askBankrAgent(prompt, 25)
@@ -950,48 +957,50 @@ SUMMARY: one sentence`
     }
 
     if (result) {
-      // Parse score components
-      const scoreMatch = result.match(/SCORE:\s*(\d+)\/100/i)
-      const tierMatch = result.match(/TIER:\s*(\w+)/i)
-      const summaryMatch = result.match(/SUMMARY:\s*(.+)/i)
+      const scoreMatch       = result.match(/SCORE:\s*(\d+)/i)
+      const tierMatch        = result.match(/TIER:\s*(\w+)/i)
+      const consistencyMatch = result.match(/Consistency:\s*(\d+)/i)
+      const technicalMatch   = result.match(/Technical:\s*(\d+)/i)
+      const builderMatch     = result.match(/Builder\s*focus:\s*(\d+)/i)
+      const communityMatch   = result.match(/Community:\s*(\d+)/i)
+      const summaryMatch     = result.match(/SUMMARY:\s*(.+)/i)
 
-      let score = scoreMatch ? parseInt(scoreMatch[1]) : null
-      const tier = tierMatch ? tierMatch[1] : null
-      const summary = summaryMatch ? summaryMatch[1].trim() : null
+      const consistency  = consistencyMatch ? Math.min(25, parseInt(consistencyMatch[1])) : null
+      const technical    = technicalMatch   ? Math.min(25, parseInt(technicalMatch[1]))   : null
+      const builderFocus = builderMatch     ? Math.min(25, parseInt(builderMatch[1]))     : null
+      const community    = communityMatch   ? Math.min(25, parseInt(communityMatch[1]))   : null
+      const summary      = summaryMatch     ? summaryMatch[1].trim() : null
+      const tier         = tierMatch        ? tierMatch[1] : null
 
-      // Check Bankr builder profile bonus (+10, max 100)
-      const hasBankrProfile = await checkBankrProfileBonus(handle)
-      let bankrBonus = 0
-      if (hasBankrProfile && score !== null) {
-        bankrBonus = Math.min(10, 100 - score)
-        score = Math.min(100, score + bankrBonus)
+      // Final score = sum of 4 dimensions
+      let score: number | null = null
+      if (consistency !== null && technical !== null && builderFocus !== null && community !== null) {
+        score = Math.min(100, consistency + technical + builderFocus + community)
+      } else if (scoreMatch) {
+        score = parseInt(scoreMatch[1])
       }
 
-      // Recalculate tier after bonus
       const finalTier = score !== null ? getTier(score) : (tier || 'Explorer')
-
       const tierEmoji: Record<string, string> = {
         explorer: '🌱', builder: '🔨', shipper: '⚡', founder: '🚀', legend: '🏆'
       }
       const emoji = tierEmoji[finalTier.toLowerCase()] || '🟦'
 
-      // Build output same format as production + bonus line
-      const cleanResult = formatAgentReply(result
-        .replace(/SCORE:.*\n?/i, '')
-        .replace(/TIER:.*\n?/i, '')
-        .replace(/SUMMARY:.*\n?/i, '')
-        .trim())
+      const subScoreLines = [
+        consistency  !== null ? `Consistency: <b>${consistency}</b>/25`   : null,
+        technical    !== null ? `Technical: <b>${technical}</b>/25`        : null,
+        builderFocus !== null ? `Builder focus: <b>${builderFocus}</b>/25` : null,
+        community    !== null ? `Community: <b>${community}</b>/25`        : null,
+      ].filter(Boolean).join('\n')
 
       const output = score !== null
-        ? `<b>🟦 Builder Score</b>\n` +
-          `<b>@${handle}</b>\n` +
-          `──────────────\n` +
+        ? `🟦 <b>Builder Score</b>\n` +
+          `@${handle}\n\n` +
           `Score: <b>${score}/100</b> ${emoji}\n` +
           `Tier: <b>${finalTier}</b>\n\n` +
-          cleanResult +
-          (hasBankrProfile ? `\n\n🟦 Bankr builder: <b>+${bankrBonus} bonus</b>` : '') +
-          (summary ? `\n\n💡 ${summary}` : '') +
-          `\n──────────────\n` +
+          subScoreLines + '\n' +
+          (summary ? `\n💡 ${summary}` : '') +
+          `\n\n─────────────────\n` +
           `<i>Powered by Blue Agent 🟦 · Blocky Studio</i>`
         : formatAgentReply(result)
 
