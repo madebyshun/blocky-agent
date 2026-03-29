@@ -83,7 +83,7 @@ Ask anything about Base ecosystem — DeFi, NFTs, builders, protocols, market da
 - **Contract:** `0xf895783b2931c919955e18b5e3343e7c7c456ba3`
 - **Chain:** Base · Uniswap v4
 - **Total supply:** 100,000,000,000
-- **Rewards pool:** 50,000,000 $BLUEAGENT reserved for community
+- **Rewards pool:** 5,000,000,000 $BLUEAGENT reserved for community
 
 ---
 
