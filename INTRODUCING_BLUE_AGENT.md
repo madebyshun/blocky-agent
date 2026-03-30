@@ -6,7 +6,9 @@
 
 ## What is Blue Agent?
 
-Blue Agent is an AI-powered agent that lives on Telegram and acts onchain — on Base. Not a chatbot. An agent that actually does things: trades tokens, scores builders, sends crypto to your wallet, and rewards you for being early.
+Blue Agent is your AI sidekick for building on Base — living in Telegram, running 24/7. It helps builders explore the Base ecosystem, score reputation, showcase projects, and earn real onchain rewards for showing up.
+
+Not just a trading bot. A builder's co-pilot.
 
 Built on Bankr stack. Running 24/7.
 
@@ -14,8 +16,11 @@ Built on Bankr stack. Running 24/7.
 
 ## What Blue Agent can do
 
-### 🔑 Wallet
-Your wallet is auto-created the moment you start. No seed phrases to copy. No setup. Just `/start` and you're live on Base.
+### 🗺️ Explore Base Ecosystem
+Discover what's being built on Base — projects, protocols, AI agents, and builders. Ask anything:
+- "What are the top AI agents on Base?"
+- "Who's building DeFi on Base right now?"
+- "What's trending on Base this week?"
 
 ### 📊 Builder Score
 Score any builder from 0–100 across 4 dimensions:
@@ -26,8 +31,19 @@ Score any builder from 0–100 across 4 dimensions:
 
 `/score @handle` — works for any X handle.
 
+### 📝 Submit Your Project
+Showcase what you're building to the Blue Agent community. Get votes, visibility, and +20 pts.
+- `/submit` — step-by-step project submission
+- Community votes → featured on leaderboard
+
+### 👥 Find Builders
+Connect with builders shipping on Base. Refer them to the community and earn +50 pts each.
+
+### 🔑 Wallet
+Your wallet is auto-created the moment you start. No seed phrases. No setup. Just `/start` and you're live on Base.
+
 ### 💱 Trading
-Swap, send, bridge, DCA, limit orders, stop loss — all via natural language. Just type:
+Swap, send, bridge, DCA, limit orders, stop loss — all via natural language:
 - `swap 10 USDC to ETH`
 - `DCA $10 into ETH daily`
 - `buy $BLUEAGENT with 5 USDC`
@@ -38,7 +54,6 @@ Powered by Bankr · Uniswap v4 · Base.
 Trade BTC, ETH, SOL, TSLA, GOLD and more with up to 50x leverage — directly in Telegram.
 - `long $100 BTC on hyperliquid`
 - `short ETH 10x with stop loss at -5%`
-- `show my hyperliquid positions`
 
 ### 🚀 Token Launch
 Deploy your own ERC20 token on Base — no code needed.
