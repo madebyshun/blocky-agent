@@ -60,12 +60,18 @@ Blue Agent rewards builders for showing up.
 **1 pt = 1,000 $BLUEAGENT**
 Claim minimum: 100 pts = 100,000 $BLUEAGENT
 
-**Multipliers:**
-- 7-day streak → ×1.5
-- 14-day streak → ×2.0
-- OG Builder (first 100) → ×2 forever 🌟
-- 500+ pts claim → +10% bonus
-- 1,000+ pts claim → +20% bonus
+**Activity Tiers (earn your multiplier):**
+
+| Tier | Requirement | Multiplier |
+|---|---|---|
+| Builder | Default | ×1.0 |
+| Shipper | 30 days active + 500 pts | ×1.3 |
+| Founder | 60 days active + 1,500 pts | ×1.5 |
+| Legend | 90 days active + 3,000 pts | ×2.0 |
+
+**Streak bonus:** ≥3 days consecutive → +3 pts/day
+
+**OG Badge:** First 100 users get 🌟 OG badge + early access to new features
 
 ### ⏰ Price Alerts
 `/alert 0.000001` — bot DMs you when $BLUEAGENT hits your target. Auto-detects direction.
