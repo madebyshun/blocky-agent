@@ -88,6 +88,13 @@ Claim minimum: 100 pts = 100,000 $BLUEAGENT
 
 **OG Badge:** First 100 users get 🌟 OG badge + early access to new features
 
+### 💳 DexPay — DexScreener Enhanced Token Info
+Get your token's info updated on DexScreener with website, socials, description & images.
+- `/dexpay` — 6-step guided flow (chain → CA → socials → images → review → payment)
+- Supports 8 chains: Base, ETH, Solana, BSC, Arbitrum, Polygon, Avalanche, Optimism
+- Upload custom token icon (512×512) and header (1500×500) — auto-resized
+- **Price: $300 USDC**
+
 ### ⏰ Price Alerts
 `/alert 0.000001` — bot DMs you when $BLUEAGENT hits your target. Auto-detects direction.
 
