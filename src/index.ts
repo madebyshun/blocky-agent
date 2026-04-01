@@ -2891,12 +2891,13 @@ bot.on('message', async (msg) => {
   const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup'
   if (isGroup) {
     const msgThreadId = (msg as any).message_thread_id
-    // Only respond in General topic (thread 1 or no thread)
-    if (msgThreadId && msgThreadId !== 1) return
     const botInfo = await bot.getMe()
     const mentioned = text.toLowerCase().includes(`@${botInfo.username?.toLowerCase()}`)
     const isReplyToBot = msg.reply_to_message?.from?.id === botInfo.id
-    if (!mentioned && !isReplyToBot) return
+    // In non-General topics: only respond when explicitly @mentioned or replied to
+    if (msgThreadId && msgThreadId !== 1 && !mentioned && !isReplyToBot) return
+    // In General topic (thread 1 or no thread): respond when mentioned or replied to
+    if ((!msgThreadId || msgThreadId === 1) && !mentioned && !isReplyToBot) return
     // In group context, clear any active DM sessions to avoid flow conflicts
     launchSessions.delete(userId)
     submitSessions.delete(userId)
@@ -2933,11 +2934,15 @@ bot.on('message', async (msg) => {
         if (reply) addToHistory(userId, 'assistant', reply)
       }
       if (!reply) reply = "Couldn't process that right now. Try again! 🔄"
-      await bot.sendMessage(chatId, reply, {
+      const sendOpts: any = {
         parse_mode: 'HTML',
         reply_to_message_id: msg.message_id,
         disable_web_page_preview: true,
-      } as any)
+      }
+      // Preserve topic thread so reply stays in the correct topic
+      const replyThreadId = (msg as any).message_thread_id
+      if (replyThreadId) sendOpts.message_thread_id = replyThreadId
+      await bot.sendMessage(chatId, reply, sendOpts)
     } catch (err) {
       await bot.sendMessage(chatId, "Something went wrong. Try again! 🔄")
     }
