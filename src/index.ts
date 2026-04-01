@@ -156,7 +156,7 @@ async function sendTokenReward(toAddress: string, amount: number, tokenContract:
 // =======================
 // BLUE AGENT SYSTEM PROMPT
 // =======================
-const SYSTEM_PROMPT = `You are Blue Agent 🟦 — an AI community manager and builder's sidekick on Base.
+const SYSTEM_PROMPT = `You are Blue Agent 🟦 — an AI community manager and builder's co-pilot on Base.
 
 ## Identity
 Built by Blocky Studio. Running 24/7 to help the community.
@@ -251,7 +251,7 @@ function formatAgentReply(text: string): string {
 // WELCOME MESSAGE
 // =======================
 const WELCOME_MESSAGE = `<b>Blue Agent 🟦</b>
-Your AI sidekick for building on Base.
+Your AI sidekick on Base.
 
 <b>For builders:</b>
 
@@ -375,7 +375,7 @@ const MODELS_CODE = [
 // Smart model selection based on query complexity
 function selectModels(text: string): string[] {
   // Code/technical queries → coding models
-  if (/code|deploy|contract|solidity|typescript|javascript|python|function|bug|error|implement|build|script/i.test(text)) {
+  if (/\bcode\b|deploy|contract|solidity|typescript|javascript|python|function|bug|error|implement|\bbuild\b|script/i.test(text)) {
     return MODELS_CODE
   }
   // Deep analysis → full models
@@ -711,18 +711,18 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
     bot.sendChatAction(chatId, 'typing').catch(() => {})
 
     try {
-      const args = ['launch']
-      if (state.name) args.push('--name', state.name)
-      if (state.symbol) args.push('--symbol', state.symbol)
-      if (state.image) args.push('--image', state.image)
+      // Build natural language prompt for Bankr
+      let launchPrompt = `Deploy an ERC20 token on Base with name "${state.name}" and symbol "${state.symbol}"`
+      if (state.description) launchPrompt += `. Description: ${state.description}`
+      if (state.image) launchPrompt += `. Image URL: ${state.image}`
       if (state.feeValue && state.feeType && state.feeType !== 'skip') {
-        args.push('--fee', state.feeValue, '--fee-type', state.feeType)
+        launchPrompt += `. Set fee recipient to ${state.feeValue} (${state.feeType})`
       }
 
-      console.log(`[Launch] Running: bankr ${args.join(' ')}`)
+      console.log(`[Launch] Prompt: ${launchPrompt}`)
 
       const output = await new Promise<string>((resolve, reject) => {
-        const proc = spawn('bankr', args, {
+        const proc = spawn('bankr', ['prompt', launchPrompt], {
           env: { ...process.env },
           timeout: 120000
         })
@@ -730,19 +730,13 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
         let stdout = ''
         let stderr = ''
 
-        proc.stdout.on('data', (d: Buffer) => {
-          const chunk = d.toString()
-          stdout += chunk
-          // Auto-answer any remaining prompts with Enter (empty = skip)
-          if (chunk.includes('?') || chunk.includes(':')) {
-            proc.stdin.write('\n')
-          }
-        })
-
+        proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
         proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
 
         proc.on('close', (code: number) => {
-          if (code === 0 || stdout.includes('deployed') || stdout.includes('contract')) {
+          if (stdout.includes('deployed') || stdout.includes('contract') || stdout.includes('0x')) {
+            resolve(stdout)
+          } else if (code === 0) {
             resolve(stdout || stderr)
           } else {
             reject(new Error(stderr || stdout || `Exit code ${code}`))
@@ -750,9 +744,6 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
         })
 
         proc.on('error', reject)
-
-        // Close stdin after 2s to unblock any waiting prompts
-        setTimeout(() => { try { proc.stdin.end() } catch {} }, 2000)
       })
 
       const reply = `✅ <b>Token deployed!</b>\n\n<pre>${output.slice(0, 3000)}</pre>`
@@ -1570,7 +1561,7 @@ Scoring guide:
 - Community (0-25): followers, engagement, replies, community recognition, reputation on X and Farcaster
 - SUMMARY: one punchy sentence about who this builder is`
 
-    // Retry up to 3 times via Bankr Agent
+    // Retry up to 3 times via Bankr LLM
     let agentResult = ''
     for (let attempt = 1; attempt <= 3; attempt++) {
       agentResult = await askBankrAgent(prompt, 25)
@@ -2378,7 +2369,8 @@ bot.on('callback_query', async (query) => {
       await bot.sendMessage(chatId,
         `✅ <b>Claim Successful!</b>\n\n` +
         `💰 <b>${claimAmount.toLocaleString()} ${TOKEN_NAME}</b> sent!\n` +
-        `📬 To: <code>${user2.evmAddress?.slice(0, 6)}...${user2.evmAddress?.slice(-4)}</code>\n\n` +
+        `📬 To: <code>${user2.evmAddress?.slice(0, 6)}...${user2.evmAddress?.slice(-4)}</code>\n` +
+        `🔥 5% burned automatically\n\n` +
         `🔗 <a href="https://basescan.org/tx/${result.txHash}">View on Basescan</a>\n\n` +
         `<i>Next claim in 7 days 🟦</i>`,
         { parse_mode: 'HTML', disable_web_page_preview: false, reply_markup: { inline_keyboard: [NAV_ROW] } } as any
@@ -2553,6 +2545,18 @@ bot.on('callback_query', async (query) => {
     )
     return
   }
+  if (data === 'menu_dexpay') {
+    await bot.answerCallbackQuery(query.id)
+    dexPaySessions.set(userId, { step: 'chain' })
+    await bot.sendMessage(chatId,
+      `🟦 <b>DexScreener Enhanced Token Info</b>\n\n` +
+      `Get your token's info updated on DexScreener with website, socials, description & images.\n\n` +
+      `💵 Price: <b>$300 USDC</b>\n\n` +
+      `<b>Step 1/6 — Select Chain:</b>`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: DEXPAY_CHAINS } } as any
+    )
+    return
+  }
   if (data === 'menu_submit') {
     submitSessions.set(userId, { step: 1 })
     await editMenu(query,
@@ -2673,6 +2677,15 @@ bot.on('callback_query', async (query) => {
     proj.votes++
     proj.voters.push(userId)
     saveProjects(projects)
+
+    // +2 pts for project submitter
+    const usersVote = loadUsers()
+    const submitter = usersVote[proj.submitterId]
+    if (submitter) {
+      submitter.points = (submitter.points || 0) + 2
+      saveUsers(usersVote)
+    }
+
     await bot.answerCallbackQuery(query.id, { text: `👍 Voted! Total: ${proj.votes}` })
     return
   }
@@ -2797,6 +2810,9 @@ bot.on('message', async (msg) => {
 
   if (!text || text.startsWith('/')) return
 
+  // If user is in a DexPay session, let the DexPay handler take over
+  if (dexPaySessions.has(userId)) return
+
   // Handle persistent Reply keyboard buttons
   if (text === '📱 Menu') {
     await bot.sendMessage(chatId, MENU_TEXT, { parse_mode: 'HTML', reply_markup: MENU_KEYBOARD } as any)
@@ -2887,15 +2903,12 @@ bot.on('message', async (msg) => {
     return
   }
 
-  // Group mode — only respond when mentioned or replied to, and only in General (blue-chat)
+  // Group mode — only respond when mentioned or replied to (any topic)
   const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup'
   if (isGroup) {
-    const msgThreadId = (msg as any).message_thread_id
-    // Only respond in General topic (thread 1 or no thread)
-    if (msgThreadId && msgThreadId !== 1) return
-    const botInfo = await bot.getMe()
-    const mentioned = text.toLowerCase().includes(`@${botInfo.username?.toLowerCase()}`)
-    const isReplyToBot = msg.reply_to_message?.from?.id === botInfo.id
+    const mentioned = text.toLowerCase().includes(`@${BOT_USERNAME.toLowerCase()}`)
+    const isReplyToBot = msg.reply_to_message?.from?.id === BOT_ID
+    console.log(`[Group] msg from ${userId} | mentioned: ${mentioned} | reply: ${isReplyToBot} | text: ${text.slice(0, 50)}`)
     if (!mentioned && !isReplyToBot) return
     // In group context, clear any active DM sessions to avoid flow conflicts
     launchSessions.delete(userId)
@@ -2903,8 +2916,7 @@ bot.on('message', async (msg) => {
     walletSessions.delete(userId)
     xHandleSessions.delete(userId)
     // Strip the @botname mention from text for clean processing
-    const botUsername = botInfo.username || ''
-    const cleanText = text.replace(new RegExp(`@${botUsername}`, 'gi'), '').trim()
+    const cleanText = text.replace(new RegExp(`@${BOT_USERNAME}`, 'gi'), '').trim()
     if (!cleanText) {
       await bot.sendMessage(chatId, "Hey! 🟦 I'm Blue Agent. What do you need?")
       return
@@ -3118,6 +3130,9 @@ bot.on('message', async (msg) => {
     return
   }
 
+  // If user is in score/xHandle session — handled above, don't fall through to AI
+  if (scoreSessions.has(userId) || xHandleSessions.has(userId)) return
+
   // Typing indicator
   bot.sendChatAction(chatId, 'typing').catch(() => {})
   const typingInterval = setInterval(() => {
@@ -3227,7 +3242,10 @@ bot.setMyCommands([
   { command: 'status', description: '🔍 Health Check' },
 ], { scope: { type: 'chat', chat_id: OWNER_ID } } as any).catch(() => {})
 
+let BOT_ID = 0
+
 bot.getMe().then((me) => {
+  BOT_ID = me.id
   console.log(`🟦 Blue Agent started: @${me.username}`)
   console.log(`LLM key: ${BANKR_LLM_KEY ? 'loaded' : 'MISSING'}`)
   console.log(`Agent key: ${BANKR_API_KEY ? 'loaded' : 'MISSING'}`)
@@ -3882,13 +3900,23 @@ async function postWeeklyRecap() {
   const weeklyRefs = referrals.filter(r => r.timestamp > weekAgo).length
 
   // Top 3 builders by points
-  const top3 = Object.values(users)
+  const sortedUsers = Object.values(users)
     .sort((a: any, b: any) => (b.points || 0) - (a.points || 0))
-    .slice(0, 3)
-    .map((u: any, i: number) => {
+
+  const top3 = sortedUsers.slice(0, 3)
+
+  // Award +100 pts to top 3
+  top3.forEach((u: any, i: number) => {
+    if (users[u.id]) {
+      users[u.id].points = (users[u.id].points || 0) + 100
+    }
+  })
+  saveUsers(users)
+
+  const top3Lines = top3.map((u: any, i: number) => {
       const medal = ['🥇', '🥈', '🥉'][i]
       const name = u.telegramUsername ? `@${u.telegramUsername}` : u.telegramName || 'Builder'
-      return `${medal} ${name} — <b>${u.points || 0} pts</b>`
+      return `${medal} ${name} — <b>${u.points || 0} pts</b> (+100 bonus 🎉)`
     })
 
   const recap =
@@ -3899,7 +3927,7 @@ async function postWeeklyRecap() {
     `🔗 Referrals made: <b>${weeklyRefs}</b>\n` +
     `──────────────\n` +
     `<b>🏆 Top Builders This Week:</b>\n` +
-    top3.join('\n') +
+    top3Lines.join('\n') +
     `\n──────────────\n` +
     `<i>Keep building. See you next week 🟦</i>`
 
@@ -5572,3 +5600,547 @@ bot.onText(/\/subs/, async (msg) => {
 })
 
 console.log('💳 USDC Payment & subscription tracking initialized')
+
+// =======================
+// /dexpay — DexScreener Enhanced Token Info
+// Pay $300 USDC to update token info on DexScreener
+// =======================
+import sharp from 'sharp'
+
+interface DexPayState {
+  step: 'chain' | 'ca' | 'website' | 'twitter' | 'telegram' | 'description' | 'icon' | 'header' | 'review' | 'payment' | 'update_field' | 'update_value'
+  chain?: string
+  ca?: string
+  website?: string
+  twitter?: string
+  telegramLink?: string
+  description?: string
+  iconPath?: string
+  headerPath?: string
+  updateField?: string
+  orderRef?: string
+}
+
+const dexPaySessions = new Map<number, DexPayState>()
+
+const DEXPAY_TREASURY = process.env.TREASURY_ADDRESS || '0xf31f59e7b8b58555f7871f71973a394c4c8f1bffe5'
+const DEXPAY_OWNER_ID = parseInt(process.env.OWNER_ID || process.env.OWNER_TELEGRAM_ID || '6614397596', 10)
+
+const DEXPAY_CHAINS = [
+  [{ text: '◎ Solana', callback_data: 'dexpay_chain_solana' }, { text: '⧫ ETH', callback_data: 'dexpay_chain_eth' }],
+  [{ text: '🔵 Base', callback_data: 'dexpay_chain_base' }, { text: '🟡 BSC', callback_data: 'dexpay_chain_bsc' }],
+  [{ text: '🔷 Arbitrum', callback_data: 'dexpay_chain_arbitrum' }, { text: '🟣 Polygon', callback_data: 'dexpay_chain_polygon' }],
+  [{ text: '🔺 Avalanche', callback_data: 'dexpay_chain_avalanche' }, { text: '🔴 Optimism', callback_data: 'dexpay_chain_optimism' }],
+  [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+]
+
+function dexPayChainLabel(chain: string): string {
+  const map: Record<string, string> = {
+    solana: '◎ Solana', eth: '⧫ ETH', base: '🔵 Base', bsc: '🟡 BSC',
+    arbitrum: '🔷 Arbitrum', polygon: '🟣 Polygon', avalanche: '🔺 Avalanche', optimism: '🔴 Optimism'
+  }
+  return map[chain] || chain
+}
+
+function dexPaySummary(s: DexPayState): string {
+  return (
+    `📋 <b>Order Summary</b>\n\n` +
+    `⛓ Chain: <b>${dexPayChainLabel(s.chain!)}</b>\n` +
+    `📝 CA: <code>${s.ca}</code>\n\n` +
+    `🌐 Website: ${s.website || '—'}\n` +
+    `🐦 Twitter: ${s.twitter ? '@' + s.twitter : '—'}\n` +
+    `💬 Telegram: ${s.telegramLink || '—'}\n` +
+    `📄 Description: ${s.description || '—'}\n\n` +
+    `🖼 Icon: ${s.iconPath ? '✅ Uploaded' : '—'}\n` +
+    `🖼 Header: ${s.headerPath ? '✅ Uploaded' : '—'}\n\n` +
+    `──────────────────\n` +
+    `` +
+    `` +
+    `💵 Price: <b>$300 USDC</b>`
+  )
+}
+
+// /dexpay update — update existing order
+bot.onText(/\/dexpay update(?:\s+(\S+))?/, async (msg, match) => {
+  const chatId = msg.chat.id
+  const userId = msg.from?.id || chatId
+  if (msg.chat.type !== 'private') return
+
+  const orderRef = match?.[1]
+  if (orderRef) {
+    dexPaySessions.set(userId, { step: 'update_field', orderRef })
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update Order Info</b>\n\n📋 Ref: <code>${orderRef}</code>\n\nWhat do you want to update?`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🌐 Website', callback_data: 'dexpay_upd_website' }, { text: '🐦 Twitter', callback_data: 'dexpay_upd_twitter' }],
+            [{ text: '💬 Telegram', callback_data: 'dexpay_upd_telegram' }, { text: '📄 Description', callback_data: 'dexpay_upd_description' }],
+            [{ text: '🖼 Icon Image', callback_data: 'dexpay_upd_icon' }, { text: '🖼 Header Image', callback_data: 'dexpay_upd_header' }],
+            [{ text: '📝 Other Info', callback_data: 'dexpay_upd_other' }],
+            [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }],
+          ]
+        }
+      } as any
+    )
+  } else {
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update DexPay Order</b>\n\n` +
+      `Enter your order reference number:\n<code>/dexpay update DP-xxxxx</code>\n\n` +
+      `📋 You can find your ref in the order confirmation message.`,
+      { parse_mode: 'HTML' } as any
+    )
+  }
+})
+
+// /dexpay command
+bot.onText(/\/dexpay/, async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from?.id || chatId
+
+  // Only in DM
+  if (msg.chat.type !== 'private') {
+    await bot.sendMessage(chatId,
+      '🔒 Please use /dexpay in a private chat with the bot.',
+      { parse_mode: 'HTML' } as any
+    )
+    return
+  }
+
+  dexPaySessions.set(userId, { step: 'chain' })
+
+  await bot.sendMessage(chatId,
+    `🟦 <b>DexScreener Enhanced Token Info</b>\n\n` +
+    `Get your token's info updated on DexScreener with website, socials, description & images.\n\n` +
+    `💵 Price: <b>$300 USDC</b>\n\n` +
+    `<b>Step 1/6 — Select Chain:</b>`,
+    { parse_mode: 'HTML', reply_markup: { inline_keyboard: DEXPAY_CHAINS } } as any
+  )
+})
+
+// callback_query handler for dexpay_*
+bot.on('callback_query', async (query) => {
+  const data = query.data
+  if (!data || !data.startsWith('dexpay_')) return
+
+  const chatId = query.message?.chat.id
+  const userId = query.from?.id || 0
+  if (!chatId) return
+
+  await bot.answerCallbackQuery(query.id).catch(() => {})
+
+  // Cancel
+  if (data === 'dexpay_cancel') {
+    dexPaySessions.delete(userId)
+    await bot.deleteMessage(chatId, query.message?.message_id!).catch(() => {})
+    return
+  }
+
+  // Update order — user clicks "✏️ Update Order Info"
+  if (data.startsWith('dexpay_update_')) {
+    const orderRef = data.replace('dexpay_update_', '')
+    dexPaySessions.set(userId, { step: 'update_field', orderRef })
+    await bot.answerCallbackQuery(query.id)
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update Order Info</b>\n\n` +
+      `📋 Ref: <code>${orderRef}</code>\n\n` +
+      `What do you want to update?`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🌐 Website', callback_data: 'dexpay_upd_website' }, { text: '🐦 Twitter', callback_data: 'dexpay_upd_twitter' }],
+            [{ text: '💬 Telegram', callback_data: 'dexpay_upd_telegram' }, { text: '📄 Description', callback_data: 'dexpay_upd_description' }],
+            [{ text: '🖼 Icon Image', callback_data: 'dexpay_upd_icon' }, { text: '🖼 Header Image', callback_data: 'dexpay_upd_header' }],
+            [{ text: '📝 Other Info', callback_data: 'dexpay_upd_other' }],
+            [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }],
+          ]
+        }
+      } as any
+    )
+    return
+  }
+
+  // Update field selected
+  if (data.startsWith('dexpay_upd_')) {
+    const field = data.replace('dexpay_upd_', '')
+    const session = dexPaySessions.get(userId)
+    if (!session) return
+    await bot.answerCallbackQuery(query.id)
+
+    session.step = 'update_value'
+    session.updateField = field
+    dexPaySessions.set(userId, session)
+
+    const fieldLabels: Record<string, string> = {
+      website: '🌐 New website URL:',
+      twitter: '🐦 New Twitter handle (without @):',
+      telegram: '💬 New Telegram link:',
+      description: '📄 New description (max 300 chars):',
+      icon: '🖼 Upload new Icon image (1:1 ratio, will be resized to 512×512):',
+      header: '🖼 Upload new Header image (3:1 ratio, will be resized to 1500×500):',
+      other: '📝 Type the additional info you want to add to your order:',
+    }
+
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update — ${field.charAt(0).toUpperCase() + field.slice(1)}</b>\n\n` +
+      (fieldLabels[field] || 'Enter new value:'),
+      {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] }
+      } as any
+    )
+    return
+  }
+
+  // Chain selection
+  if (data.startsWith('dexpay_chain_')) {
+    const chain = data.replace('dexpay_chain_', '')
+    const session = dexPaySessions.get(userId) || { step: 'chain' as const }
+    session.chain = chain
+    session.step = 'ca'
+    dexPaySessions.set(userId, session)
+
+    await bot.editMessageText(
+      `✅ Chain: <b>${dexPayChainLabel(chain)}</b>\n\n<b>Step 2/6 — Enter Contract Address (CA):</b>`,
+      { chat_id: chatId, message_id: query.message?.message_id, parse_mode: 'HTML' } as any
+    ).catch(() => {})
+    return
+  }
+
+  // Confirm order → go to payment
+  if (data === 'dexpay_confirm') {
+    const session = dexPaySessions.get(userId)
+    if (!session) return
+
+    session.step = 'payment'
+    dexPaySessions.set(userId, session)
+
+    await bot.sendMessage(chatId,
+      `💳 <b>Step 6/6 — Payment</b>\n\n` +
+      `Send exactly <b>$300 USDC</b> to the address below on any supported chain:\n\n` +
+      `<code>${DEXPAY_TREASURY}</code>\n\n` +
+      `⚠️ After payment, click <b>✅ I've Paid</b> below to submit your order.`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ I\'ve Paid — Submit Order', callback_data: 'dexpay_paid' }],
+            [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+          ]
+        }
+      } as any
+    )
+    return
+  }
+
+  // Skip buttons
+  if (data.startsWith('dexpay_skip_')) {
+    const field = data.replace('dexpay_skip_', '')
+    const session = dexPaySessions.get(userId) || { step: 'chain' as const }
+
+    if (field === 'website') {
+      session.website = undefined; session.step = 'twitter'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Website skipped.\n\n🐦 Twitter handle:\n<i>e.g. @mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_twitter' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'twitter') {
+      session.twitter = undefined; session.step = 'telegram'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Twitter skipped.\n\n💬 Telegram link:\n<i>e.g. https://t.me/mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_telegram' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'telegram') {
+      session.telegramLink = undefined; session.step = 'description'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Telegram skipped.\n\n📄 Description <i>(max 300 chars)</i>:`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_description' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'description') {
+      session.description = undefined; session.step = 'icon'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Description skipped.\n\n<b>Step 4/6 — Upload Images</b>\n\n🖼 Upload your token <b>Icon</b> (1:1 ratio).\nBot will auto-resize to 512×512.`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Icon', callback_data: 'dexpay_skip_icon' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'icon') {
+      session.iconPath = undefined; session.step = 'header'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Icon skipped.\n\n🖼 Upload your token <b>Header</b> (3:1 ratio).\nBot will auto-resize to 1500×500.`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Header', callback_data: 'dexpay_skip_header' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'header') {
+      session.headerPath = undefined; session.step = 'review'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        dexPaySummary(session) + '\n\n<b>Step 5/6 — Review Order</b>\n\nLooks good?',
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ Confirm & Proceed to Payment', callback_data: 'dexpay_confirm' }], [{ text: '✏️ Edit Info', callback_data: 'dexpay_edit' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    }
+    return
+  }
+
+  // Edit info — go back to step
+  if (data === 'dexpay_edit') {
+    const session = dexPaySessions.get(userId)
+    if (!session) return
+    session.step = 'website'
+    dexPaySessions.set(userId, session)
+    await bot.sendMessage(chatId,
+      `✏️ <b>Edit Info</b>\n\n<b>Step 3/6 — Website URL:</b>\n<i>Type "skip" to leave blank</i>`,
+      { parse_mode: 'HTML' } as any
+    )
+    return
+  }
+
+  // User paid — finalize order
+  if (data === 'dexpay_paid') {
+    const session = dexPaySessions.get(userId)
+    if (!session) {
+      await bot.sendMessage(chatId, '❌ Session expired. Please run /dexpay again.')
+      return
+    }
+
+    dexPaySessions.delete(userId)
+
+    const username = query.from?.username ? `@${query.from.username}` : query.from?.first_name || `ID:${userId}`
+
+    // Notify user
+    const orderRef = `DP-${userId}-${Date.now()}`
+
+    await bot.sendMessage(chatId,
+      `✅ <b>Order Received!</b>\n\n` +
+      `We'll process your DexScreener Enhanced Token Info update within <b>12 hours</b>.\n\n` +
+      `📋 Order ref: <code>${orderRef}</code>\n\n` +
+      `Need to add more info? Use the button below anytime.\n\n` +
+      `Thank you! 🟦`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✏️ Update Order Info', callback_data: `dexpay_update_${orderRef}` }]
+          ]
+        }
+      } as any
+    )
+
+    // Notify owner
+    const ownerMsg =
+      `🛒 <b>New DexPay Order!</b>\n\n` +
+      `👤 User: ${username} (ID: ${userId})\n` +
+      `📋 Ref: <code>${orderRef}</code>\n\n` +
+      dexPaySummary(session) +
+      `\n\n💡 Process manually on DexScreener.`
+
+    bot.sendMessage(DEXPAY_OWNER_ID, ownerMsg, { parse_mode: 'HTML' } as any).catch(console.error)
+    return
+  }
+})
+
+// bot.on('message') handler for dexpay text & photo inputs
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from?.id || chatId
+
+  const session = dexPaySessions.get(userId)
+  if (!session) return
+
+  // ── Update order text/photo input ──
+  if (session.step === 'update_value') {
+    const field = session.updateField || 'other'
+    const orderRef = session.orderRef || 'unknown'
+    const username = msg.from?.username ? `@${msg.from.username}` : msg.from?.first_name || `ID:${userId}`
+
+    // Handle photo for icon/header
+    if ((field === 'icon' || field === 'header') && (msg.photo || msg.document)) {
+      let fileId: string | undefined
+      if (msg.photo) fileId = msg.photo[msg.photo.length - 1]?.file_id
+      else if (msg.document) fileId = msg.document.file_id
+
+      if (fileId) {
+        await bot.sendMessage(chatId, `✅ Image received! We'll update your order.\n\n📋 Ref: <code>${orderRef}</code>`, { parse_mode: 'HTML' } as any)
+        bot.sendMessage(DEXPAY_OWNER_ID,
+          `✏️ <b>DexPay Update Request</b>\n\n👤 ${username} (ID: ${userId})\n📋 Ref: <code>${orderRef}</code>\n📌 Field: <b>${field}</b>\n\n⬆️ Image uploaded above.`,
+          { parse_mode: 'HTML' } as any
+        ).catch(() => {})
+        bot.forwardMessage(DEXPAY_OWNER_ID, chatId, msg.message_id).catch(() => {})
+        dexPaySessions.delete(userId)
+      }
+      return
+    }
+
+    // Handle text update
+    if (msg.text && !msg.text.startsWith('/')) {
+      const value = msg.text.trim()
+      dexPaySessions.delete(userId)
+
+      await bot.sendMessage(chatId,
+        `✅ <b>Update Received!</b>\n\n` +
+        `📋 Ref: <code>${orderRef}</code>\n` +
+        `📌 Field: <b>${field}</b>\n` +
+        `📝 Value: ${value}\n\n` +
+        `We'll apply this to your order within 12 hours. 🟦`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '✏️ Update More', callback_data: `dexpay_update_${orderRef}` }]] }
+        } as any
+      )
+
+      bot.sendMessage(DEXPAY_OWNER_ID,
+        `✏️ <b>DexPay Update Request</b>\n\n` +
+        `👤 ${username} (ID: ${userId})\n` +
+        `📋 Ref: <code>${orderRef}</code>\n` +
+        `📌 Field: <b>${field}</b>\n` +
+        `📝 New value: ${value}`,
+        { parse_mode: 'HTML' } as any
+      ).catch(() => {})
+      return
+    }
+    return
+  }
+
+  // ── Text inputs ──
+  if (msg.text && !msg.text.startsWith('/')) {
+    const text = msg.text.trim()
+
+    if (session.step === 'ca') {
+      session.ca = text
+      session.step = 'website'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ CA saved.\n\n<b>Step 3/6 — Token Info</b>\n\n🌐 Website URL:`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_website' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'website') {
+      session.website = text.toLowerCase() === 'skip' ? undefined : text
+      session.step = 'twitter'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Website saved.\n\n🐦 Twitter handle:\n<i>e.g. @mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_twitter' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'twitter') {
+      session.twitter = text.toLowerCase() === 'skip' ? undefined : text.replace(/^@/, '')
+      session.step = 'telegram'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Twitter saved.\n\n💬 Telegram link:\n<i>e.g. https://t.me/mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_telegram' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'telegram') {
+      session.telegramLink = text.toLowerCase() === 'skip' ? undefined : text
+      session.step = 'description'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Telegram saved.\n\n📄 Description <i>(max 300 chars)</i>:`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_description' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'description') {
+      if (text.toLowerCase() !== 'skip' && text.length > 300) {
+        await bot.sendMessage(chatId, `⚠️ Too long (${text.length}/300 chars). Shorten it:`,
+          { reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_description' }]] } } as any
+        )
+        return
+      }
+      session.description = text.toLowerCase() === 'skip' ? undefined : text
+      session.step = 'icon'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Description saved.\n\n<b>Step 4/6 — Upload Images</b>\n\n🖼 Upload your token <b>Icon</b> (1:1 ratio).\nBot will auto-resize to 512×512.`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Icon', callback_data: 'dexpay_skip_icon' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'header' && text.toLowerCase() === 'skip') {
+      session.step = 'review'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        dexPaySummary(session) + '\n\n<b>Step 5/6 — Review Order</b>\n\nLooks good?',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Confirm & Proceed to Payment', callback_data: 'dexpay_confirm' }],
+              [{ text: '✏️ Edit Info', callback_data: 'dexpay_edit' }],
+              [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+            ]
+          }
+        } as any
+      )
+      return
+    }
+  }
+
+  // ── Photo inputs ──
+  if (msg.photo || msg.document) {
+    if (session.step !== 'icon' && session.step !== 'header') return
+
+    // Get largest photo or document
+    let fileId: string | undefined
+    if (msg.photo) {
+      const photos = msg.photo
+      fileId = photos[photos.length - 1]?.file_id
+    } else if (msg.document) {
+      fileId = msg.document.file_id
+    }
+
+    if (!fileId) return
+
+    try {
+      const fileInfo = await (bot as any).getFile(fileId)
+      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfo.file_path}`
+
+      // Download file buffer
+      const imgRes = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 })
+      const inputBuffer = Buffer.from(imgRes.data)
+
+      const uploadsDir = path.join(__dirname, '..', 'data', 'dexpay_uploads')
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
+
+      if (session.step === 'icon') {
+        const outPath = path.join(uploadsDir, `icon_${userId}_${Date.now()}.png`)
+        await sharp(inputBuffer).resize(512, 512, { fit: 'cover' }).toFormat('png').toFile(outPath)
+        session.iconPath = outPath
+        session.step = 'header'
+        dexPaySessions.set(userId, session)
+        await bot.sendMessage(chatId,
+          `✅ Icon uploaded & resized to 512×512!\n\n🖼 Now upload your token <b>Header</b> (3:1 ratio).\nBot will auto-resize to 1500×500.`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Header', callback_data: 'dexpay_skip_header' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+        )
+      } else if (session.step === 'header') {
+        const outPath = path.join(uploadsDir, `header_${userId}_${Date.now()}.png`)
+        await sharp(inputBuffer).resize(1500, 500, { fit: 'cover' }).toFormat('png').toFile(outPath)
+        session.headerPath = outPath
+        session.step = 'review'
+        dexPaySessions.set(userId, session)
+        await bot.sendMessage(chatId,
+          dexPaySummary(session) + '\n\n<b>Step 5/6 — Review Order</b>\n\nLooks good?',
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '✅ Confirm & Proceed to Payment', callback_data: 'dexpay_confirm' }],
+                [{ text: '✏️ Edit Info', callback_data: 'dexpay_edit' }],
+                [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+              ]
+            }
+          } as any
+        )
+      }
+    } catch (e: any) {
+      console.error('[DexPay] Image processing error:', e.message)
+      await bot.sendMessage(chatId, '⚠️ Failed to process image. Please try again or type "skip".').catch(() => {})
+    }
+    return
+  }
+})
+
+console.log('🟦 /dexpay — DexScreener Enhanced Token Info initialized')
