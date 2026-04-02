@@ -251,18 +251,18 @@ function formatAgentReply(text: string): string {
 // WELCOME MESSAGE
 // =======================
 const WELCOME_MESSAGE = `<b>Blue Agent 🟦</b>
-Your AI agent on Base.
+Your guide to the Base ecosystem.
 
-Just tell me what you need — I'll handle it.
+Just ask me anything about Base 👇
 
 💬 <b>Try saying:</b>
-• <i>"ETH price?"</i>
-• <i>"Swap 10 USDC to ETH"</i>
-• <i>"Check my balance"</i>
-• <i>"What's trending on Base?"</i>
-• <i>"Long BTC 5x on Hyperliquid"</i>
+• <i>"What's new on Base today?"</i>
+• <i>"Who's building AI agents on Base?"</i>
+• <i>"Top projects launching this week?"</i>
+• <i>"Tell me about $BLUEAGENT"</i>
+• <i>"What's trending in Base DeFi?"</i>
 
-Or use commands to earn <b>$BLUEAGENT</b> rewards 👇
+Or use the menu to earn <b>$BLUEAGENT</b> rewards 🎁
 
 <i>Powered by Bankr · Base 🟦</i>`
 
