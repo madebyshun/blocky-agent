@@ -903,7 +903,7 @@ bot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
       disable_web_page_preview: true,
       reply_markup: {
         inline_keyboard: [
-          [{ text: '💰 My Wallet', callback_data: 'menu_wallet' }, { text: '📊 Builder Score', callback_data: 'menu_score' }],
+          [{ text: '💰 My Wallet', callback_data: 'menu_wallet' }, { text: '🤖 Meet Agents', callback_data: 'menu_agents' }],
           [{ text: '⭐ Earn $BLUEAGENT', callback_data: 'menu_rewards' }, { text: '📱 Menu', callback_data: 'open_menu' }],
         ]
       }
@@ -942,7 +942,7 @@ bot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
       disable_web_page_preview: true,
       reply_markup: {
         inline_keyboard: [
-          [{ text: '💰 My Wallet', callback_data: 'menu_wallet' }, { text: '📊 Builder Score', callback_data: 'menu_score' }],
+          [{ text: '💰 My Wallet', callback_data: 'menu_wallet' }, { text: '🤖 Meet Agents', callback_data: 'menu_agents' }],
           [{ text: '⭐ Earn $BLUEAGENT', callback_data: 'menu_rewards' }, { text: '📱 Menu', callback_data: 'open_menu' }],
         ]
       }
@@ -1012,7 +1012,7 @@ bot.onText(/\/help/, async (msg) => {
     `<i>Examples: "ETH price?" · "swap 10 USDC to ETH" · "who's building on Base?"</i>`,
     { parse_mode: 'HTML', reply_markup: {
       inline_keyboard: [
-        [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '📊 My Score', callback_data: 'menu_score' }],
+        [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '🤖 Meet Agents', callback_data: 'menu_agents' }],
         [{ text: '⭐ My Points', callback_data: 'menu_points' }, { text: '💰 Wallet', callback_data: 'menu_wallet' }],
       ]
     }} as any
@@ -2648,7 +2648,41 @@ bot.on('callback_query', async (query) => {
     }
     return
   }
-  if (data === 'menu_agents') { await sendAgentsLeaderboard(chatId, 'mcap'); return }
+  if (data === 'menu_agents') {
+    await editMenu(query,
+      `<b>🤖 Meet Agents</b>\n\nSpecialist AI agents — pay with $BLUEAGENT Credits.\n\n` +
+      `✍️ <b>Copywriter</b> — Web3 copy & tweets · <i>3 cr/msg</i>\n` +
+      `🎨 <b>UX Designer</b> — UI/UX expert · <i>5 cr/msg</i>\n` +
+      `📊 <b>Tokenomics</b> — Token design expert · <i>10 cr/msg</i>\n` +
+      `🚀 <b>GTM Advisor</b> — Go-to-market strategy · <i>10 cr/msg</i>\n` +
+      `💻 <b>Code Review</b> — Code review & refactor · <i>8 cr/msg</i>\n\n` +
+      `<i>Coming soon — buy Credits with $BLUEAGENT to get started</i>`,
+      {
+        inline_keyboard: [
+          [{ text: '🪙 My Credits', callback_data: 'menu_credits' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }],
+          NAV_ROW
+        ]
+      }
+    )
+    return
+  }
+  if (data === 'menu_bankr_agents') { await sendAgentsLeaderboard(chatId, 'mcap'); return }
+  if (data === 'menu_credits') {
+    const users2 = loadUsers()
+    const credits2 = users2[userId]?.credits || 0
+    await editMenu(query,
+      `<b>🪙 My Credits</b>\n\nBalance: <b>${credits2} Credits</b>\n\n` +
+      `<b>Use Credits for:</b>\n` +
+      `• ✍️ Copywriter: 3 cr/msg\n` +
+      `• 🎨 UX Designer: 5 cr/msg\n` +
+      `• 📊 Tokenomics: 10 cr/msg\n` +
+      `• 🚀 GTM Advisor: 10 cr/msg\n` +
+      `• 💻 Code Review: 8 cr/msg\n\n` +
+      `<i>Buy with $BLUEAGENT — coming soon\n1M $BLUEAGENT = 100 Credits</i>`,
+      { inline_keyboard: [[{ text: '🤖 Meet Agents', callback_data: 'menu_agents' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }], NAV_ROW] }
+    )
+    return
+  }
   if (data === 'menu_news') {
     await editMenu(query, `<b>📡 Base Builder Feed</b>\n\n⏳ Fetching latest updates...`, { inline_keyboard: [NAV_ROW] })
     bot.sendChatAction(chatId, 'typing').catch(() => {})
