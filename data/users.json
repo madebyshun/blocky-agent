@@ -298,5 +298,16 @@
     "walletConnected": true,
     "evmAddress": "0xe466800Bb22EF0BE72aD8e6689e721832b2Cb210",
     "privateKey": "0xd66de52267456ee12db9ccfb0ada1a3c52dd2dd9bf4097b23085b4690c87097e"
+  },
+  "5403349166": {
+    "id": 5403349166,
+    "telegramUsername": "mr_brownl",
+    "telegramName": "HAMO Sabrto",
+    "score": 0,
+    "points": 0,
+    "joinedAt": 1775113594190,
+    "walletConnected": true,
+    "evmAddress": "0x9C24012353c425A07ae2554dfA6B05950AA10f7b",
+    "privateKey": "0x0d1ca482ec273eaae99a77b0c30a9f2f5420924595c4dccde77f451814b38fb5"
   }
 }

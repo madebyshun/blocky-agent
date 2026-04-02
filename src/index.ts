@@ -55,7 +55,7 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json')
 const REFERRALS_FILE = path.join(DATA_DIR, 'referrals.json')
 const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json')
 
-interface User { id: number; telegramUsername?: string; telegramName?: string; bankrApiToken?: string; evmAddress?: string; privateKey?: string; score?: number; tier?: string; points?: number; referredBy?: number; walletConnected?: boolean; joinedAt?: number; xHandle?: string; claimedPoints?: number; lastCheckin?: number; checkinStreak?: number; lastClaim?: number; completedQuests?: string[] }
+interface User { id: number; telegramUsername?: string; telegramName?: string; bankrApiToken?: string; evmAddress?: string; privateKey?: string; score?: number; tier?: string; points?: number; credits?: number; referredBy?: number; walletConnected?: boolean; joinedAt?: number; xHandle?: string; claimedPoints?: number; lastCheckin?: number; checkinStreak?: number; lastClaim?: number; completedQuests?: string[] }
 interface Referral { referrerId: number; referredId: number; timestamp: number }
 interface Project { id: string; name: string; description: string; url: string; twitter?: string; submitterId: number; submitterUsername?: string; timestamp: number; votes: number; voters: number[]; approved?: boolean; buildersMsgId?: number; reactionVotes?: number }
 
@@ -1749,7 +1749,14 @@ function buildProfileText(user: User, rank: number, projectCount: number): strin
     : '💳 No wallet (restart /start)'
   const xHandle = user.xHandle ? `🐦 @${user.xHandle.replace('@', '')}` : '🐦 No X handle set'
   const points = user.points || 0
-  const referrals = 0 // loaded separately
+  const credits = user.credits || 0
+
+  // Tier based on credits
+  const tier = credits >= 500 ? '🔱 Legend'
+    : credits >= 200 ? '👑 Founder'
+    : credits >= 50 ? '🚀 Shipper'
+    : '🟦 Builder'
+
   return (
     `<b>👤 My Profile</b>\n` +
     `──────────────\n` +
@@ -1757,6 +1764,7 @@ function buildProfileText(user: User, rank: number, projectCount: number): strin
     `${xHandle}\n` +
     `──────────────\n` +
     `⭐ Points: <b>${points}</b>\n` +
+    `🪙 Credits: <b>${credits}</b> ${tier}\n` +
     `📝 Projects: <b>${projectCount}</b>\n` +
     `🏆 Rank: <b>#${rank}</b>\n` +
     `──────────────\n` +
@@ -1933,6 +1941,52 @@ bot.onText(/\/refer/, async (msg) => {
 })
 
 // /points — DM (private detail) + Group (public card)
+bot.onText(/\/credits/, async (msg) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id
+  const userId = msg.from?.id
+  if (!userId) return
+  const users = loadUsers()
+  const user = users[userId] || { id: userId, points: 0, credits: 0 }
+  const credits = user.credits || 0
+
+  const tier = credits >= 500 ? '🔱 Legend'
+    : credits >= 200 ? '👑 Founder'
+    : credits >= 50 ? '🚀 Shipper'
+    : '🟦 Builder'
+
+  const nextTier = credits >= 500 ? null
+    : credits >= 200 ? { name: '🔱 Legend', need: 500 - credits }
+    : credits >= 50 ? { name: '👑 Founder', need: 200 - credits }
+    : { name: '🚀 Shipper', need: 50 - credits }
+
+  const progressText = nextTier
+    ? `\n→ ${nextTier.need} more Credits to reach ${nextTier.name}`
+    : `\n→ Max tier reached! 🔱`
+
+  await bot.sendMessage(chatId,
+    `<b>🪙 My Credits</b>\n\n` +
+    `Credits: <b>${credits}</b>\n` +
+    `Tier: <b>${tier}</b>${progressText}\n\n` +
+    `<b>Use Credits for:</b>\n` +
+    `• 🤖 Meet Agents — chat với specialist AI\n` +
+    `• ✍️ Copywriter: 3 cr/msg\n` +
+    `• 🎨 UX Designer: 5 cr/msg\n` +
+    `• 📊 Tokenomics: 10 cr/msg\n` +
+    `• 🚀 GTM Advisor: 10 cr/msg\n\n` +
+    `<i>Buy Credits with $BLUEAGENT — coming soon</i>`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🤖 Meet Agents', callback_data: 'menu_agents' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }],
+          [{ text: '👤 My Profile', callback_data: 'menu_profile' }],
+        ]
+      }
+    } as any
+  )
+})
+
 bot.onText(/\/points/, async (msg) => {
   if (await blockInGroup(msg)) return
   const chatId = msg.chat.id
@@ -3195,6 +3249,7 @@ bot.setMyCommands([
   { command: 'menu', description: '📱 Control Panel' },
   { command: 'score', description: '📊 Builder Score (@handle)' },
   { command: 'points', description: '⭐ My Points & Rank' },
+  { command: 'credits', description: '🪙 My Credits & Tier' },
   { command: 'wallet', description: '💰 Wallet & Trade' },
   { command: 'profile', description: '👤 My Profile' },
   { command: 'rewards', description: '🎁 Rewards & Claim' },
