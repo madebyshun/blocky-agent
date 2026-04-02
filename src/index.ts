@@ -251,17 +251,18 @@ function formatAgentReply(text: string): string {
 // WELCOME MESSAGE
 // =======================
 const WELCOME_MESSAGE = `<b>Blue Agent 🟦</b>
-Your AI agent on Base. Built for builders.
+Your AI agent on Base.
 
-⭐ <b>Earn $BLUEAGENT</b> — check in daily, refer builders, submit projects
-📊 <b>Builder Score</b> — get scored 0–100, share your rank
-💱 <b>Trade onchain</b> — swap, bridge, DCA, perps (Hyperliquid)
-🚀 <b>Launch token</b> — deploy ERC20 on Base, no code needed
+Just tell me what you need — I'll handle it.
 
-<b>Start here 👇</b>
-→ <code>/score @yourhandle</code> — see your builder rank
-→ <code>/points</code> — check your earnings
-→ <code>/wallet</code> — view wallet + trade
+💬 <b>Try saying:</b>
+• <i>"ETH price?"</i>
+• <i>"Swap 10 USDC to ETH"</i>
+• <i>"Check my balance"</i>
+• <i>"What's trending on Base?"</i>
+• <i>"Long BTC 5x on Hyperliquid"</i>
+
+Or use commands to earn <b>$BLUEAGENT</b> rewards 👇
 
 <i>Powered by Bankr · Base 🟦</i>`
 
@@ -902,8 +903,8 @@ bot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
       disable_web_page_preview: true,
       reply_markup: {
         inline_keyboard: [
-          [{ text: '📊 Get My Builder Score', callback_data: 'menu_score' }],
-          [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '⭐ My Points', callback_data: 'menu_points' }],
+          [{ text: '💰 My Wallet', callback_data: 'menu_wallet' }, { text: '📊 Builder Score', callback_data: 'menu_score' }],
+          [{ text: '⭐ Earn $BLUEAGENT', callback_data: 'menu_rewards' }, { text: '📱 Menu', callback_data: 'open_menu' }],
         ]
       }
     } as any)
@@ -940,7 +941,10 @@ bot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
       parse_mode: 'HTML',
       disable_web_page_preview: true,
       reply_markup: {
-        inline_keyboard: [[{ text: '🟦 Open Menu', callback_data: 'open_menu' }, { text: '📖 Docs', url: 'https://github.com/madebyshun/blue-agent/blob/main/INTRODUCING_BLUE_AGENT.md' }]]
+        inline_keyboard: [
+          [{ text: '💰 My Wallet', callback_data: 'menu_wallet' }, { text: '📊 Builder Score', callback_data: 'menu_score' }],
+          [{ text: '⭐ Earn $BLUEAGENT', callback_data: 'menu_rewards' }, { text: '📱 Menu', callback_data: 'open_menu' }],
+        ]
       }
     } as any)
   }
@@ -1730,11 +1734,11 @@ const DOCS_URL = 'https://github.com/madebyshun/blue-agent/blob/main/INTRODUCING
 
 const MENU_KEYBOARD = {
   inline_keyboard: [
-    [{ text: '📰 News', callback_data: 'menu_news' }, { text: '🔍 Score', callback_data: 'menu_score' }, { text: '🚀 Launch', callback_data: 'menu_launch' }],
-    [{ text: '🎯 Quests', callback_data: 'menu_quests' }, { text: '🎁 Rewards', callback_data: 'menu_rewards' }, { text: '🔗 Refer', callback_data: 'menu_refer' }],
-    [{ text: '🏆 Top', callback_data: 'menu_leaderboard' }, { text: '💰 Wallet', callback_data: 'menu_wallet' }, { text: '📝 Submit', callback_data: 'menu_submit' }],
-    [{ text: '📁 Projects', callback_data: 'menu_projects' }, { text: '📖 Docs', url: DOCS_URL }],
-    [{ text: '👤 Profile', callback_data: 'menu_profile' }, { text: '❓ Help', callback_data: 'menu_help' }, { text: '❌ Close', callback_data: 'menu_close' }],
+    [{ text: '💰 Wallet', callback_data: 'menu_wallet' }, { text: '📊 Builder Score', callback_data: 'menu_score' }],
+    [{ text: '⭐ Points', callback_data: 'menu_points' }, { text: '🎁 Rewards', callback_data: 'menu_rewards' }],
+    [{ text: '🏆 Leaderboard', callback_data: 'menu_leaderboard' }, { text: '🔗 Refer', callback_data: 'menu_refer' }],
+    [{ text: '📝 Submit Project', callback_data: 'menu_submit' }, { text: '🚀 Launch Token', callback_data: 'menu_launch' }],
+    [{ text: '👤 Profile', callback_data: 'menu_profile' }, { text: '❓ Help', callback_data: 'menu_help' }],
   ]
 }
 
@@ -1786,7 +1790,7 @@ bot.onText(/\/menu/, async (msg) => {
   if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') return
   const chatId = msg.chat.id
   await bot.sendMessage(chatId,
-    `🟦 <b>Blue Agent</b> — Control Panel\n\nWhat do you need?`,
+    `🟦 <b>Blue Agent</b>\n\nWhat do you want to do?`,
     { parse_mode: 'HTML', reply_markup: MENU_KEYBOARD } as any
   )
 })
