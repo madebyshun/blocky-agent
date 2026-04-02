@@ -251,28 +251,17 @@ function formatAgentReply(text: string): string {
 // WELCOME MESSAGE
 // =======================
 const WELCOME_MESSAGE = `<b>Blue Agent 🟦</b>
-Your AI sidekick on Base.
+Your AI agent on Base. Built for builders.
 
-<b>For builders:</b>
+⭐ <b>Earn $BLUEAGENT</b> — check in daily, refer builders, submit projects
+📊 <b>Builder Score</b> — get scored 0–100, share your rank
+💱 <b>Trade onchain</b> — swap, bridge, DCA, perps (Hyperliquid)
+🚀 <b>Launch token</b> — deploy ERC20 on Base, no code needed
 
-🗺️ <b>Explore Base</b> — discover projects, protocols, agents, and builders shipping on Base
-📊 <b>Builder Score</b> — score any builder (0–100) across 4 dimensions
-📝 <b>Submit project</b> — showcase what you're building to the community
-👥 <b>Find builders</b> — who's building what on Base right now
-⭐ <b>Earn rewards</b> — earn pts for activity → claim $BLUEAGENT onchain
-
-<b>Also available:</b>
-
-🔑 <b>Wallet</b> — auto wallet on Base, no setup
-💱 <b>Trade</b> — swap, bridge, DCA, limit orders
-🔱 <b>Perps</b> — Hyperliquid up to 50x leverage
-🚀 <b>Launch token</b> — deploy ERC20, no code needed
-
-<b>Quick start:</b>
-/score @handle — check any builder's rank
-/submit — showcase your project (+20 pts)
-/refer — invite builders, earn pts
-/wallet — view wallet + trade
+<b>Start here 👇</b>
+→ <code>/score @yourhandle</code> — see your builder rank
+→ <code>/points</code> — check your earnings
+→ <code>/wallet</code> — view wallet + trade
 
 <i>Powered by Bankr · Base 🟦</i>`
 
@@ -912,7 +901,10 @@ bot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
       parse_mode: 'HTML',
       disable_web_page_preview: true,
       reply_markup: {
-        inline_keyboard: [[{ text: '🟦 Open Menu', callback_data: 'open_menu' }, { text: '📖 Docs', url: 'https://github.com/madebyshun/blue-agent/blob/main/INTRODUCING_BLUE_AGENT.md' }]]
+        inline_keyboard: [
+          [{ text: '📊 Get My Builder Score', callback_data: 'menu_score' }],
+          [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '⭐ My Points', callback_data: 'menu_points' }],
+        ]
       }
     } as any)
   } else {
@@ -994,32 +986,32 @@ bot.onText(/\/docs/, async (msg) => {
 bot.onText(/\/help/, async (msg) => {
   await bot.sendMessage(
     msg.chat.id,
-    `<b>Blue Agent 🟦 — What I can do</b>\n\n` +
-    `📊 <b>Market Data</b>\n` +
-    `• "ETH price?" / "$BLUEAGENT price?"\n` +
-    `• "What's trending on Base?"\n\n` +
-    `💱 <b>Trading</b>\n` +
-    `• "Swap 10 USDC to ETH"\n` +
-    `• "Buy $BLUEAGENT"\n` +
-    `• "Long ETH with 2x leverage"\n\n` +
-    `🖼 <b>NFTs</b>\n` +
-    `• "Mint an NFT from Zora"\n` +
-    `• "Floor price of Base NFTs"\n\n` +
-    `🎯 <b>Polymarket</b>\n` +
-    `• "Bet on Base getting a token"\n` +
-    `• "What are the odds on ETH $5k?"\n\n` +
-    `🔍 <b>Builders</b>\n` +
-    `• "Who's building AI agents on Base?"\n` +
-    `• "Latest from @jessepollak"\n\n` +
-    `💼 <b>Portfolio</b>\n` +
-    `• "Check my balance"\n` +
-    `• "My open positions"\n\n` +
-    `<b>Commands:</b>\n` +
-    `• /score @handle — 🟦 Get Builder Score\n` +
-    `• /news — Latest from Base builders on X\n` +
-    `• /launch — Deploy a new token on Base\n\n` +
-    `<i>No commands needed — just chat!</i>`,
-    { parse_mode: 'HTML' } as any
+    `<b>Blue Agent 🟦 — Commands</b>\n\n` +
+    `<b>🏆 Builders</b>\n` +
+    `• /score @handle — Builder Score (0–100)\n` +
+    `• /submit — Showcase your project (+20 pts)\n` +
+    `• /projects — Browse builder projects\n` +
+    `• /leaderboard — Top builders on Base\n\n` +
+    `<b>⭐ Rewards</b>\n` +
+    `• /points — My points & rank\n` +
+    `• /rewards — Claim $BLUEAGENT\n` +
+    `• /refer — Referral link (+50 pts/referral)\n\n` +
+    `<b>💰 Wallet & Trade</b>\n` +
+    `• /wallet — Portfolio + quick actions\n` +
+    `• /launch — Deploy token on Base\n\n` +
+    `<b>ℹ️ Other</b>\n` +
+    `• /menu — Control panel\n` +
+    `• /profile — My profile\n` +
+    `• /news — Base builder news\n` +
+    `• /stats — Live stats\n\n` +
+    `<i>💬 No commands needed — just chat naturally!</i>\n` +
+    `<i>Examples: "ETH price?" · "swap 10 USDC to ETH" · "who's building on Base?"</i>`,
+    { parse_mode: 'HTML', reply_markup: {
+      inline_keyboard: [
+        [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '📊 My Score', callback_data: 'menu_score' }],
+        [{ text: '⭐ My Points', callback_data: 'menu_points' }, { text: '💰 Wallet', callback_data: 'menu_wallet' }],
+      ]
+    }} as any
   )
 })
 
