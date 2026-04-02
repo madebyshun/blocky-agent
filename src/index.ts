@@ -2889,7 +2889,11 @@ async function scanToken(ca: string): Promise<string> {
     const changeStr = change24h !== undefined
       ? `${change24h > 0 ? '📈 +' : '📉 '}${change24h.toFixed(2)}%`
       : 'N/A'
-    const mcap = pair.marketCap ? `$${(pair.marketCap / 1e6).toFixed(2)}M` : pair.fdv ? `$${(pair.fdv / 1e6).toFixed(2)}M` : 'N/A'
+    const mcapNum2 = pair.marketCap || pair.fdv || 0
+    const mcap = mcapNum2 === 0 ? 'N/A'
+      : mcapNum2 >= 1e6 ? `$${(mcapNum2 / 1e6).toFixed(2)}M`
+      : mcapNum2 >= 1e3 ? `$${(mcapNum2 / 1e3).toFixed(1)}K`
+      : `$${mcapNum2.toFixed(0)}`
     const liq = pair.liquidity?.usd ? `$${(pair.liquidity.usd / 1e3).toFixed(1)}K` : 'N/A'
     const vol24h = pair.volume?.h24 ? `$${(pair.volume.h24 / 1e3).toFixed(1)}K` : 'N/A'
     const buys = pair.txns?.h24?.buys || 0
