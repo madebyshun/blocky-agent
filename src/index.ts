@@ -1751,12 +1751,6 @@ function buildProfileText(user: User, rank: number, projectCount: number): strin
   const points = user.points || 0
   const credits = user.credits || 0
 
-  // Tier based on credits
-  const tier = credits >= 500 ? '🔱 Legend'
-    : credits >= 200 ? '👑 Founder'
-    : credits >= 50 ? '🚀 Shipper'
-    : '🟦 Builder'
-
   return (
     `<b>👤 My Profile</b>\n` +
     `──────────────\n` +
@@ -1764,7 +1758,7 @@ function buildProfileText(user: User, rank: number, projectCount: number): strin
     `${xHandle}\n` +
     `──────────────\n` +
     `⭐ Points: <b>${points}</b>\n` +
-    `🪙 Credits: <b>${credits}</b> ${tier}\n` +
+    `🪙 Credits: <b>${credits}</b>\n` +
     `📝 Projects: <b>${projectCount}</b>\n` +
     `🏆 Rank: <b>#${rank}</b>\n` +
     `──────────────\n` +
@@ -1950,31 +1944,18 @@ bot.onText(/\/credits/, async (msg) => {
   const user = users[userId] || { id: userId, points: 0, credits: 0 }
   const credits = user.credits || 0
 
-  const tier = credits >= 500 ? '🔱 Legend'
-    : credits >= 200 ? '👑 Founder'
-    : credits >= 50 ? '🚀 Shipper'
-    : '🟦 Builder'
-
-  const nextTier = credits >= 500 ? null
-    : credits >= 200 ? { name: '🔱 Legend', need: 500 - credits }
-    : credits >= 50 ? { name: '👑 Founder', need: 200 - credits }
-    : { name: '🚀 Shipper', need: 50 - credits }
-
-  const progressText = nextTier
-    ? `\n→ ${nextTier.need} more Credits to reach ${nextTier.name}`
-    : `\n→ Max tier reached! 🔱`
-
   await bot.sendMessage(chatId,
     `<b>🪙 My Credits</b>\n\n` +
-    `Credits: <b>${credits}</b>\n` +
-    `Tier: <b>${tier}</b>${progressText}\n\n` +
+    `Balance: <b>${credits} Credits</b>\n\n` +
     `<b>Use Credits for:</b>\n` +
-    `• 🤖 Meet Agents — chat với specialist AI\n` +
     `• ✍️ Copywriter: 3 cr/msg\n` +
     `• 🎨 UX Designer: 5 cr/msg\n` +
     `• 📊 Tokenomics: 10 cr/msg\n` +
-    `• 🚀 GTM Advisor: 10 cr/msg\n\n` +
-    `<i>Buy Credits with $BLUEAGENT — coming soon</i>`,
+    `• 🚀 GTM Advisor: 10 cr/msg\n` +
+    `• 💻 Code Review: 8 cr/msg\n\n` +
+    `<b>How to get Credits:</b>\n` +
+    `→ Buy with $BLUEAGENT (coming soon)\n\n` +
+    `<i>1M $BLUEAGENT = 100 Credits</i>`,
     {
       parse_mode: 'HTML',
       reply_markup: {
