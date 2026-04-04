@@ -5,6 +5,7 @@ import { execSync, spawn } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { ethers } from 'ethers'
+import { parseSwapIntent, parseSendIntent, sendToken, swapTokens } from './lib/walletActions'
 // import { createCanvas } from 'canvas' // Reserved for Phase 2 card generation
 dotenv.config()
 
@@ -2891,13 +2892,12 @@ bot.on('message', async (msg) => {
   const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup'
   if (isGroup) {
     const msgThreadId = (msg as any).message_thread_id
+    // Only respond in General topic (thread 1 or no thread)
+    if (msgThreadId && msgThreadId !== 1) return
     const botInfo = await bot.getMe()
     const mentioned = text.toLowerCase().includes(`@${botInfo.username?.toLowerCase()}`)
     const isReplyToBot = msg.reply_to_message?.from?.id === botInfo.id
-    // In non-General topics: only respond when explicitly @mentioned or replied to
-    if (msgThreadId && msgThreadId !== 1 && !mentioned && !isReplyToBot) return
-    // In General topic (thread 1 or no thread): respond when mentioned or replied to
-    if ((!msgThreadId || msgThreadId === 1) && !mentioned && !isReplyToBot) return
+    if (!mentioned && !isReplyToBot) return
     // In group context, clear any active DM sessions to avoid flow conflicts
     launchSessions.delete(userId)
     submitSessions.delete(userId)
@@ -3003,6 +3003,75 @@ bot.on('message', async (msg) => {
     const label = actionLabels[session.action] || 'action'
 
     bot.sendChatAction(chatId, 'typing').catch(() => {})
+
+    // ── Native swap ──
+    if (session.action === 'wallet_swap') {
+      const parsed = parseSwapIntent(text)
+      if (!parsed) {
+        await bot.sendMessage(chatId,
+          `⚠️ Couldn't parse swap. Try:\n<code>swap 10 USDC to ETH</code>\n<code>buy $BLUEAGENT with 5 USDC</code>`,
+          { parse_mode: 'HTML' } as any
+        )
+        return
+      }
+      const usersForSwap = loadUsers()
+      const pk = usersForSwap[userId]?.privateKey
+      if (!pk) { await bot.sendMessage(chatId, '⚠️ Wallet not found. Type /start.'); return }
+
+      await bot.sendMessage(chatId, `⏳ Swapping ${parsed.amount} ${parsed.fromToken} → ${parsed.toToken}...\n<i>~15-30s</i>`, { parse_mode: 'HTML' } as any)
+      const swapResult = await swapTokens(pk, parsed.fromToken, parsed.toToken, parsed.amount)
+      if ('error' in swapResult) {
+        await bot.sendMessage(chatId, `❌ Swap failed: ${swapResult.error}`)
+      } else {
+        await bot.sendMessage(chatId,
+          `✅ <b>Swap complete!</b>\n\n` +
+          `${parsed.amount} ${parsed.fromToken.toUpperCase()} → <b>${swapResult.amountOut}</b>\n\n` +
+          `🔗 <a href="${swapResult.explorerUrl}">View on Basescan</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true } as any
+        )
+      }
+      return
+    }
+
+    // ── Native send ──
+    if (session.action === 'wallet_send') {
+      const parsed = parseSendIntent(text)
+      if (!parsed) {
+        await bot.sendMessage(chatId,
+          `⚠️ Couldn't parse. Try:\n<code>send 5 USDC to 0x...</code>\n<code>send 0.01 ETH to 0x...</code>`,
+          { parse_mode: 'HTML' } as any
+        )
+        return
+      }
+      const usersForSend = loadUsers()
+      const pk = usersForSend[userId]?.privateKey
+      if (!pk) { await bot.sendMessage(chatId, '⚠️ Wallet not found. Type /start.'); return }
+
+      await bot.sendMessage(chatId, `⏳ Sending ${parsed.amount} ${parsed.token}...\n<i>~15-30s</i>`, { parse_mode: 'HTML' } as any)
+      const sendResult = await sendToken(pk, parsed.toAddress, parsed.token, parsed.amount)
+      if ('error' in sendResult) {
+        await bot.sendMessage(chatId, `❌ Send failed: ${sendResult.error}`)
+      } else {
+        await bot.sendMessage(chatId,
+          `✅ <b>Sent!</b>\n\n` +
+          `${parsed.amount} ${parsed.token.toUpperCase()} → <code>${parsed.toAddress.slice(0,6)}...${parsed.toAddress.slice(-4)}</code>\n\n` +
+          `🔗 <a href="${sendResult.explorerUrl}">View on Basescan</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true } as any
+        )
+      }
+      return
+    }
+
+    // ── Bridge / DCA / Limit / Perps → redirect to bankr.bot ──
+    if (['wallet_bridge', 'wallet_dca', 'wallet_limit', 'wallet_stoploss'].includes(session.action)) {
+      await bot.sendMessage(chatId,
+        `🌉 <b>${label.charAt(0).toUpperCase() + label.slice(1)}</b> requires Bankr directly.\n\n` +
+        `👉 <a href="https://bankr.bot">bankr.bot</a> — connect your wallet there to use bridge, DCA, and limit orders.`,
+        { parse_mode: 'HTML', disable_web_page_preview: true } as any
+      )
+      return
+    }
+
     await bot.sendMessage(chatId, `⏳ Processing your ${label}...`)
 
     // Build enriched prompt with wallet context
@@ -3132,6 +3201,58 @@ bot.on('message', async (msg) => {
 
   try {
     let reply = ''
+
+    // ── Native swap intercept (natural language) ──
+    const swapParsed = parseSwapIntent(text)
+    if (swapParsed) {
+      const usersNative = loadUsers()
+      const pk = usersNative[userId]?.privateKey
+      if (pk) {
+        await bot.sendMessage(chatId,
+          `⏳ Swapping ${swapParsed.amount} ${swapParsed.fromToken} → ${swapParsed.toToken}...\n<i>~15-30s</i>`,
+          { parse_mode: 'HTML' } as any
+        )
+        const swapRes = await swapTokens(pk, swapParsed.fromToken, swapParsed.toToken, swapParsed.amount)
+        if ('error' in swapRes) {
+          await bot.sendMessage(chatId, `❌ Swap failed: ${swapRes.error}`)
+        } else {
+          await bot.sendMessage(chatId,
+            `✅ <b>Swap complete!</b>\n\n` +
+            `${swapParsed.amount} ${swapParsed.fromToken.toUpperCase()} → <b>${swapRes.amountOut}</b>\n\n` +
+            `🔗 <a href="${swapRes.explorerUrl}">View on Basescan</a>`,
+            { parse_mode: 'HTML', disable_web_page_preview: true } as any
+          )
+        }
+        clearInterval(typingInterval)
+        return
+      }
+    }
+
+    // ── Native send intercept (natural language) ──
+    const sendParsed = parseSendIntent(text)
+    if (sendParsed) {
+      const usersNative = loadUsers()
+      const pk = usersNative[userId]?.privateKey
+      if (pk) {
+        await bot.sendMessage(chatId,
+          `⏳ Sending ${sendParsed.amount} ${sendParsed.token}...\n<i>~15-30s</i>`,
+          { parse_mode: 'HTML' } as any
+        )
+        const sendRes = await sendToken(pk, sendParsed.toAddress, sendParsed.token, sendParsed.amount)
+        if ('error' in sendRes) {
+          await bot.sendMessage(chatId, `❌ Send failed: ${sendRes.error}`)
+        } else {
+          await bot.sendMessage(chatId,
+            `✅ <b>Sent!</b>\n\n` +
+            `${sendParsed.amount} ${sendParsed.token.toUpperCase()} → <code>${sendParsed.toAddress.slice(0,6)}...${sendParsed.toAddress.slice(-4)}</code>\n\n` +
+            `🔗 <a href="${sendRes.explorerUrl}">View on Basescan</a>`,
+            { parse_mode: 'HTML', disable_web_page_preview: true } as any
+          )
+        }
+        clearInterval(typingInterval)
+        return
+      }
+    }
 
     if (needsAgent(text)) {
       // Inject user wallet address when query is about their wallet/portfolio
