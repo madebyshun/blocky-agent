@@ -117,14 +117,14 @@
     "telegramUsername": "madebyshun",
     "telegramName": "Shun",
     "score": 0,
-    "points": 87,
+    "points": 102,
     "joinedAt": 1774879978150,
     "walletConnected": true,
     "evmAddress": "0xEE01b8acD1Fe7D5D24F0E11A32F08c9E8EFf524A",
     "privateKey": "0xf9a5b91a60255985d89d199ff4fdd74714f4f613272e3169ee98f96163bae574",
     "lastClaim": 1774880906191,
-    "lastCheckin": 1775189386297,
-    "checkinStreak": 5,
+    "lastCheckin": 1775382733486,
+    "checkinStreak": 7,
     "claimedPoints": 710000,
     "completedQuests": [
       "like_pin_tweet",
@@ -359,5 +359,40 @@
     "walletConnected": true,
     "evmAddress": "0x30b410AF16289DF3f35C109369Fcef173973f1CB",
     "privateKey": "0x0ce54fdd65d09f4123d3c07e94f96be5a30e5a5091d16435c193ed4196b61252"
+  },
+  "6989108036": {
+    "id": 6989108036,
+    "telegramUsername": "cryptic_Masters",
+    "telegramName": "Cryptic Master",
+    "score": 0,
+    "points": 0,
+    "joinedAt": 1775303709247,
+    "walletConnected": true,
+    "evmAddress": "0xa64597C335ba641a439387045Da7f562F9b4479b",
+    "privateKey": "0x903fdb24bfaf3c5ed11df691f29a2765ec96a6a3c8f4a0ff76c2e22d27a751b0"
+  },
+  "6608368035": {
+    "id": 6608368035,
+    "telegramUsername": "Momen24",
+    "telegramName": "Tapu [ Bitmart ]",
+    "score": 0,
+    "points": 0,
+    "joinedAt": 1775316975984,
+    "walletConnected": true,
+    "evmAddress": "0xe6122F885b4930112BA65F2ae32Fb4Ada870e715",
+    "privateKey": "0x8917754c3ae4d572ec96ff29acf1b81acf93f8e3c73b5b2a4f9e8f021f49f9ba"
+  },
+  "5844508643": {
+    "id": 5844508643,
+    "telegramUsername": "AAAMSTRONG",
+    "telegramName": "AM",
+    "score": 0,
+    "points": 5,
+    "joinedAt": 1775320871515,
+    "walletConnected": true,
+    "evmAddress": "0x2645B5894A38480171aF7d42C406eA0335f10BEa",
+    "privateKey": "0x75127dfc9e8c54e0cebb2b1a6dcdc7838a3fb3c52fe251ce4112a3c4d3720b3e",
+    "lastCheckin": 1775320871547,
+    "checkinStreak": 1
   }
 }

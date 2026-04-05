@@ -5,6 +5,7 @@ import { execSync, spawn } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { ethers } from 'ethers'
+import { parseSwapIntent, parseSendIntent, sendToken, swapTokens, needsBankrSwap } from './lib/walletActions'
 // import { createCanvas } from 'canvas' // Reserved for Phase 2 card generation
 dotenv.config()
 
@@ -156,15 +157,21 @@ async function sendTokenReward(toAddress: string, amount: number, tokenContract:
 // =======================
 // BLUE AGENT SYSTEM PROMPT
 // =======================
-const SYSTEM_PROMPT = `You are Blue Agent 🟦 — an AI community manager and builder's co-pilot on Base.
+const SYSTEM_PROMPT = `You are Blue Agent 🟦 — AI Security & Intelligence Agent on Base.
 
 ## Identity
-Built by Blocky Studio. Running 24/7 to help the community.
-Part assistant, part community manager, part onchain navigator.
+Built by Blocky Studio. Running 24/7.
+Specialties: Quantum Security, Builder Intelligence, onchain data, Base ecosystem.
+
+## Core Services
+- Quantum Security: 6 x402 services to scan wallets/contracts for quantum risk (/quantum)
+- Builder Score: AI scoring (0-100) for any builder on Base (/score)
+- x402 Intelligence: pay-per-use AI services (deep analysis, PnL, grant eval, risk check)
+- Community: points, rewards, leaderboard, $BLUEAGENT
 
 ## Personality
 - Concise and direct — no filler phrases
-- Sharp, slightly witty, builder-native
+- Sharp, slightly witty, security-aware
 - Friendly in community chat, precise in technical answers
 - Never say "I'm just an AI" — just help
 
@@ -251,24 +258,29 @@ function formatAgentReply(text: string): string {
 // WELCOME MESSAGE
 // =======================
 const WELCOME_MESSAGE = `<b>Blue Agent 🟦</b>
-Your guide to the Base ecosystem.
+AI Security & Intelligence Agent on Base.
 
-Just ask me anything about Base 👇
+☢️ <b>Quantum Security</b>
+• <code>/quantum</code> — Check your wallet's quantum risk
+• 6 services: Lite · Premium · Batch · Shield · Timeline · Contract
 
-💬 <b>Try saying:</b>
-• <i>"What's new on Base today?"</i>
+📊 <b>Builder Intelligence</b>
+• <code>/score @handle</code> — AI Builder Score (0–100)
+• <code>/projects</code> — Base builder directory
+
+💰 <b>Earn $BLUEAGENT</b>
+• <code>gm</code> daily → +5 pts
+• <code>/rewards</code> → claim $BLUEAGENT onchain
+
+💬 <b>Ask me anything:</b>
+• <i>"What's trending on Base?"</i>
 • <i>"Who's building AI agents on Base?"</i>
-• <i>"Top projects launching this week?"</i>
-• <i>"Tell me about $BLUEAGENT"</i>
-• <i>"What's trending in Base DeFi?"</i>
-
-Or use the menu to earn <b>$BLUEAGENT</b> rewards 🎁
+• <i>"Check quantum risk for 0x..."</i>
 
 <i>Powered by Bankr · Base 🟦</i>`
 
 // =======================
 // BANKR AGENT
-// Handles ALL data queries + on-chain actions
 // Has real tools: prices, trending, on-chain data, swaps, balances
 // =======================
 async function askBankrAgent(prompt: string, maxPolls = 15): Promise<string> {
@@ -581,7 +593,7 @@ function clearSessionTimer(userId: number) {
 function startSessionTimer(userId: number, chatId: number) {
   clearSessionTimer(userId)
   const t = setTimeout(async () => {
-    if (walletSessions.has(userId) || submitSessions.has(userId) || launchSessions.has(userId) || xHandleSessions.has(userId) || xVerifySessions.has(userId) || walletConvSessions.has(userId) || x402Sessions.has(userId)) {
+    if (walletSessions.has(userId) || submitSessions.has(userId) || launchSessions.has(userId) || xHandleSessions.has(userId) || xVerifySessions.has(userId) || walletConvSessions.has(userId) || x402Sessions.has(userId) || agentSessions.has(userId)) {
       walletSessions.delete(userId)
       submitSessions.delete(userId)
       launchSessions.delete(userId)
@@ -589,6 +601,7 @@ function startSessionTimer(userId: number, chatId: number) {
       xVerifySessions.delete(userId)
       walletConvSessions.delete(userId)
       x402Sessions.delete(userId)
+      agentSessions.delete(userId)
       await bot.sendMessage(chatId, '⏱ Session expired. Start again when ready.').catch(() => {})
     }
     sessionTimers.delete(userId)
@@ -603,6 +616,7 @@ const xHandleSessions = new Map<number, boolean>() // waiting for X handle input
 const xVerifySessions = new Map<number, { code: string; expiresAt: number }>() // verify-by-tweet sessions
 const walletConvSessions = new Map<number, { action: string; addr: string }>() // waiting for wallet action details
 const x402Sessions = new Map<number, { service: string; step: 'input' | 'confirm'; input?: string }>() // x402 service sessions
+const agentSessions = new Map<number, { agentKey: string; systemPrompt: string; cost: number }>() // specialist agent chat sessions
 
 // ── x402 Service Config ──
 const X402_BASE_URL = `https://x402.bankr.bot/${process.env.TREASURY_ADDRESS || '0xf31f59e7b8b58555f7871f71973a394c8f1bffe5'}`
@@ -686,21 +700,97 @@ const X402_SERVICES: Record<string, {
     }
   },
   quantum: {
-    name: 'Quantum Risk', emoji: '⚛️', price: 1.50,
-    description: 'Quantum vulnerability check for any wallet',
-    inputPrompt: 'Enter wallet address to check:\n<i>(e.g. 0x1234... or type "me" for your wallet)</i>',
+    name: 'Quantum Premium', emoji: '⚛️', price: 1.50,
+    description: 'Full quantum risk report — exposure, migration steps, AI analysis',
+    inputPrompt: 'Enter wallet address:\n<i>(e.g. 0x1234... or type "me" for your wallet)</i>',
     inputKey: 'address',
     endpoint: 'quantum-premium',
     formatResult: (d) => {
-      const riskIconMap: Record<string, string> = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🟢', MINIMAL: '🟢' }
-      const riskIcon = riskIconMap[d.quantumRiskLevel] || '⚪'
+      const riskIconMap: Record<string, string> = { CRITICAL: '🚨', HIGH: '🔴', MEDIUM: '🟠', LOW: '🟡', SAFE: '🟢' }
+      const riskIcon = riskIconMap[d.riskLevel] || '⚪'
       return `⚛️ <b>Quantum Risk Report</b>\n\n` +
-        `${riskIcon} Risk Level: <b>${d.quantumRiskLevel}</b> (${d.riskScore}/100)\n` +
-        `🔑 Public Key Exposed: <b>${d.publicKeyExposed ? '⚠️ Yes' : '✅ No'}</b>\n` +
-        `⏱ Threat Timeline: <b>${d.threatTimeline || 'N/A'}</b>\n` +
-        `🎯 Recommendation: <b>${d.recommendation}</b>\n\n` +
+        `${riskIcon} Risk Level: <b>${d.riskLevel}</b> (${d.riskScore}/100)\n` +
+        `🔑 Exposed: <b>${d.publicKeyExposure?.isExposed ? `⚠️ Yes (${d.publicKeyExposure.exposureCount}x)` : '✅ No'}</b>\n` +
+        `🎯 Action: <b>${d.recommendation}</b>\n\n` +
         `📝 ${d.executiveSummary || ''}\n\n` +
         (d.migrationSteps?.length ? `<b>Migration Steps:</b>\n${d.migrationSteps.slice(0, 3).map((s: any) => `${s.step}. ${s.action}`).join('\n')}` : '')
+    }
+  },
+  'quantum-lite': {
+    name: 'Quantum Lite', emoji: '🔬', price: 0.10,
+    description: 'Quick quantum exposure check — instant, no AI',
+    inputPrompt: 'Enter wallet address:\n<i>(e.g. 0x1234... or type "me" for your wallet)</i>',
+    inputKey: 'address',
+    endpoint: 'quantum-lite',
+    formatResult: (d) => {
+      const riskIconMap: Record<string, string> = { CRITICAL: '🚨', HIGH: '🔴', MEDIUM: '🟠', LOW: '🟡', SAFE: '🟢' }
+      const icon = riskIconMap[d.riskLevel] || '⚪'
+      return `🔬 <b>Quantum Lite Check</b>\n\n` +
+        `${icon} Risk: <b>${d.riskLevel}</b> (${d.riskScore}/100)\n` +
+        `🔑 Exposed: <b>${d.isExposed ? `⚠️ Yes (${d.exposureCount}x)` : '✅ No'}</b>\n` +
+        `🎯 ${d.recommendation}\n\n` +
+        `📝 ${d.summary || ''}\n\n` +
+        `<i>${d.upgradeAvailable}</i>`
+    }
+  },
+  'quantum-batch': {
+    name: 'Quantum Batch', emoji: '📦', price: 2.50,
+    description: 'Scan 2-10 wallets, ranked by quantum risk',
+    inputPrompt: 'Enter wallet addresses separated by comma or newline:\n<i>(2-10 addresses, e.g. 0x111..., 0x222...)</i>',
+    inputKey: 'addresses',
+    endpoint: 'quantum-batch',
+    formatResult: (d) =>
+      `📦 <b>Quantum Batch Scan</b>\n\n` +
+      `📊 Scanned: ${d.totalScanned} wallets\n` +
+      `⚠️ Exposed: ${d.exposedCount} · 🚨 Critical: ${d.criticalCount} · 🔴 High: ${d.highCount}\n\n` +
+      `${d.summary}\n\n` +
+      `<b>Results (by risk):</b>\n` +
+      (d.results?.slice(0, 5).map((r: any) => {
+        const icon = r.riskLevel === 'CRITICAL' ? '🚨' : r.riskLevel === 'HIGH' ? '🔴' : r.riskLevel === 'MEDIUM' ? '🟠' : r.riskLevel === 'LOW' ? '🟡' : '🟢'
+        return `${icon} <code>${r.address.slice(0,6)}...${r.address.slice(-4)}</code> ${r.riskLevel} (${r.riskScore})`
+      }).join('\n') || '')
+  },
+  'quantum-shield': {
+    name: 'Quantum Shield', emoji: '🛡️', price: 0.25,
+    description: 'AI agent pre-transaction safety check',
+    inputPrompt: 'Enter wallet address to shield-check:\n<i>(e.g. 0x1234...)</i>',
+    inputKey: 'address',
+    endpoint: 'quantum-shield',
+    formatResult: (d) => {
+      const icon = d.decision === 'SAFE' ? '✅' : d.decision === 'WARN' ? '⚠️' : '🚫'
+      return `🛡️ <b>Quantum Shield</b>\n\n` +
+        `${icon} Decision: <b>${d.decision}</b>\n` +
+        `📊 Risk Score: <b>${d.riskScore}/100</b>\n\n` +
+        (d.reasons?.length ? `<b>Reasons:</b>\n${d.reasons.map((r: string) => `• ${r}`).join('\n')}\n\n` : '') +
+        (d.mitigations?.length ? `<b>Mitigations:</b>\n${d.mitigations.map((m: string) => `• ${m}`).join('\n')}` : '')
+    }
+  },
+  'quantum-timeline': {
+    name: 'Quantum Timeline', emoji: '🗓️', price: 2.00,
+    description: 'Year-by-year quantum threat timeline for your wallet',
+    inputPrompt: 'Enter wallet address:\n<i>(e.g. 0x1234...)</i>',
+    inputKey: 'address',
+    endpoint: 'quantum-timeline',
+    formatResult: (d) =>
+      `🗓️ <b>Quantum Timeline</b>\n\n` +
+      `⚠️ Critical Window: <b>${d.criticalWindow || 'N/A'}</b>\n` +
+      `📅 Migration Deadline: <b>${d.migrationDeadline || 'N/A'}</b>\n\n` +
+      (d.timeline?.slice(0, 3).map((t: any) => `<b>${t.year}:</b> ${t.recommendedAction}`).join('\n') || '') +
+      `\n\n📝 ${d.disclaimer || ''}`
+  },
+  'quantum-contract': {
+    name: 'Quantum Contract', emoji: '📄', price: 5.00,
+    description: 'Smart contract quantum vulnerability audit',
+    inputPrompt: 'Enter contract address to audit:\n<i>(e.g. 0x1234...)</i>',
+    inputKey: 'address',
+    endpoint: 'quantum-contract',
+    formatResult: (d) => {
+      const icon = d.overallRisk === 'CRITICAL' ? '🚨' : d.overallRisk === 'HIGH' ? '🔴' : d.overallRisk === 'MEDIUM' ? '🟠' : '🟢'
+      return `📄 <b>Contract Quantum Audit</b>\n\n` +
+        `${icon} Risk: <b>${d.overallRisk}</b> (${d.riskScore}/100)\n` +
+        `🔧 Migration Effort: <b>${d.estimatedMigrationEffort || 'N/A'}</b>\n\n` +
+        `📝 ${d.executiveSummary || ''}\n\n` +
+        (d.vulnerabilities?.length ? `<b>Vulnerabilities (${d.vulnerabilities.length}):</b>\n${d.vulnerabilities.slice(0, 3).map((v: any) => `• ${v.type}: ${v.description}`).join('\n')}` : '✅ No vulnerabilities found')
     }
   }
 }
@@ -710,9 +800,16 @@ async function callX402Service(service: string, inputValue: string): Promise<any
   if (!svc) throw new Error('Unknown service')
   const url = `${X402_BASE_URL}/${svc.endpoint}`
 
-  const inputJson: any = { [svc.inputKey]: inputValue }
-  if (svc.inputKey === 'address') inputJson.chain = 'base'
-  if (svc.inputKey === 'description') inputJson.projectName = inputValue.split('—')[0]?.trim() || inputValue
+  // Parse addresses array for batch service
+  let inputJson: any
+  if (svc.inputKey === 'addresses') {
+    const addrs = inputValue.split(/[\n,]+/).map(a => a.trim()).filter(a => a.startsWith('0x'))
+    inputJson = { addresses: addrs }
+  } else {
+    inputJson = { [svc.inputKey]: inputValue }
+    if (svc.inputKey === 'address') inputJson.chain = 'base'
+    if (svc.inputKey === 'description') inputJson.projectName = inputValue.split('—')[0]?.trim() || inputValue
+  }
 
   // Use bankr CLI to handle x402 payment automatically
   const bodyStr = JSON.stringify(inputJson).replace(/'/g, "'\\''")
@@ -1971,15 +2068,42 @@ const WALLET_KEYBOARD = {
 const WALLET_QUICK_ACTIONS =
   `\n\n⚡ <b>Quick actions</b> — just type:\n` +
   `• <code>swap 10 USDC to ETH</code>\n` +
-  `• <code>send 5 USDC to 0x...</code>\n` +
-  `• <code>bridge 0.01 ETH to Polygon</code>\n` +
+  `• <code>swap 0.01 ETH to USDC</code>\n` +
   `• <code>buy $BLUEAGENT with 5 USDC</code>\n` +
-  `• <code>DCA $10 into ETH daily</code>\n` +
-  `\n🔱 <b>Hyperliquid perps:</b>\n` +
-  `• <code>long $100 BTC on hyperliquid</code>\n` +
-  `• <code>short ETH 10x on hyperliquid</code>\n` +
-  `• <code>long TSLA with 5x leverage on hyperliquid</code>\n` +
-  `• <code>show my hyperliquid positions</code>`
+  `• <code>send 5 USDC to 0x...</code>\n` +
+  `• <code>send 0.01 ETH to 0x...</code>`
+
+async function buildWalletStatus(addr: string): Promise<string> {
+  try {
+    const provider = new ethers.JsonRpcProvider('https://mainnet.base.org')
+    const ethBal = await provider.getBalance(addr)
+    const ethFormatted = parseFloat(ethers.formatEther(ethBal)).toFixed(6)
+    const hasGas = ethBal > ethers.parseEther('0.0001')
+
+    const gasLine = hasGas
+      ? `⛽ Gas: ${ethFormatted} ETH ✅`
+      : `⛽ Gas: ${ethFormatted} ETH ⚠️ <i>Need ETH for gas</i>`
+
+    const depositNote = !hasGas
+      ? `\n\n📥 <b>To use swap/send, deposit ETH (Base):</b>\n<code>${addr}</code>\n<i>Min ~0.001 ETH for gas fees</i>`
+      : ''
+
+    return (
+      `<b>👛 Your Wallet</b> — Base Network\n\n` +
+      `💳 <code>${addr}</code>\n` +
+      `${gasLine}` +
+      depositNote +
+      WALLET_QUICK_ACTIONS
+    )
+  } catch {
+    return (
+      `<b>👛 Your Wallet</b> — Base Network\n\n` +
+      `💳 <code>${addr}</code>\n\n` +
+      `📥 <b>Deposit ETH (Base) to use swap/send:</b>\n<code>${addr}</code>\n<i>Min ~0.001 ETH for gas fees</i>` +
+      WALLET_QUICK_ACTIONS
+    )
+  }
+}
 
 bot.onText(/\/profile/, async (msg) => {
   if (await blockInGroup(msg)) return
@@ -2022,7 +2146,7 @@ bot.onText(/\/wallet/, async (msg) => {
   const user2 = users2[userId]
   const addr = user2?.evmAddress
   const statusLine = addr
-    ? `<b>👛 Your Wallet</b>\n🟦 <code>${addr}</code>\n<i>Powered by Bankr · Base network</i>` + WALLET_QUICK_ACTIONS
+    ? await buildWalletStatus(addr)
     : `<b>👛 Wallet</b>\n⚠️ Type /start to create your wallet`
   await bot.sendMessage(chatId, statusLine, {
     parse_mode: 'HTML',
@@ -2098,12 +2222,11 @@ bot.onText(/\/credits/, async (msg) => {
   await bot.sendMessage(chatId,
     `<b>🪙 My Credits</b>\n\n` +
     `Balance: <b>${credits} Credits</b>\n\n` +
-    `<b>Use Credits for:</b>\n` +
-    `• ✍️ Copywriter: 2 cr/msg\n` +
-    `• 🎨 UX Designer: 3 cr/msg\n` +
-    `• 📊 Tokenomics: 7 cr/msg\n` +
-    `• 🚀 GTM Advisor: 7 cr/msg\n` +
-    `• 💻 Code Review: 5 cr/msg\n\n` +
+    `<b>Agent pricing:</b>\n` +
+    `• 🦁 Rex (Strategist): 8 cr/msg\n` +
+    `• ✨ Nova (Wordsmith): 3 cr/msg\n` +
+    `• 🔧 Kai (Builder): 6 cr/msg\n` +
+    `• 🎯 Luna (Growth): 5 cr/msg\n\n` +
     `<b>How to get Credits:</b>\n` +
     `→ Buy with $BLUEAGENT (coming soon)\n\n` +
     `<i>1M $BLUEAGENT = 20 Credits</i>`,
@@ -2133,9 +2256,29 @@ function x402MenuKeyboard() {
       ],
       [
         { text: '🛡️ Risk Check $0.05', callback_data: 'x402_start_riskcheck' },
-        { text: '⚛️ Quantum $1.50', callback_data: 'x402_start_quantum' },
+        { text: '☢️ Quantum Security ▶', callback_data: 'menu_quantum' },
       ],
       [{ text: '🏠 Menu', callback_data: 'menu_main' }]
+    ]
+  }
+}
+
+function quantumMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '🔬 Lite $0.10', callback_data: 'x402_start_quantum-lite' },
+        { text: '⚛️ Premium $1.50', callback_data: 'x402_start_quantum' },
+      ],
+      [
+        { text: '📦 Batch $2.50', callback_data: 'x402_start_quantum-batch' },
+        { text: '🛡️ Shield $0.25', callback_data: 'x402_start_quantum-shield' },
+      ],
+      [
+        { text: '🗓️ Timeline $2.00', callback_data: 'x402_start_quantum-timeline' },
+        { text: '📄 Contract $5.00', callback_data: 'x402_start_quantum-contract' },
+      ],
+      [{ text: '◀️ Back', callback_data: 'menu_x402' }]
     ]
   }
 }
@@ -2144,16 +2287,52 @@ bot.onText(/\/x402/, async (msg) => {
   if (await blockInGroup(msg)) return
   const chatId = msg.chat.id
   await bot.sendMessage(chatId,
-    `<b>⚛️ Blue Agent x402 Services</b>\n\n` +
-    `Pay-per-use AI services · USDC on Base · No signup\n\n` +
-    `🔍 <b>Analyze</b> — Due diligence any token\n` +
-    `💼 <b>PnL</b> — Wallet trading report\n` +
-    `🚀 <b>Advisor</b> — Token launch playbook\n` +
-    `🏛️ <b>Grant</b> — Base grant scoring\n` +
-    `🛡️ <b>Risk Check</b> — Safety check before tx\n` +
-    `⚛️ <b>Quantum</b> — Quantum risk report\n\n` +
+    `<b>⚛️ Blue Agent x402 Services</b>\n\nPay-per-use AI · USDC on Base · No signup\n\n` +
+    `🔍 <b>Analyze</b> $0.35 — Token due diligence\n` +
+    `💼 <b>PnL</b> $1.00 — Wallet trading report\n` +
+    `🚀 <b>Advisor</b> $3.00 — Token launch playbook\n` +
+    `🏛️ <b>Grant</b> $5.00 — Base grant scoring\n` +
+    `🛡️ <b>Risk Check</b> $0.05 — Safety check\n` +
+    `☢️ <b>Quantum Security</b> — 6 services ($0.10–$5.00)\n\n` +
     `<i>Powered by @blockyagent_bot × Base x402</i>`,
     { parse_mode: 'HTML', reply_markup: x402MenuKeyboard() } as any
+  )
+})
+
+bot.onText(/\/quantum(?:\s+(.+))?/, async (msg, match) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id
+  const userId = msg.from?.id; if (!userId) return
+  const input = match?.[1]?.trim()
+
+  if (input && input.startsWith('0x')) {
+    // Direct check with address
+    x402Sessions.set(userId, { service: 'quantum-lite', step: 'confirm', input })
+    await bot.sendMessage(chatId,
+      `🔬 <b>Quantum Lite Check</b>\n\n` +
+      `Address: <code>${input}</code>\n` +
+      `Price: <b>$0.10 USDC</b>\n\n` +
+      `Confirm payment?`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+        [{ text: '✅ Pay $0.10 & Check', callback_data: 'x402_confirm' }],
+        [{ text: '⚛️ Full Report $1.50', callback_data: 'x402_start_quantum' }],
+        [{ text: '❌ Cancel', callback_data: 'x402_cancel' }]
+      ]}} as any
+    )
+    return
+  }
+
+  await bot.sendMessage(chatId,
+    `<b>⚛️ Quantum Security</b>\n\n` +
+    `Protect your wallet from quantum computing threats.\n\n` +
+    `🔬 <b>Lite</b> $0.10 — Quick exposure check, instant\n` +
+    `⚛️ <b>Premium</b> $1.50 — Full report + migration steps\n` +
+    `📦 <b>Batch</b> $2.50 — Scan 2-10 wallets at once\n` +
+    `🛡️ <b>Shield</b> $0.25 — Pre-tx safety check for agents\n` +
+    `🗓️ <b>Timeline</b> $2.00 — Year-by-year threat forecast\n` +
+    `📄 <b>Contract</b> $5.00 — Smart contract audit\n\n` +
+    `<i>Pay USDC on Base · No signup · Results in 30s</i>`,
+    { parse_mode: 'HTML', reply_markup: quantumMenuKeyboard() } as any
   )
 })
 
@@ -2620,14 +2799,31 @@ bot.on('callback_query', async (query) => {
   if (data === 'menu_x402') {
     await bot.answerCallbackQuery(query.id)
     await editMenu(query,
-      `<b>⚛️ Blue Agent x402 Services</b>\n\nPay-per-use AI services · USDC on Base · No signup\n\n` +
-      `🔍 <b>Analyze</b> — Due diligence any token\n` +
-      `💼 <b>PnL</b> — Wallet trading report\n` +
-      `🚀 <b>Advisor</b> — Token launch playbook\n` +
-      `🏛️ <b>Grant</b> — Base grant scoring\n` +
-      `🛡️ <b>Risk Check</b> — Safety check before tx\n` +
-      `⚛️ <b>Quantum</b> — Quantum risk report`,
+      `<b>⚛️ Blue Agent x402 Services</b>\n\nPay-per-use AI · USDC on Base · No signup\n\n` +
+      `🔍 <b>Analyze</b> $0.35 — Token due diligence\n` +
+      `💼 <b>PnL</b> $1.00 — Wallet trading report\n` +
+      `🚀 <b>Advisor</b> $3.00 — Token launch playbook\n` +
+      `🏛️ <b>Grant</b> $5.00 — Base grant scoring\n` +
+      `🛡️ <b>Risk Check</b> $0.05 — Safety check\n` +
+      `☢️ <b>Quantum Security</b> — 6 services ($0.10–$5.00)`,
       x402MenuKeyboard()
+    )
+    return
+  }
+
+  if (data === 'menu_quantum') {
+    await bot.answerCallbackQuery(query.id)
+    await editMenu(query,
+      `<b>⚛️ Quantum Security</b>\n\n` +
+      `Protect your wallet from quantum computing threats.\n\n` +
+      `🔬 <b>Lite</b> $0.10 — Quick exposure check, instant\n` +
+      `⚛️ <b>Premium</b> $1.50 — Full report + migration steps\n` +
+      `📦 <b>Batch</b> $2.50 — Scan 2-10 wallets at once\n` +
+      `🛡️ <b>Shield</b> $0.25 — Pre-tx safety check for agents\n` +
+      `🗓️ <b>Timeline</b> $2.00 — Year-by-year threat forecast\n` +
+      `📄 <b>Contract</b> $5.00 — Smart contract audit\n\n` +
+      `<i>Pay USDC on Base · No signup · Results in 30s</i>`,
+      quantumMenuKeyboard()
     )
     return
   }
@@ -2792,11 +2988,12 @@ bot.on('callback_query', async (query) => {
     const user2 = users2[userId]
     const addr = user2?.evmAddress
     const statusLine = addr
-      ? `<b>👛 Your Wallet</b>\n🟦 <code>${addr}</code>\n<i>Powered by Bankr · Base network</i>` + WALLET_QUICK_ACTIONS
+      ? await buildWalletStatus(addr)
       : `<b>👛 Wallet</b>\n⚠️ Could not create wallet. Try /start again.`
-      const walletKeyboard = {
+    const walletKeyboard = {
       inline_keyboard: [
         [{ text: '📊 Portfolio', callback_data: 'wallet_portfolio' }, { text: '📋 Tokens', callback_data: 'wallet_tokens' }, { text: '🖼️ NFTs', callback_data: 'wallet_nfts' }],
+        [{ text: '🔄 Swap', callback_data: 'trade_swap' }, { text: '💰 Buy $BLUEAGENT', callback_data: 'trade_buy_blueagent' }, { text: '📤 Send', callback_data: 'trade_send' }],
         NAV_ROW
       ]
     }
@@ -2992,14 +3189,14 @@ bot.on('callback_query', async (query) => {
   if (data === 'menu_agents') {
     await editMenu(query,
       `<b>🤖 Meet Agents</b>\n\nSpecialist AI agents — pay with $BLUEAGENT Credits.\n\n` +
-      `✍️ <b>Copywriter</b> — Web3 copy & tweets · <i>2 cr/msg</i>\n` +
-      `🎨 <b>UX Designer</b> — UI/UX expert · <i>3 cr/msg</i>\n` +
-      `📊 <b>Tokenomics</b> — Token design expert · <i>7 cr/msg</i>\n` +
-      `🚀 <b>GTM Advisor</b> — Go-to-market strategy · <i>7 cr/msg</i>\n` +
-      `💻 <b>Code Review</b> — Code review & refactor · <i>5 cr/msg</i>\n\n` +
-      `<i>Coming soon — buy Credits with $BLUEAGENT to get started</i>`,
+      `🦁 <b>Rex</b> — The Strategist\n<i>Tokenomics, launch playbook, GTM · 8 cr/msg</i>\n\n` +
+      `✨ <b>Nova</b> — The Wordsmith\n<i>Web3 copy, tweets, threads · 3 cr/msg</i>\n\n` +
+      `🔧 <b>Kai</b> — The Builder\n<i>Solidity review, TypeScript, security · 6 cr/msg</i>\n\n` +
+      `🎯 <b>Luna</b> — The Growth Hacker\n<i>Community, partnerships, virality · 5 cr/msg</i>`,
       {
         inline_keyboard: [
+          [{ text: '🦁 Rex', callback_data: 'agent_start_rex' }, { text: '✨ Nova', callback_data: 'agent_start_nova' }],
+          [{ text: '🔧 Kai', callback_data: 'agent_start_kai' }, { text: '🎯 Luna', callback_data: 'agent_start_luna' }],
           [{ text: '🪙 My Credits', callback_data: 'menu_credits' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }],
           NAV_ROW
         ]
@@ -3013,14 +3210,86 @@ bot.on('callback_query', async (query) => {
     const credits2 = users2[userId]?.credits || 0
     await editMenu(query,
       `<b>🪙 My Credits</b>\n\nBalance: <b>${credits2} Credits</b>\n\n` +
-      `<b>Use Credits for:</b>\n` +
-      `• ✍️ Copywriter: 2 cr/msg\n` +
-      `• 🎨 UX Designer: 3 cr/msg\n` +
-      `• 📊 Tokenomics: 7 cr/msg\n` +
-      `• 🚀 GTM Advisor: 7 cr/msg\n` +
-      `• 💻 Code Review: 5 cr/msg\n\n` +
+      `<b>Agent pricing:</b>\n` +
+      `• 🦁 Rex (Strategist): 8 cr/msg\n` +
+      `• ✨ Nova (Wordsmith): 3 cr/msg\n` +
+      `• 🔧 Kai (Builder): 6 cr/msg\n` +
+      `• 🎯 Luna (Growth): 5 cr/msg\n\n` +
       `<i>Buy with $BLUEAGENT — coming soon\n1M $BLUEAGENT = 20 Credits</i>`,
       { inline_keyboard: [[{ text: '🤖 Meet Agents', callback_data: 'menu_agents' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }], NAV_ROW] }
+    )
+    return
+  }
+
+  // Agent start callbacks
+  const AGENT_CONFIG: Record<string, { name: string; emoji: string; role: string; cost: number; systemPrompt: string }> = {
+    rex: {
+      name: 'Rex', emoji: '🦁', role: 'The Strategist', cost: 8,
+      systemPrompt: `You are Rex, a blunt and direct Web3 strategist. You specialize in tokenomics design, token launch playbooks, GTM strategy, and fundraising for Base ecosystem projects. You tell founders exactly what works and what doesn't — no fluff, no hype. Give actionable, data-backed advice. Keep responses concise and sharp.`
+    },
+    nova: {
+      name: 'Nova', emoji: '✨', role: 'The Wordsmith', cost: 3,
+      systemPrompt: `You are Nova, a sharp Web3 copywriter with a crypto-native voice. You write tweets, threads, whitepapers, pitch decks, and launch copy for Base ecosystem projects. Your writing is punchy, clear, and makes builders sound legendary. No corporate speak. Keep it human, bold, and on-brand.`
+    },
+    kai: {
+      name: 'Kai', emoji: '🔧', role: 'The Builder', cost: 6,
+      systemPrompt: `You are Kai, a senior blockchain developer who reviews code with zero tolerance for bad practices. You specialize in Solidity smart contracts, TypeScript/Node.js, Base chain integrations, and security audits. You find bugs before mainnet does. Be specific, technical, and direct about issues and fixes.`
+    },
+    luna: {
+      name: 'Luna', emoji: '🎯', role: 'The Growth Hacker', cost: 5,
+      systemPrompt: `You are Luna, an obsessive growth hacker for Web3 projects. You specialize in community strategy, partnership outreach, airdrop design, referral mechanics, and virality engineering for Base ecosystem projects. Every recommendation is optimized for measurable growth. Think in numbers, retention, and loops.`
+    }
+  }
+
+  if (data.startsWith('agent_start_')) {
+    const agentKey = data.replace('agent_start_', '')
+    const agent = AGENT_CONFIG[agentKey]
+    if (!agent) return
+    await bot.answerCallbackQuery(query.id)
+    await editMenu(query,
+      `${agent.emoji} <b>${agent.name}</b> — ${agent.role}\n\n` +
+      `Cost: <b>${agent.cost} Credits/msg</b>\n\n` +
+      `What do you need help with?`,
+      {
+        inline_keyboard: [
+          [{ text: `💬 Start Chat`, callback_data: `agent_chat_${agentKey}` }],
+          [{ text: '👈 Back', callback_data: 'menu_agents' }]
+        ]
+      }
+    )
+    return
+  }
+
+  if (data.startsWith('agent_chat_')) {
+    const agentKey = data.replace('agent_chat_', '')
+    const agent = AGENT_CONFIG[agentKey]
+    if (!agent) return
+    // Set agent session
+    const users2 = loadUsers()
+    const credits2 = users2[userId]?.credits || 0
+    if (credits2 < agent.cost) {
+      await bot.answerCallbackQuery(query.id, { text: `⚠️ Need ${agent.cost} Credits. You have ${credits2}.`, show_alert: true })
+      return
+    }
+    await bot.answerCallbackQuery(query.id)
+    // Store agent session in a simple map
+    agentSessions.set(userId, { agentKey, systemPrompt: agent.systemPrompt, cost: agent.cost })
+    await bot.sendMessage(chatId,
+      `${agent.emoji} <b>${agent.name} is ready</b>\n\n<i>Type your question. Each message costs ${agent.cost} Credits.\nType /stop to end the session.</i>`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🛑 End Session', callback_data: 'agent_stop' }]] } } as any
+    )
+    return
+  }
+
+  if (data === 'agent_stop') {
+    agentSessions.delete(userId)
+    await bot.answerCallbackQuery(query.id, { text: 'Session ended' })
+    await editMenu(query, `<b>🤖 Meet Agents</b>\n\nSession ended. Pick an agent to start again.`,
+      { inline_keyboard: [
+        [{ text: '🦁 Rex', callback_data: 'agent_start_rex' }, { text: '✨ Nova', callback_data: 'agent_start_nova' }],
+        [{ text: '🔧 Kai', callback_data: 'agent_start_kai' }, { text: '🎯 Luna', callback_data: 'agent_start_luna' }],
+        NAV_ROW
+      ]}
     )
     return
   }
@@ -3458,6 +3727,45 @@ bot.on('message', async (msg) => {
     return
   }
 
+  // Specialist agent chat session
+  if (agentSessions.has(userId)) {
+    const session = agentSessions.get(userId)!
+    const users2 = loadUsers()
+    const credits2 = users2[userId]?.credits || 0
+    if (credits2 < session.cost) {
+      agentSessions.delete(userId)
+      await bot.sendMessage(chatId, `⚠️ Not enough Credits (need ${session.cost}, have ${credits2}). Session ended.\n\nBuy more with /credits.`)
+      return
+    }
+    // Deduct credits
+    if (!users2[userId]) users2[userId] = { id: userId, points: 0, credits: 0 }
+    users2[userId].credits = (users2[userId].credits || 0) - session.cost
+    saveUsers(users2)
+    bot.sendChatAction(chatId, 'typing').catch(() => {})
+    try {
+      const res = await axios.post('https://llm.bankr.bot/v1/messages', {
+        model: 'claude-haiku-4-5',
+        system: session.systemPrompt,
+        messages: [{ role: 'user', content: text }],
+        max_tokens: 600
+      }, {
+        headers: { 'x-api-key': BANKR_API_KEY, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+        timeout: 30000
+      })
+      const reply = res.data?.content?.[0]?.text || 'No response.'
+      const agentKey = session.agentKey
+      const agentEmojis: Record<string, string> = { rex: '🦁', nova: '✨', kai: '🔧', luna: '🎯' }
+      const emoji = agentEmojis[agentKey] || '🤖'
+      await bot.sendMessage(chatId,
+        `${emoji} ${reply}\n\n<i>Credits remaining: ${users2[userId].credits}</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🛑 End Session', callback_data: 'agent_stop' }]] } } as any
+      )
+    } catch (err: any) {
+      await bot.sendMessage(chatId, '❌ Agent error. Please try again.')
+    }
+    return
+  }
+
   // x402 input session
   if (x402Sessions.has(userId)) {
     const session = x402Sessions.get(userId)!
@@ -3581,6 +3889,84 @@ bot.on('message', async (msg) => {
     const label = actionLabels[session.action] || 'action'
 
     bot.sendChatAction(chatId, 'typing').catch(() => {})
+
+    // ── Native swap ──
+    if (session.action === 'wallet_swap') {
+      const parsed = parseSwapIntent(text)
+      if (!parsed) {
+        await bot.sendMessage(chatId,
+          `⚠️ Couldn't parse swap. Try:\n<code>swap 10 USDC to ETH</code>\n<code>buy $BLUEAGENT with 5 USDC</code>`,
+          { parse_mode: 'HTML' } as any
+        )
+        return
+      }
+      const usersForSwap = loadUsers()
+      const userForSwap = usersForSwap[userId]
+      const pk = userForSwap?.privateKey
+      if (!pk) { await bot.sendMessage(chatId, '⚠️ Wallet not found. Type /start.'); return }
+
+      await bot.sendMessage(chatId, `⏳ Swapping ${parsed.amount} ${parsed.fromToken} → ${parsed.toToken}...\n<i>~15-30s</i>`, { parse_mode: 'HTML' } as any)
+
+      // $BLUEAGENT = Uniswap v4 → route qua Bankr Agent (shared wallet)
+      if (needsBankrSwap(parsed.fromToken, parsed.toToken)) {
+        await bot.sendMessage(chatId, `⏳ Swapping ${parsed.amount} ${parsed.fromToken} → ${parsed.toToken}...\n<i>~30-60s</i>`, { parse_mode: 'HTML' } as any)
+        const prompt = `swap ${parsed.amount} ${parsed.fromToken} to $BLUEAGENT on Base. Token address: 0xf895783b2931c919955e18b5e3343e7c7c456ba3`
+        const result = await askBankrAgent(prompt, 25)
+        if (result) {
+          await bot.sendMessage(chatId, `✅ <b>Swap complete!</b>\n\n${result}`, { parse_mode: 'HTML', disable_web_page_preview: true } as any)
+        } else {
+          await bot.sendMessage(chatId, `❌ Swap failed. Try again or use <a href="https://app.uniswap.org/swap?outputCurrency=0xf895783b2931c919955e18b5e3343e7c7c456ba3&chain=base">Uniswap</a> directly.`, { parse_mode: 'HTML' } as any)
+        }
+        return
+      }
+
+      const swapResult = await swapTokens(pk, parsed.fromToken, parsed.toToken, parsed.amount)
+      if ('error' in swapResult) {
+        await bot.sendMessage(chatId, `❌ Swap failed: ${swapResult.error}`)
+      } else {
+        await bot.sendMessage(chatId,
+          `✅ <b>Swap complete!</b>\n\n${parsed.amount} ${parsed.fromToken.toUpperCase()} → <b>${swapResult.amountOut}</b>\n\n🔗 <a href="${swapResult.explorerUrl}">View on Basescan</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true } as any
+        )
+      }
+      return
+    }
+
+    // ── Native send ──
+    if (session.action === 'wallet_send') {
+      const parsed = parseSendIntent(text)
+      if (!parsed) {
+        await bot.sendMessage(chatId,
+          `⚠️ Couldn't parse. Try:\n<code>send 5 USDC to 0x...</code>\n<code>send 0.01 ETH to 0x...</code>`,
+          { parse_mode: 'HTML' } as any
+        )
+        return
+      }
+      const usersForSend = loadUsers()
+      const pk = usersForSend[userId]?.privateKey
+      if (!pk) { await bot.sendMessage(chatId, '⚠️ Wallet not found. Type /start.'); return }
+      await bot.sendMessage(chatId, `⏳ Sending ${parsed.amount} ${parsed.token}...\n<i>~15-30s</i>`, { parse_mode: 'HTML' } as any)
+      const sendResult = await sendToken(pk, parsed.toAddress, parsed.token, parsed.amount)
+      if ('error' in sendResult) {
+        await bot.sendMessage(chatId, `❌ Send failed: ${sendResult.error}`)
+      } else {
+        await bot.sendMessage(chatId,
+          `✅ <b>Sent!</b>\n\n${parsed.amount} ${parsed.token.toUpperCase()} → <code>${parsed.toAddress.slice(0,6)}...${parsed.toAddress.slice(-4)}</code>\n\n🔗 <a href="${sendResult.explorerUrl}">View on Basescan</a>`,
+          { parse_mode: 'HTML', disable_web_page_preview: true } as any
+        )
+      }
+      return
+    }
+
+    // ── Bridge / DCA / Limit → redirect ──
+    if (['wallet_bridge', 'wallet_dca', 'wallet_limit', 'wallet_stoploss'].includes(session.action)) {
+      await bot.sendMessage(chatId,
+        `🌉 <b>${label.charAt(0).toUpperCase() + label.slice(1)}</b> requires Bankr directly.\n\n👉 <a href="https://bankr.bot">bankr.bot</a> — connect your wallet there to use bridge, DCA, and limit orders.`,
+        { parse_mode: 'HTML', disable_web_page_preview: true } as any
+      )
+      return
+    }
+
     await bot.sendMessage(chatId, `⏳ Processing your ${label}...`)
 
     // Build enriched prompt with wallet context
@@ -3702,7 +4088,7 @@ bot.on('message', async (msg) => {
   }
 
   // If user is in score/xHandle session — handled above, don't fall through to AI
-  if (scoreSessions.has(userId) || xHandleSessions.has(userId) || xVerifySessions.has(userId) || x402Sessions.has(userId)) return
+  if (scoreSessions.has(userId) || xHandleSessions.has(userId) || xVerifySessions.has(userId) || x402Sessions.has(userId) || agentSessions.has(userId)) return
 
   // Typing indicator
   bot.sendChatAction(chatId, 'typing').catch(() => {})
@@ -3713,6 +4099,67 @@ bot.on('message', async (msg) => {
 
   try {
     let reply = ''
+
+    // ── Native swap intercept ──
+    const swapParsed = parseSwapIntent(text)
+    if (swapParsed) {
+      const usersNative = loadUsers()
+      const pk = usersNative[userId]?.privateKey
+      if (pk) {
+        // $BLUEAGENT = v4 → route qua Bankr Agent (shared wallet)
+        if (needsBankrSwap(swapParsed.fromToken, swapParsed.toToken)) {
+          await bot.sendMessage(chatId, `⏳ Swapping ${swapParsed.amount} ${swapParsed.fromToken} → ${swapParsed.toToken}...\n<i>~30-60s</i>`, { parse_mode: 'HTML' } as any)
+          const prompt = `swap ${swapParsed.amount} ${swapParsed.fromToken} to $BLUEAGENT on Base. Token address: 0xf895783b2931c919955e18b5e3343e7c7c456ba3`
+          const result = await askBankrAgent(prompt, 25)
+          if (result) {
+            await bot.sendMessage(chatId, `✅ <b>Swap complete!</b>\n\n${result}`, { parse_mode: 'HTML', disable_web_page_preview: true } as any)
+          } else {
+            await bot.sendMessage(chatId, `❌ Swap failed. Try again or use <a href="https://app.uniswap.org/swap?outputCurrency=0xf895783b2931c919955e18b5e3343e7c7c456ba3&chain=base">Uniswap</a> directly.`, { parse_mode: 'HTML' } as any)
+          }
+          clearInterval(typingInterval)
+          return
+        }
+        await bot.sendMessage(chatId,
+          `⏳ Swapping ${swapParsed.amount} ${swapParsed.fromToken} → ${swapParsed.toToken}...\n<i>~15-30s</i>`,
+          { parse_mode: 'HTML' } as any
+        )
+        const swapRes = await swapTokens(pk, swapParsed.fromToken, swapParsed.toToken, swapParsed.amount)
+        if ('error' in swapRes) {
+          await bot.sendMessage(chatId, `❌ Swap failed: ${swapRes.error}`)
+        } else {
+          await bot.sendMessage(chatId,
+            `✅ <b>Swap complete!</b>\n\n${swapParsed.amount} ${swapParsed.fromToken.toUpperCase()} → <b>${swapRes.amountOut}</b>\n\n🔗 <a href="${swapRes.explorerUrl}">View on Basescan</a>`,
+            { parse_mode: 'HTML', disable_web_page_preview: true } as any
+          )
+        }
+        clearInterval(typingInterval)
+        return
+      }
+    }
+
+    // ── Native send intercept ──
+    const sendParsed = parseSendIntent(text)
+    if (sendParsed) {
+      const usersNative = loadUsers()
+      const pk = usersNative[userId]?.privateKey
+      if (pk) {
+        await bot.sendMessage(chatId,
+          `⏳ Sending ${sendParsed.amount} ${sendParsed.token}...\n<i>~15-30s</i>`,
+          { parse_mode: 'HTML' } as any
+        )
+        const sendRes = await sendToken(pk, sendParsed.toAddress, sendParsed.token, sendParsed.amount)
+        if ('error' in sendRes) {
+          await bot.sendMessage(chatId, `❌ Send failed: ${sendRes.error}`)
+        } else {
+          await bot.sendMessage(chatId,
+            `✅ <b>Sent!</b>\n\n${sendParsed.amount} ${sendParsed.token.toUpperCase()} → <code>${sendParsed.toAddress.slice(0,6)}...${sendParsed.toAddress.slice(-4)}</code>\n\n🔗 <a href="${sendRes.explorerUrl}">View on Basescan</a>`,
+            { parse_mode: 'HTML', disable_web_page_preview: true } as any
+          )
+        }
+        clearInterval(typingInterval)
+        return
+      }
+    }
 
     if (needsAgent(text)) {
       // Inject user wallet address when query is about their wallet/portfolio
@@ -3787,6 +4234,7 @@ bot.setMyCommands([
   { command: 'quantum', description: '⚛️ Quantum risk check $1.50' },
   { command: 'pnl', description: '💼 Wallet PnL report $1.00' },
   { command: 'riskcheck', description: '🛡️ Safety check $0.05' },
+  { command: 'factory', description: '🏭 Community Kit Setup (group admins)' },
   { command: 'help', description: '❓ Help' },
 ]).catch(() => {})
 
@@ -6721,3 +7169,85 @@ bot.on('message', async (msg) => {
 })
 
 console.log('🟦 /dexpay — DexScreener Enhanced Token Info initialized')
+
+// =======================
+// /factory — Community Kit Group Setup
+// =======================
+const GROUPS_FILE = path.join(DATA_DIR, 'groups.json')
+function loadGroups(): Record<string, any> {
+  try { return JSON.parse(fs.readFileSync(GROUPS_FILE, 'utf8')) } catch { return {} }
+}
+function saveGroups(groups: Record<string, any>) {
+  fs.writeFileSync(GROUPS_FILE, JSON.stringify(groups, null, 2))
+}
+
+bot.onText(/\/factory/, async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from!.id
+
+  if (msg.chat.type === 'private') {
+    await bot.sendMessage(chatId,
+      `🏭 <b>/factory</b> works in groups only.\n\nAdd me to your group as admin, then run /factory there.`,
+      { parse_mode: 'HTML' } as any
+    )
+    return
+  }
+
+  let isAdmin = false
+  try {
+    const member = await bot.getChatMember(chatId, userId)
+    isAdmin = ['creator', 'administrator'].includes(member.status)
+  } catch { isAdmin = false }
+
+  if (!isAdmin) {
+    await bot.sendMessage(chatId, '⚠️ Only group admins can use /factory.')
+    return
+  }
+
+  await bot.sendChatAction(chatId, 'typing')
+  await new Promise(r => setTimeout(r, 1500))
+
+  const groupTitle = msg.chat.title || 'your group'
+  await bot.sendMessage(chatId,
+    `🏭 <b>Community Kit Setup Complete!</b>\n\n` +
+    `Setting up <b>${groupTitle}</b>...\n\n` +
+    `✅ Welcome message — active\n` +
+    `✅ Daily check-in quest — active\n` +
+    `✅ Points system — active\n` +
+    `✅ Leaderboard — active\n` +
+    `✅ Builder Score — integrated\n\n` +
+    `<b>Members can now use:</b>\n` +
+    `/score · /points · /leaderboard · /quests\n\n` +
+    `Powered by Blue Agent 🟦\nblueagent.xyz`,
+    { parse_mode: 'HTML' } as any
+  )
+
+  const groups = loadGroups()
+  groups[chatId.toString()] = {
+    configuredAt: Date.now(),
+    adminId: userId,
+    groupTitle,
+    active: true,
+    features: ['checkin', 'points', 'leaderboard', 'score'],
+    welcomeMessage: `👋 Welcome to <b>${groupTitle}</b>!\n\nThis community runs on Blue Agent 🟦\n\nTry: /score · /points · /leaderboard · /quests`
+  }
+  saveGroups(groups)
+})
+
+// Welcome new members in factory-configured groups
+bot.on('new_chat_members', async (msg) => {
+  const chatId = msg.chat.id
+  const groups = loadGroups()
+  const groupConfig = groups[chatId.toString()]
+  if (!groupConfig?.active) return
+
+  for (const newMember of (msg.new_chat_members || [])) {
+    if (newMember.is_bot) continue
+    try {
+      await bot.sendMessage(chatId, groupConfig.welcomeMessage, { parse_mode: 'HTML' } as any)
+      break
+    } catch {}
+  }
+})
+
+console.log('🏭 /factory — Community Kit group setup initialized')
