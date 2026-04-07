@@ -2743,14 +2743,15 @@ bot.on('callback_query', async (query) => {
   // ── Subscribe flow (inline in main handler) ──
   if (data === 'start_subscribe') {
     subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
-    await bot.sendMessage(chatId,
+    await editMenu(query,
       `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+      { inline_keyboard: [
         [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
         [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
         [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
         [{ text: '❌ Close', callback_data: 'menu_close' }]
-      ]}} as any)
+      ]}
+    )
     return
   }
 
@@ -5895,85 +5896,6 @@ console.log('💳 USDC Payment & subscription tracking initialized')
 // =======================
 // SUBSCRIPTION CALLBACKS
 // =======================
-bot.on('callback_query', async (query) => {
-  const data = query.data || ''
-  if (!data.startsWith('sub_')) return
-  const chatId = query.message?.chat.id
-  const msgId = query.message?.message_id
-  const userId = query.from.id
-  if (!chatId) return
-  await bot.answerCallbackQuery(query.id)
-  const session = subSessions.get(userId) || { tier: '', months: 1, currency: 'usdc' as const, step: 'tier' }
-
-  if (data === 'start_subscribe') {
-    subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
-    await bot.sendMessage(chatId,
-      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
-        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
-        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
-        [{ text: '❌ Close', callback_data: 'menu_close' }]
-      ]}} as any)
-    return
-  }
-
-  if (data.startsWith('sub_tier_')) {
-    const tier = data.replace('sub_tier_', '')
-    session.tier = tier; session.step = 'months'; subSessions.set(userId, session)
-    const p1=calcPrice(tier,1), p3=calcPrice(tier,3), p6=calcPrice(tier,6), p12=calcPrice(tier,12)
-    await bot.editMessageText(
-      `📅 <b>Choose duration</b> (${tier.toUpperCase()})\n\n1 month — <b>$${p1}</b>\n3 months — <b>$${p3}</b> <i>(-10%)</i>\n6 months — <b>$${p6}</b> <i>(-15%)</i>\n12 months — <b>$${p12}</b> <i>(-20%)</i>`,
-      { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [{ text: `1 month — $${p1}`, callback_data: `sub_months_${tier}_1` }, { text: `3 months — $${p3}`, callback_data: `sub_months_${tier}_3` }],
-        [{ text: `6 months — $${p6}`, callback_data: `sub_months_${tier}_6` }, { text: `12 months — $${p12}`, callback_data: `sub_months_${tier}_12` }],
-        [{ text: '← Back', callback_data: 'sub_back_tier' }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}} as any)
-  }
-  else if (data === 'sub_back_tier') {
-    session.step = 'tier'; subSessions.set(userId, session)
-    await bot.editMessageText(`💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
-      { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
-        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
-        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }]
-      ]}} as any)
-  }
-  else if (data.startsWith('sub_months_')) {
-    // format: sub_months_<tier>_<months>
-    const parts = data.replace('sub_months_', '').split('_')
-    const tier = parts.slice(0, -1).join('_') // seed, pro, scale
-    const months = parseInt(parts[parts.length - 1])
-    if (tier) session.tier = tier
-    session.months = months; session.step = 'currency'; subSessions.set(userId, session)
-    const uAmt=calcPrice(session.tier,months,'usdc'), bAmt=calcPrice(session.tier,months,'blueagent')
-    await bot.editMessageText(
-      `💰 <b>Choose payment</b>\n\nPlan: <b>${session.tier.toUpperCase()}</b> · ${months} month${months>1?'s':''}\n\n💵 USDC — <b>$${uAmt}</b>\n🟦 $BLUEAGENT — <b>$${bAmt}</b> <i>(-20%)</i>`,
-      { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [{ text: `💵 Pay $${uAmt} USDC`, callback_data: 'sub_pay_usdc' }],
-        [{ text: `🟦 Pay $${bAmt} $BLUEAGENT (-20%)`, callback_data: 'sub_pay_blueagent' }],
-        [{ text: '← Back', callback_data: `sub_tier_${session.tier}` }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}} as any)
-  }
-  else if (data.startsWith('sub_pay_')) {
-    const currency = data.replace('sub_pay_', '') as 'usdc' | 'blueagent'
-    session.currency = currency; session.step = 'awaiting_tx'; subSessions.set(userId, session)
-    const amount = calcPrice(session.tier, session.months, currency)
-    const isBA = currency === 'blueagent'
-    const tokenAddr = isBA ? TOKEN_CONTRACT : '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-    const tokenName = isBA ? '$BLUEAGENT' : 'USDC'
-    await bot.editMessageText(
-      `💳 <b>Payment Instructions</b>\n\nPlan: <b>${session.tier.toUpperCase()}</b> · ${session.months} month${session.months>1?'s':''}\nAmount: <b>$${amount} ${tokenName}</b>\n\nSend to treasury on <b>Base</b>:\n<code>${PAYMENT_ADDRESS}</code>\n\nToken: <code>${tokenAddr}</code>\n\n⚠️ After sending, paste your <b>tx hash</b> (0x...) here.`,
-      { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [{ text: '← Back', callback_data: `sub_tier_${session.tier}` }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}} as any)
-  }
-  else if (data === 'sub_pricing') {
-    await bot.sendMessage(chatId,
-      `💳 <b>Community Kit Pricing</b>\n\n🆓 <b>Free</b> — $0\nPoints, Leaderboard, Referrals, Onboarding, Projects\n\n🌱 <b>Seed</b> — $49/mo\n+ Price Alerts, Gem Signals, Raffle, Scheduled Posts\n\n⚡ <b>Pro</b> — $199/mo\n+ Token Claim, Broadcast DM, Flash Quests, Bounties, Proposals\n\n🚀 <b>Scale</b> — $499/mo\n+ Analytics Export, Token Gate, Custom Branding\n\n💰 USDC or $BLUEAGENT (-20%) on Base\n📊 Multi-month: 3mo -10% | 6mo -15% | 12mo -20%`,
-      { parse_mode: 'HTML' } as any)
-  }
-})
 
 // =======================
 // LICENSE KEY SYSTEM
