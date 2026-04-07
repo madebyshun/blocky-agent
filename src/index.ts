@@ -2019,7 +2019,7 @@ bot.onText(/\/leaderboard/, async (msg) => {
   const myRank = Object.values(users).sort((a: any, b: any) => (b.points || 0) - (a.points || 0)).findIndex((u: any) => u.id === userId) + 1
 
   const footer = isGroup
-    ? `\n\n<i>DM <a href="https://t.me/Blockyagent_beta_bot">@Blockyagent_beta_bot</a> to earn points</i>`
+    ? `\n\n<i>DM <a href="https://t.me/blockyagent_bot">@blockyagent_bot</a> to earn points</i>`
     : `\n\n──────────────\nYou: <b>#${myRank || '—'} · ${myPoints} pts</b>`
 
   await bot.sendMessage(chatId,
@@ -3947,7 +3947,7 @@ bot.on('new_chat_members', async (msg) => {
       await bot.sendMessage(ALPHA_CHAT_ID,
         `👋 Welcome <b>${username}</b>! 🟦\n\n` +
         `Blue Agent is your onchain AI agent on Base — wallet, trading, builder score, and $BLUEAGENT rewards. All in Telegram.\n\n` +
-        `DM @Blockyagent_beta_bot to get started:\n` +
+        `DM @blockyagent_bot to get started:\n` +
         `• /score — check your builder rank\n` +
         `• /points — see your earnings\n` +
         `• /rewards — claim $BLUEAGENT\n\n` +
