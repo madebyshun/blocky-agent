@@ -5,7 +5,6 @@ import { execSync, spawn } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { ethers } from 'ethers'
-import { parseSwapIntent, parseSendIntent, sendToken, swapTokens } from './lib/walletActions'
 // import { createCanvas } from 'canvas' // Reserved for Phase 2 card generation
 dotenv.config()
 
@@ -47,7 +46,7 @@ function upgradeMsg(feature: string): string {
     token_gate: 'Scale'
   }
   const needed = tierMap[feature] || 'Pro'
-  return `⬆️ This feature requires <b>Community Kit ${needed}</b>\n\nUpgrade at github.com/madebyshun/community-kit`
+  return `⬆️ This feature requires <b>Community Kit ${needed}</b>\n\nUpgrade at blueagent.xyz/community-kit`
 }
 
 const DATA_DIR = path.join(__dirname, '..', 'data')
@@ -56,7 +55,7 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json')
 const REFERRALS_FILE = path.join(DATA_DIR, 'referrals.json')
 const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json')
 
-interface User { id: number; telegramUsername?: string; telegramName?: string; bankrApiToken?: string; evmAddress?: string; privateKey?: string; score?: number; tier?: string; points?: number; referredBy?: number; walletConnected?: boolean; joinedAt?: number; xHandle?: string; claimedPoints?: number; lastCheckin?: number; checkinStreak?: number; lastClaim?: number; completedQuests?: string[] }
+interface User { id: number; telegramUsername?: string; telegramName?: string; bankrApiToken?: string; evmAddress?: string; privateKey?: string; score?: number; tier?: string; points?: number; credits?: number; referredBy?: number; walletConnected?: boolean; joinedAt?: number; xHandle?: string; xVerified?: boolean; claimedPoints?: number; lastCheckin?: number; checkinStreak?: number; lastClaim?: number; completedQuests?: string[] }
 interface Referral { referrerId: number; referredId: number; timestamp: number }
 interface Project { id: string; name: string; description: string; url: string; twitter?: string; submitterId: number; submitterUsername?: string; timestamp: number; votes: number; voters: number[]; approved?: boolean; buildersMsgId?: number; reactionVotes?: number }
 
@@ -157,7 +156,7 @@ async function sendTokenReward(toAddress: string, amount: number, tokenContract:
 // =======================
 // BLUE AGENT SYSTEM PROMPT
 // =======================
-const SYSTEM_PROMPT = `You are Blue Agent 🟦 — an AI community manager and builder's sidekick on Base.
+const SYSTEM_PROMPT = `You are Blue Agent 🟦 — an AI community manager and builder's co-pilot on Base.
 
 ## Identity
 Built by Blocky Studio. Running 24/7 to help the community.
@@ -252,28 +251,18 @@ function formatAgentReply(text: string): string {
 // WELCOME MESSAGE
 // =======================
 const WELCOME_MESSAGE = `<b>Blue Agent 🟦</b>
-Your AI sidekick for building on Base.
+Your guide to the Base ecosystem.
 
-<b>For builders:</b>
+Just ask me anything about Base 👇
 
-🗺️ <b>Explore Base</b> — discover projects, protocols, agents, and builders shipping on Base
-📊 <b>Builder Score</b> — score any builder (0–100) across 4 dimensions
-📝 <b>Submit project</b> — showcase what you're building to the community
-👥 <b>Find builders</b> — who's building what on Base right now
-⭐ <b>Earn rewards</b> — earn pts for activity → claim $BLUEAGENT onchain
+💬 <b>Try saying:</b>
+• <i>"What's new on Base today?"</i>
+• <i>"Who's building AI agents on Base?"</i>
+• <i>"Top projects launching this week?"</i>
+• <i>"Tell me about $BLUEAGENT"</i>
+• <i>"What's trending in Base DeFi?"</i>
 
-<b>Also available:</b>
-
-🔑 <b>Wallet</b> — auto wallet on Base, no setup
-💱 <b>Trade</b> — swap, bridge, DCA, limit orders
-🔱 <b>Perps</b> — Hyperliquid up to 50x leverage
-🚀 <b>Launch token</b> — deploy ERC20, no code needed
-
-<b>Quick start:</b>
-/score @handle — check any builder's rank
-/submit — showcase your project (+20 pts)
-/refer — invite builders, earn pts
-/wallet — view wallet + trade
+Or use the menu to earn <b>$BLUEAGENT</b> rewards 🎁
 
 <i>Powered by Bankr · Base 🟦</i>`
 
@@ -376,7 +365,7 @@ const MODELS_CODE = [
 // Smart model selection based on query complexity
 function selectModels(text: string): string[] {
   // Code/technical queries → coding models
-  if (/code|deploy|contract|solidity|typescript|javascript|python|function|bug|error|implement|build|script/i.test(text)) {
+  if (/\bcode\b|deploy|contract|solidity|typescript|javascript|python|function|bug|error|implement|\bbuild\b|script/i.test(text)) {
     return MODELS_CODE
   }
   // Deep analysis → full models
@@ -592,12 +581,14 @@ function clearSessionTimer(userId: number) {
 function startSessionTimer(userId: number, chatId: number) {
   clearSessionTimer(userId)
   const t = setTimeout(async () => {
-    if (walletSessions.has(userId) || submitSessions.has(userId) || launchSessions.has(userId) || xHandleSessions.has(userId) || walletConvSessions.has(userId)) {
+    if (walletSessions.has(userId) || submitSessions.has(userId) || launchSessions.has(userId) || xHandleSessions.has(userId) || xVerifySessions.has(userId) || walletConvSessions.has(userId) || x402Sessions.has(userId)) {
       walletSessions.delete(userId)
       submitSessions.delete(userId)
       launchSessions.delete(userId)
       xHandleSessions.delete(userId)
+      xVerifySessions.delete(userId)
       walletConvSessions.delete(userId)
+      x402Sessions.delete(userId)
       await bot.sendMessage(chatId, '⏱ Session expired. Start again when ready.').catch(() => {})
     }
     sessionTimers.delete(userId)
@@ -608,8 +599,155 @@ function startSessionTimer(userId: number, chatId: number) {
 const walletSessions = new Map<number, { step: string; email?: string }>()
 const submitSessions = new Map<number, { step: number; name?: string; description?: string; url?: string; twitter?: string }>()
 const scoreSessions = new Map<number, boolean>()
-const xHandleSessions = new Map<number, boolean>() // waiting for X handle input
+const xHandleSessions = new Map<number, boolean>() // waiting for X handle input (legacy, kept for fallback)
+const xVerifySessions = new Map<number, { code: string; expiresAt: number }>() // verify-by-tweet sessions
 const walletConvSessions = new Map<number, { action: string; addr: string }>() // waiting for wallet action details
+const x402Sessions = new Map<number, { service: string; step: 'input' | 'confirm'; input?: string }>() // x402 service sessions
+
+// ── x402 Service Config ──
+const X402_BASE_URL = `https://x402.bankr.bot/${process.env.TREASURY_ADDRESS || '0xf31f59e7b8b58555f7871f71973a394c8f1bffe5'}`
+const X402_SERVICES: Record<string, {
+  name: string; emoji: string; price: number; description: string;
+  inputPrompt: string; inputKey: string; endpoint: string;
+  formatResult: (data: any) => string
+}> = {
+  analyze: {
+    name: 'Deep Analysis', emoji: '🔍', price: 0.35,
+    description: 'Due diligence any token or project',
+    inputPrompt: 'Enter token address, name, or ticker to analyze:\n<i>(e.g. $BLUEAGENT or 0x1234...)</i>',
+    inputKey: 'projectName',
+    endpoint: 'deep-analysis',
+    formatResult: (d) =>
+      `🔍 <b>Deep Analysis: ${d.projectName || 'Unknown'}</b>\n\n` +
+      `📊 Overall Score: <b>${d.overallScore}/100</b>\n` +
+      `⚠️ Risk Score: <b>${d.riskScore}/100</b>\n` +
+      `🎯 Recommendation: <b>${d.recommendation}</b>\n\n` +
+      `📝 ${d.summary || ''}\n\n` +
+      (d.keyRisks?.length ? `🚨 <b>Key Risks:</b>\n${d.keyRisks.map((r: string) => `• ${r}`).join('\n')}\n\n` : '') +
+      (d.keyStrengths?.length ? `✅ <b>Strengths:</b>\n${d.keyStrengths.map((s: string) => `• ${s}`).join('\n')}` : '')
+  },
+  pnl: {
+    name: 'Wallet PnL', emoji: '💼', price: 1.00,
+    description: 'Trading style + PnL report for any wallet',
+    inputPrompt: 'Enter wallet address to analyze:\n<i>(e.g. 0x1234...)</i>',
+    inputKey: 'address',
+    endpoint: 'wallet-pnl',
+    formatResult: (d) =>
+      `💼 <b>Wallet PnL Report</b>\n\n` +
+      `💳 <code>${d.address?.slice(0, 6)}...${d.address?.slice(-4)}</code>\n\n` +
+      `📈 Est. PnL: <b>${d.estimatedPnL || 'N/A'}</b>\n` +
+      `🎯 Win Rate: <b>${d.winRate || 'N/A'}</b>\n` +
+      `🧠 Style: <b>${d.tradingStyle || 'N/A'}</b>\n` +
+      `⚡ Risk Profile: <b>${d.riskProfile || 'N/A'}</b>\n` +
+      `🏆 Smart Money Score: <b>${d.smartMoneyScore || 0}/100</b>\n\n` +
+      `📝 ${d.summary || ''}`
+  },
+  advisor: {
+    name: 'Launch Advisor', emoji: '🚀', price: 3.00,
+    description: 'Full token launch playbook',
+    inputPrompt: 'Describe your project:\n<i>(e.g. "NFT marketplace for Base builders")</i>',
+    inputKey: 'description',
+    endpoint: 'launch-advisor',
+    formatResult: (d) =>
+      `🚀 <b>Launch Advisor Report</b>\n\n` +
+      `🎯 Launch Score: <b>${d.launchScore || 0}/100</b>\n\n` +
+      `📝 ${d.recommendation || ''}\n\n` +
+      (d.launchTimeline?.length ? `📅 <b>Timeline:</b>\n${d.launchTimeline.slice(0, 3).map((t: any) => `• ${t.phase || t}`).join('\n')}` : '')
+  },
+  grant: {
+    name: 'Grant Evaluator', emoji: '🏛️', price: 5.00,
+    description: 'Base grant scoring + feedback',
+    inputPrompt: 'Enter your project name and description:\n<i>(e.g. "BuilderDAO — onchain builder reputation")</i>',
+    inputKey: 'description',
+    endpoint: 'grant-evaluator',
+    formatResult: (d) =>
+      `🏛️ <b>Grant Evaluation</b>\n\n` +
+      `📊 Overall Score: <b>${d.overallScore || 0}/100</b>\n` +
+      `💰 Suggested Grant: <b>${d.suggestedGrantSize || 'N/A'}</b>\n` +
+      `🎯 Recommendation: <b>${d.recommendation || 'N/A'}</b>\n\n` +
+      `📝 ${d.executiveSummary || ''}\n\n` +
+      (d.strengths?.length ? `✅ <b>Strengths:</b>\n${d.strengths.slice(0, 3).map((s: string) => `• ${s}`).join('\n')}\n\n` : '') +
+      (d.concerns?.length ? `⚠️ <b>Concerns:</b>\n${d.concerns.slice(0, 3).map((c: string) => `• ${c}`).join('\n')}` : '')
+  },
+  riskcheck: {
+    name: 'Risk Check', emoji: '🛡️', price: 0.05,
+    description: 'Safety check before any onchain action',
+    inputPrompt: 'Describe the action you want to check:\n<i>(e.g. "approve 0xABC to spend all my USDC")</i>',
+    inputKey: 'action',
+    endpoint: 'risk-gate',
+    formatResult: (d) => {
+      const icon = d.decision === 'APPROVE' ? '✅' : d.decision === 'WARN' ? '⚠️' : '🚫'
+      return `🛡️ <b>Risk Check</b>\n\n` +
+        `${icon} Decision: <b>${d.decision}</b>\n` +
+        `📊 Risk Score: <b>${d.riskScore || 0}/100</b>\n` +
+        `⚡ Risk Level: <b>${d.riskLevel || 'N/A'}</b>\n\n` +
+        `📝 ${d.recommendation || ''}\n\n` +
+        (d.reasons?.length ? `<b>Reasons:</b>\n${d.reasons.slice(0, 3).map((r: string) => `• ${r}`).join('\n')}` : '')
+    }
+  },
+  quantum: {
+    name: 'Quantum Risk', emoji: '⚛️', price: 1.50,
+    description: 'Quantum vulnerability check for any wallet',
+    inputPrompt: 'Enter wallet address to check:\n<i>(e.g. 0x1234... or type "me" for your wallet)</i>',
+    inputKey: 'address',
+    endpoint: 'quantum-premium',
+    formatResult: (d) => {
+      const riskIconMap: Record<string, string> = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🟢', MINIMAL: '🟢' }
+      const riskIcon = riskIconMap[d.quantumRiskLevel] || '⚪'
+      return `⚛️ <b>Quantum Risk Report</b>\n\n` +
+        `${riskIcon} Risk Level: <b>${d.quantumRiskLevel}</b> (${d.riskScore}/100)\n` +
+        `🔑 Public Key Exposed: <b>${d.publicKeyExposed ? '⚠️ Yes' : '✅ No'}</b>\n` +
+        `⏱ Threat Timeline: <b>${d.threatTimeline || 'N/A'}</b>\n` +
+        `🎯 Recommendation: <b>${d.recommendation}</b>\n\n` +
+        `📝 ${d.executiveSummary || ''}\n\n` +
+        (d.migrationSteps?.length ? `<b>Migration Steps:</b>\n${d.migrationSteps.slice(0, 3).map((s: any) => `${s.step}. ${s.action}`).join('\n')}` : '')
+    }
+  }
+}
+
+async function callX402Service(service: string, inputValue: string): Promise<any> {
+  const svc = X402_SERVICES[service]
+  if (!svc) throw new Error('Unknown service')
+  const url = `${X402_BASE_URL}/${svc.endpoint}`
+
+  const inputJson: any = { [svc.inputKey]: inputValue }
+  if (svc.inputKey === 'address') inputJson.chain = 'base'
+  if (svc.inputKey === 'description') inputJson.projectName = inputValue.split('—')[0]?.trim() || inputValue
+
+  // Use bankr CLI to handle x402 payment automatically
+  const bodyStr = JSON.stringify(inputJson).replace(/'/g, "'\\''")
+  const cmd = `/usr/local/bin/bankr x402 call "${url}" -X POST -d '${bodyStr}' -y --max-payment 2 --raw`
+
+  return new Promise((resolve, reject) => {
+    const { exec } = require('child_process')
+    exec(cmd, { timeout: 60000, env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin:' + (process.env.PATH || '') } }, (err: any, stdout: string, stderr: string) => {
+      console.log('[x402 CLI stdout]', stdout?.slice(0, 500))
+      console.log('[x402 CLI stderr]', stderr?.slice(0, 300))
+      console.log('[x402 CLI err]', err?.message)
+      if (err && !stdout) {
+        reject(new Error(stderr?.slice(0, 200) || err.message))
+        return
+      }
+      try {
+        // bankr CLI stdout may be very long (includes endpointSchema)
+        // Extract just the "response" field value directly
+        const responseMatch = stdout.match(/"response"\s*:\s*(\{[\s\S]*?\})\s*,\s*"paymentMade"/)
+        if (responseMatch) {
+          resolve(JSON.parse(responseMatch[1]))
+          return
+        }
+        // Fallback: parse full JSON
+        const jsonStart = stdout.indexOf('{')
+        const jsonStr = jsonStart >= 0 ? stdout.slice(jsonStart) : stdout
+        const parsed = JSON.parse(jsonStr.trim())
+        resolve(parsed.response || parsed)
+      } catch (parseErr) {
+        console.error('[x402 parse error]', parseErr, 'raw stdout:', stdout?.slice(0, 300))
+        reject(new Error('Invalid JSON response from x402'))
+      }
+    })
+  })
+}
 
 
 async function handleLaunchWizard(chatId: number, userId: number, text: string) {
@@ -712,18 +850,18 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
     bot.sendChatAction(chatId, 'typing').catch(() => {})
 
     try {
-      const args = ['launch']
-      if (state.name) args.push('--name', state.name)
-      if (state.symbol) args.push('--symbol', state.symbol)
-      if (state.image) args.push('--image', state.image)
+      // Build natural language prompt for Bankr
+      let launchPrompt = `Deploy an ERC20 token on Base with name "${state.name}" and symbol "${state.symbol}"`
+      if (state.description) launchPrompt += `. Description: ${state.description}`
+      if (state.image) launchPrompt += `. Image URL: ${state.image}`
       if (state.feeValue && state.feeType && state.feeType !== 'skip') {
-        args.push('--fee', state.feeValue, '--fee-type', state.feeType)
+        launchPrompt += `. Set fee recipient to ${state.feeValue} (${state.feeType})`
       }
 
-      console.log(`[Launch] Running: bankr ${args.join(' ')}`)
+      console.log(`[Launch] Prompt: ${launchPrompt}`)
 
       const output = await new Promise<string>((resolve, reject) => {
-        const proc = spawn('bankr', args, {
+        const proc = spawn('bankr', ['prompt', launchPrompt], {
           env: { ...process.env },
           timeout: 120000
         })
@@ -731,19 +869,13 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
         let stdout = ''
         let stderr = ''
 
-        proc.stdout.on('data', (d: Buffer) => {
-          const chunk = d.toString()
-          stdout += chunk
-          // Auto-answer any remaining prompts with Enter (empty = skip)
-          if (chunk.includes('?') || chunk.includes(':')) {
-            proc.stdin.write('\n')
-          }
-        })
-
+        proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
         proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
 
         proc.on('close', (code: number) => {
-          if (code === 0 || stdout.includes('deployed') || stdout.includes('contract')) {
+          if (stdout.includes('deployed') || stdout.includes('contract') || stdout.includes('0x')) {
+            resolve(stdout)
+          } else if (code === 0) {
             resolve(stdout || stderr)
           } else {
             reject(new Error(stderr || stdout || `Exit code ${code}`))
@@ -751,9 +883,6 @@ async function handleLaunchWizard(chatId: number, userId: number, text: string) 
         })
 
         proc.on('error', reject)
-
-        // Close stdin after 2s to unblock any waiting prompts
-        setTimeout(() => { try { proc.stdin.end() } catch {} }, 2000)
       })
 
       const reply = `✅ <b>Token deployed!</b>\n\n<pre>${output.slice(0, 3000)}</pre>`
@@ -922,7 +1051,10 @@ bot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
       parse_mode: 'HTML',
       disable_web_page_preview: true,
       reply_markup: {
-        inline_keyboard: [[{ text: '🟦 Open Menu', callback_data: 'open_menu' }, { text: '📖 Docs', url: 'https://github.com/madebyshun/blue-agent/blob/main/INTRODUCING_BLUE_AGENT.md' }]]
+        inline_keyboard: [
+          [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '💎 Buy $BLUEAGENT', callback_data: 'trade_buy_blueagent' }],
+          
+        ]
       }
     } as any)
   } else {
@@ -958,7 +1090,10 @@ bot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
       parse_mode: 'HTML',
       disable_web_page_preview: true,
       reply_markup: {
-        inline_keyboard: [[{ text: '🟦 Open Menu', callback_data: 'open_menu' }, { text: '📖 Docs', url: 'https://github.com/madebyshun/blue-agent/blob/main/INTRODUCING_BLUE_AGENT.md' }]]
+        inline_keyboard: [
+          [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '💎 Buy $BLUEAGENT', callback_data: 'trade_buy_blueagent' }],
+          
+        ]
       }
     } as any)
   }
@@ -1004,37 +1139,32 @@ bot.onText(/\/docs/, async (msg) => {
 bot.onText(/\/help/, async (msg) => {
   await bot.sendMessage(
     msg.chat.id,
-    `<b>Blue Agent 🟦 — What I can do</b>\n\n` +
-    `📊 <b>Market Data</b>\n` +
-    `• "ETH price?" / "$BLUEAGENT price?"\n` +
-    `• "What's trending on Base?"\n\n` +
-    `💱 <b>Trading</b>\n` +
-    `• "Swap 10 USDC to ETH"\n` +
-    `• "Buy $BLUEAGENT"\n` +
-    `• "Long ETH with 2x leverage"\n\n` +
-    `🖼 <b>NFTs</b>\n` +
-    `• "Mint an NFT from Zora"\n` +
-    `• "Floor price of Base NFTs"\n\n` +
-    `🎯 <b>Polymarket</b>\n` +
-    `• "Bet on Base getting a token"\n` +
-    `• "What are the odds on ETH $5k?"\n\n` +
-    `🔍 <b>Builders</b>\n` +
-    `• "Who's building AI agents on Base?"\n` +
-    `• "Latest from @jessepollak"\n\n` +
-    `💼 <b>Portfolio</b>\n` +
-    `• "Check my balance"\n` +
-    `• "My open positions"\n\n` +
-    `<b>Commands:</b>\n` +
-    `• /score @handle — 🟦 Get Builder Score\n` +
-    `• /news — Latest from Base builders on X\n` +
-    `• /launch — Deploy a new token on Base\n\n` +
-    `🤖 <b>Community Kit</b>\n` +
-    `• /subscribe — Launch your own community bot\n` +
-    `• /pricing — View plans (Free → $499/mo)\n` +
-    `• /my_license — Check your license & key\n` +
-    `• /renew — Renew your subscription\n\n` +
-    `<i>No commands needed — just chat!</i>`,
-    { parse_mode: 'HTML' } as any
+    `<b>Blue Agent 🟦 — Commands</b>\n\n` +
+    `<b>🏆 Builders</b>\n` +
+    `• /score @handle — Builder Score (0–100)\n` +
+    `• /submit — Showcase your project (+20 pts)\n` +
+    `• /projects — Browse builder projects\n` +
+    `• /leaderboard — Top builders on Base\n\n` +
+    `<b>⭐ Rewards</b>\n` +
+    `• /points — My points & rank\n` +
+    `• /rewards — Claim $BLUEAGENT\n` +
+    `• /refer — Referral link (+50 pts/referral)\n\n` +
+    `<b>💰 Wallet & Trade</b>\n` +
+    `• /wallet — Portfolio + quick actions\n` +
+    `• /launch — Deploy token on Base\n\n` +
+    `<b>ℹ️ Other</b>\n` +
+    `• /menu — Control panel\n` +
+    `• /profile — My profile\n` +
+    `• /news — Base builder news\n` +
+    `• /stats — Live stats\n\n` +
+    `<i>💬 No commands needed — just chat naturally!</i>\n` +
+    `<i>Examples: "ETH price?" · "swap 10 USDC to ETH" · "who's building on Base?"</i>`,
+    { parse_mode: 'HTML', reply_markup: {
+      inline_keyboard: [
+        [{ text: '📱 Open Menu', callback_data: 'open_menu' }, { text: '🤖 Meet Agents', callback_data: 'menu_agents' }],
+        [{ text: '💰 Wallet', callback_data: 'menu_wallet' }, { text: '🤖 Meet Agents', callback_data: 'menu_agents' }],
+      ]
+    }} as any
   )
 })
 
@@ -1576,7 +1706,7 @@ Scoring guide:
 - Community (0-25): followers, engagement, replies, community recognition, reputation on X and Farcaster
 - SUMMARY: one punchy sentence about who this builder is`
 
-    // Retry up to 3 times via Bankr Agent
+    // Retry up to 3 times via Bankr LLM
     let agentResult = ''
     for (let attempt = 1; attempt <= 3; attempt++) {
       agentResult = await askBankrAgent(prompt, 25)
@@ -1753,12 +1883,11 @@ const DOCS_URL = 'https://github.com/madebyshun/blue-agent/blob/main/INTRODUCING
 
 const MENU_KEYBOARD = {
   inline_keyboard: [
-    [{ text: '📰 News', callback_data: 'menu_news' }, { text: '🔍 Score', callback_data: 'menu_score' }, { text: '🚀 Launch', callback_data: 'menu_launch' }],
-    [{ text: '🎯 Quests', callback_data: 'menu_quests' }, { text: '🎁 Rewards', callback_data: 'menu_rewards' }, { text: '🔗 Refer', callback_data: 'menu_refer' }],
-    [{ text: '🏆 Top', callback_data: 'menu_leaderboard' }, { text: '💰 Wallet', callback_data: 'menu_wallet' }, { text: '📝 Submit', callback_data: 'menu_submit' }],
-    [{ text: '📁 Projects', callback_data: 'menu_projects' }, { text: '📖 Docs', url: DOCS_URL }],
-    [{ text: '👤 Profile', callback_data: 'menu_profile' }, { text: '❓ Help', callback_data: 'menu_help' }, { text: '❌ Close', callback_data: 'menu_close' }],
-    [{ text: '🤖 Community Kit — Launch your own bot', callback_data: 'menu_community_kit' }],
+    [{ text: '💰 Wallet', callback_data: 'menu_wallet' }, { text: '🤖 Meet Agents', callback_data: 'menu_agents' }],
+    [{ text: '⚛️ x402 Services', callback_data: 'menu_x402' }, { text: '⭐ Rewards', callback_data: 'menu_rewards' }],
+    [{ text: '📊 Builder Score', callback_data: 'menu_score' }, { text: '🏆 Leaderboard', callback_data: 'menu_leaderboard' }],
+    [{ text: '📰 News', callback_data: 'menu_news' }, { text: '📝 Submit', callback_data: 'menu_submit' }],
+    [{ text: '👤 Profile', callback_data: 'menu_profile' }, { text: '❓ Help', callback_data: 'menu_help' }],
   ]
 }
 
@@ -1767,9 +1896,12 @@ function buildProfileText(user: User, rank: number, projectCount: number): strin
   const wallet = user.evmAddress
     ? `💳 <code>${user.evmAddress.slice(0, 6)}...${user.evmAddress.slice(-4)}</code>`
     : '💳 No wallet (restart /start)'
-  const xHandle = user.xHandle ? `🐦 @${user.xHandle.replace('@', '')}` : '🐦 No X handle set'
+  const xHandle = user.xHandle
+    ? (user.xVerified ? `🐦 @${user.xHandle.replace('@', '')} ✅` : `🐦 @${user.xHandle.replace('@', '')} (unverified)`)
+    : '🐦 Not linked'
   const points = user.points || 0
-  const referrals = 0 // loaded separately
+  const credits = user.credits || 0
+
   return (
     `<b>👤 My Profile</b>\n` +
     `──────────────\n` +
@@ -1777,6 +1909,7 @@ function buildProfileText(user: User, rank: number, projectCount: number): strin
     `${xHandle}\n` +
     `──────────────\n` +
     `⭐ Points: <b>${points}</b>\n` +
+    `🪙 Credits: <b>${credits}</b>\n` +
     `📝 Projects: <b>${projectCount}</b>\n` +
     `🏆 Rank: <b>#${rank}</b>\n` +
     `──────────────\n` +
@@ -1810,7 +1943,7 @@ bot.onText(/\/menu/, async (msg) => {
   if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') return
   const chatId = msg.chat.id
   await bot.sendMessage(chatId,
-    `🟦 <b>Blue Agent</b> — Control Panel\n\nWhat do you need?`,
+    `🟦 <b>Blue Agent</b>\n\nWhat do you want to do?`,
     { parse_mode: 'HTML', reply_markup: MENU_KEYBOARD } as any
   )
 })
@@ -1872,7 +2005,7 @@ bot.onText(/\/profile/, async (msg) => {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: user.xHandle ? '✏️ Edit X Handle' : '🐦 Set X Handle', callback_data: 'profile_set_x' },
+          { text: user.xVerified ? '✏️ Re-verify X' : (user.xHandle ? '🔁 Verify X' : '🐦 Link X Account'), callback_data: 'profile_set_x' },
           { text: '👛 My Wallet', callback_data: 'menu_wallet' }
         ],
         [{ text: canClaim ? `🎁 Claim ${TOKEN_NAME} (${points} pts)` : `🎁 Claim (need 100 pts)`, callback_data: canClaim ? 'profile_claim' : 'profile_claim_locked' }],
@@ -1953,6 +2086,142 @@ bot.onText(/\/refer/, async (msg) => {
 })
 
 // /points — DM (private detail) + Group (public card)
+bot.onText(/\/credits/, async (msg) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id
+  const userId = msg.from?.id
+  if (!userId) return
+  const users = loadUsers()
+  const user = users[userId] || { id: userId, points: 0, credits: 0 }
+  const credits = user.credits || 0
+
+  await bot.sendMessage(chatId,
+    `<b>🪙 My Credits</b>\n\n` +
+    `Balance: <b>${credits} Credits</b>\n\n` +
+    `<b>Use Credits for:</b>\n` +
+    `• ✍️ Copywriter: 2 cr/msg\n` +
+    `• 🎨 UX Designer: 3 cr/msg\n` +
+    `• 📊 Tokenomics: 7 cr/msg\n` +
+    `• 🚀 GTM Advisor: 7 cr/msg\n` +
+    `• 💻 Code Review: 5 cr/msg\n\n` +
+    `<b>How to get Credits:</b>\n` +
+    `→ Buy with $BLUEAGENT (coming soon)\n\n` +
+    `<i>1M $BLUEAGENT = 20 Credits</i>`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🤖 Meet Agents', callback_data: 'menu_agents' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }],
+          [{ text: '👤 My Profile', callback_data: 'menu_profile' }],
+        ]
+      }
+    } as any
+  )
+})
+
+// ── x402 Services ──
+function x402MenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '🔍 Analyze $0.35', callback_data: 'x402_start_analyze' },
+        { text: '💼 PnL $1.00', callback_data: 'x402_start_pnl' },
+      ],
+      [
+        { text: '🚀 Advisor $3.00', callback_data: 'x402_start_advisor' },
+        { text: '🏛️ Grant $5.00', callback_data: 'x402_start_grant' },
+      ],
+      [
+        { text: '🛡️ Risk Check $0.05', callback_data: 'x402_start_riskcheck' },
+        { text: '⚛️ Quantum $1.50', callback_data: 'x402_start_quantum' },
+      ],
+      [{ text: '🏠 Menu', callback_data: 'menu_main' }]
+    ]
+  }
+}
+
+bot.onText(/\/x402/, async (msg) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id
+  await bot.sendMessage(chatId,
+    `<b>⚛️ Blue Agent x402 Services</b>\n\n` +
+    `Pay-per-use AI services · USDC on Base · No signup\n\n` +
+    `🔍 <b>Analyze</b> — Due diligence any token\n` +
+    `💼 <b>PnL</b> — Wallet trading report\n` +
+    `🚀 <b>Advisor</b> — Token launch playbook\n` +
+    `🏛️ <b>Grant</b> — Base grant scoring\n` +
+    `🛡️ <b>Risk Check</b> — Safety check before tx\n` +
+    `⚛️ <b>Quantum</b> — Quantum risk report\n\n` +
+    `<i>Powered by @blockyagent_bot × Base x402</i>`,
+    { parse_mode: 'HTML', reply_markup: x402MenuKeyboard() } as any
+  )
+})
+
+// Shortcut commands
+bot.onText(/\/analyze(?:\s+(.+))?/, async (msg, match) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id; const userId = msg.from?.id; if (!userId) return
+  const input = match?.[1]?.trim()
+  if (input) {
+    x402Sessions.set(userId, { service: 'analyze', step: 'confirm', input })
+    await bot.sendMessage(chatId,
+      `🔍 <b>Deep Analysis</b>\n\nAnalyze: <b>${input}</b>\nCost: <b>$0.35 USDC</b>\n\nConfirm?`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ Confirm', callback_data: 'x402_confirm' }, { text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  } else {
+    x402Sessions.set(userId, { service: 'analyze', step: 'input' })
+    await bot.sendMessage(chatId, `🔍 <b>Deep Analysis</b>\n\n${X402_SERVICES.analyze.inputPrompt}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  }
+})
+
+bot.onText(/\/quantum(?:\s+(.+))?/, async (msg, match) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id; const userId = msg.from?.id; if (!userId) return
+  let input = match?.[1]?.trim()
+  if (input === 'me') {
+    const users = loadUsers(); input = users[userId]?.evmAddress || ''
+    if (!input) { await bot.sendMessage(chatId, '⚠️ No wallet linked. Use /wallet first.'); return }
+  }
+  if (input) {
+    x402Sessions.set(userId, { service: 'quantum', step: 'confirm', input })
+    await bot.sendMessage(chatId,
+      `⚛️ <b>Quantum Risk Report</b>\n\nWallet: <code>${input.slice(0, 6)}...${input.slice(-4)}</code>\nCost: <b>$1.50 USDC</b>\n\nConfirm?`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ Confirm', callback_data: 'x402_confirm' }, { text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  } else {
+    x402Sessions.set(userId, { service: 'quantum', step: 'input' })
+    await bot.sendMessage(chatId, `⚛️ <b>Quantum Risk Report</b>\n\n${X402_SERVICES.quantum.inputPrompt}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  }
+})
+
+bot.onText(/\/pnl(?:\s+(.+))?/, async (msg, match) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id; const userId = msg.from?.id; if (!userId) return
+  const input = match?.[1]?.trim()
+  if (input) {
+    x402Sessions.set(userId, { service: 'pnl', step: 'confirm', input })
+    await bot.sendMessage(chatId,
+      `💼 <b>Wallet PnL Report</b>\n\nWallet: <code>${input.slice(0, 6)}...${input.slice(-4)}</code>\nCost: <b>$1.00 USDC</b>\n\nConfirm?`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ Confirm', callback_data: 'x402_confirm' }, { text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  } else {
+    x402Sessions.set(userId, { service: 'pnl', step: 'input' })
+    await bot.sendMessage(chatId, `💼 <b>Wallet PnL Report</b>\n\n${X402_SERVICES.pnl.inputPrompt}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  }
+})
+
+bot.onText(/\/riskcheck(?:\s+(.+))?/, async (msg, match) => {
+  if (await blockInGroup(msg)) return
+  const chatId = msg.chat.id; const userId = msg.from?.id; if (!userId) return
+  const input = match?.[1]?.trim()
+  if (input) {
+    x402Sessions.set(userId, { service: 'riskcheck', step: 'confirm', input })
+    await bot.sendMessage(chatId,
+      `🛡️ <b>Risk Check</b>\n\nAction: <i>${input}</i>\nCost: <b>$0.05 USDC</b>\n\nConfirm?`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ Confirm', callback_data: 'x402_confirm' }, { text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  } else {
+    x402Sessions.set(userId, { service: 'riskcheck', step: 'input' })
+    await bot.sendMessage(chatId, `🛡️ <b>Risk Check</b>\n\n${X402_SERVICES.riskcheck.inputPrompt}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any)
+  }
+})
+
 bot.onText(/\/points/, async (msg) => {
   if (await blockInGroup(msg)) return
   const chatId = msg.chat.id
@@ -2025,7 +2294,7 @@ bot.onText(/\/leaderboard/, async (msg) => {
   const myRank = Object.values(users).sort((a: any, b: any) => (b.points || 0) - (a.points || 0)).findIndex((u: any) => u.id === userId) + 1
 
   const footer = isGroup
-    ? `\n\n<i>DM <a href="https://t.me/blockyagent_bot">@blockyagent_bot</a> to earn points</i>`
+    ? `\n\n<i>DM <a href="https://t.me/BlueAgent_bot">@BlueAgent_bot</a> to earn points</i>`
     : `\n\n──────────────\nYou: <b>#${myRank || '—'} · ${myPoints} pts</b>`
 
   await bot.sendMessage(chatId,
@@ -2281,7 +2550,7 @@ bot.on('callback_query', async (query) => {
     await editMenu(query, profileText2, {
       inline_keyboard: [
         [
-          { text: user2.xHandle ? '✏️ Edit X Handle' : '🐦 Set X Handle', callback_data: 'profile_set_x' },
+          { text: user2.xVerified ? '✏️ Re-verify X' : (user2.xHandle ? '🔁 Verify X' : '🐦 Link X Account'), callback_data: 'profile_set_x' },
           { text: '👛 My Wallet', callback_data: 'menu_wallet' }
         ],
         [{ text: canClaim2 ? `🎁 Claim ${TOKEN_NAME} (${points2} pts)` : `🎁 Claim (need 100 pts)`, callback_data: canClaim2 ? 'profile_claim' : 'profile_claim_locked' }],
@@ -2290,11 +2559,98 @@ bot.on('callback_query', async (query) => {
     })
     return
   }
-  if (data === 'profile_set_x') {
-    xHandleSessions.set(userId, true)
+  // ── x402 Callbacks ──
+  if (data.startsWith('x402_start_')) {
+    const service = data.replace('x402_start_', '')
+    const svc = X402_SERVICES[service]
+    if (!svc) return
+    x402Sessions.set(userId, { service, step: 'input' })
+    await bot.answerCallbackQuery(query.id)
     await editMenu(query,
-      `<b>🐦 Set X Handle</b>\n\nEnter your X/Twitter handle:\n<i>(e.g. madebyshun)</i>`,
+      `${svc.emoji} <b>${svc.name}</b>\n\n${svc.inputPrompt}`,
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'x402_cancel' }]] }
+    )
+    return
+  }
+
+  if (data === 'x402_cancel') {
+    x402Sessions.delete(userId)
+    await bot.answerCallbackQuery(query.id, { text: 'Cancelled' })
+    await editMenu(query,
+      `<b>⚛️ Blue Agent x402 Services</b>\n\nPay-per-use AI services · USDC on Base · No signup`,
+      x402MenuKeyboard()
+    )
+    return
+  }
+
+  if (data === 'x402_confirm') {
+    const session = x402Sessions.get(userId)
+    if (!session || !session.input) {
+      await bot.answerCallbackQuery(query.id, { text: '⚠️ Session expired' })
+      return
+    }
+    x402Sessions.delete(userId)
+    await bot.answerCallbackQuery(query.id)
+    const svc = X402_SERVICES[session.service]
+    const loadingMsg = await bot.sendMessage(chatId,
+      `${svc.emoji} <b>${svc.name}</b>\n\n⏳ Analyzing... (may take 15-30 seconds)`,
+      { parse_mode: 'HTML' } as any
+    )
+    try {
+      const result = await callX402Service(session.service, session.input)
+      const formatted = svc.formatResult(result)
+      await bot.editMessageText(formatted, {
+        chat_id: chatId, message_id: loadingMsg.message_id,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [
+          [{ text: `${svc.emoji} Run Another`, callback_data: `x402_start_${session.service}` }],
+          [{ text: '⚛️ All Services', callback_data: 'menu_x402' }, { text: '🏠 Menu', callback_data: 'menu_main' }]
+        ]}
+      } as any)
+    } catch (err: any) {
+      console.error('[x402]', err?.message)
+      await bot.editMessageText(
+        `❌ Service error. Please try again.\n<i>${err?.message?.slice(0, 100)}</i>`,
+        { chat_id: chatId, message_id: loadingMsg.message_id, parse_mode: 'HTML' } as any
+      )
+    }
+    return
+  }
+
+  if (data === 'menu_x402') {
+    await bot.answerCallbackQuery(query.id)
+    await editMenu(query,
+      `<b>⚛️ Blue Agent x402 Services</b>\n\nPay-per-use AI services · USDC on Base · No signup\n\n` +
+      `🔍 <b>Analyze</b> — Due diligence any token\n` +
+      `💼 <b>PnL</b> — Wallet trading report\n` +
+      `🚀 <b>Advisor</b> — Token launch playbook\n` +
+      `🏛️ <b>Grant</b> — Base grant scoring\n` +
+      `🛡️ <b>Risk Check</b> — Safety check before tx\n` +
+      `⚛️ <b>Quantum</b> — Quantum risk report`,
+      x402MenuKeyboard()
+    )
+    return
+  }
+
+  if (data === 'profile_set_x') {
+    const code = 'BLU-' + Math.random().toString(36).substring(2, 6).toUpperCase()
+    xVerifySessions.set(userId, { code, expiresAt: Date.now() + 10 * 60 * 1000 })
+    await editMenu(query,
+      `<b>🐦 Verify X Account</b>\n\nTweet the following text (copy exactly):\n\n<code>Verifying my @blockyagent_bot identity — ${code} #BlueAgent</code>\n\nThen paste the tweet URL here.\n\n⏱ Code expires in 10 minutes.`,
       { inline_keyboard: [NAV_ROW] }
+    )
+    return
+  }
+  if (data === 'share_on_x') {
+    const users_sx = loadUsers()
+    const user_sx = users_sx[userId]
+    const score_sx = user_sx?.score || 0
+    const tweetText = encodeURIComponent(`I'm a Base builder 🟦\n\nBuilder Score: ${score_sx}/100\n\nTracked by @blockyagent_bot — join the community:\nt.me/blueagent_hub`)
+    const tweetUrl = `https://twitter.com/intent/tweet?text=${tweetText}`
+    await bot.answerCallbackQuery(query.id)
+    await bot.sendMessage(chatId,
+      `🐦 Tap to share your Builder Score on X:`,
+      { reply_markup: { inline_keyboard: [[{ text: '🐦 Share on X', url: tweetUrl }], NAV_ROW] } } as any
     )
     return
   }
@@ -2385,7 +2741,8 @@ bot.on('callback_query', async (query) => {
       await bot.sendMessage(chatId,
         `✅ <b>Claim Successful!</b>\n\n` +
         `💰 <b>${claimAmount.toLocaleString()} ${TOKEN_NAME}</b> sent!\n` +
-        `📬 To: <code>${user2.evmAddress?.slice(0, 6)}...${user2.evmAddress?.slice(-4)}</code>\n\n` +
+        `📬 To: <code>${user2.evmAddress?.slice(0, 6)}...${user2.evmAddress?.slice(-4)}</code>\n` +
+        `🔥 5% burned automatically\n\n` +
         `🔗 <a href="https://basescan.org/tx/${result.txHash}">View on Basescan</a>\n\n` +
         `<i>Next claim in 7 days 🟦</i>`,
         { parse_mode: 'HTML', disable_web_page_preview: false, reply_markup: { inline_keyboard: [NAV_ROW] } } as any
@@ -2560,6 +2917,18 @@ bot.on('callback_query', async (query) => {
     )
     return
   }
+  if (data === 'menu_dexpay') {
+    await bot.answerCallbackQuery(query.id)
+    dexPaySessions.set(userId, { step: 'chain' })
+    await bot.sendMessage(chatId,
+      `🟦 <b>DexScreener Enhanced Token Info</b>\n\n` +
+      `Get your token's info updated on DexScreener with website, socials, description & images.\n\n` +
+      `💵 Price: <b>$300 USDC</b>\n\n` +
+      `<b>Step 1/6 — Select Chain:</b>`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: DEXPAY_CHAINS } } as any
+    )
+    return
+  }
   if (data === 'menu_submit') {
     submitSessions.set(userId, { step: 1 })
     await editMenu(query,
@@ -2620,7 +2989,41 @@ bot.on('callback_query', async (query) => {
     }
     return
   }
-  if (data === 'menu_agents') { await sendAgentsLeaderboard(chatId, 'mcap'); return }
+  if (data === 'menu_agents') {
+    await editMenu(query,
+      `<b>🤖 Meet Agents</b>\n\nSpecialist AI agents — pay with $BLUEAGENT Credits.\n\n` +
+      `✍️ <b>Copywriter</b> — Web3 copy & tweets · <i>2 cr/msg</i>\n` +
+      `🎨 <b>UX Designer</b> — UI/UX expert · <i>3 cr/msg</i>\n` +
+      `📊 <b>Tokenomics</b> — Token design expert · <i>7 cr/msg</i>\n` +
+      `🚀 <b>GTM Advisor</b> — Go-to-market strategy · <i>7 cr/msg</i>\n` +
+      `💻 <b>Code Review</b> — Code review & refactor · <i>5 cr/msg</i>\n\n` +
+      `<i>Coming soon — buy Credits with $BLUEAGENT to get started</i>`,
+      {
+        inline_keyboard: [
+          [{ text: '🪙 My Credits', callback_data: 'menu_credits' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }],
+          NAV_ROW
+        ]
+      }
+    )
+    return
+  }
+  if (data === 'menu_bankr_agents') { await sendAgentsLeaderboard(chatId, 'mcap'); return }
+  if (data === 'menu_credits') {
+    const users2 = loadUsers()
+    const credits2 = users2[userId]?.credits || 0
+    await editMenu(query,
+      `<b>🪙 My Credits</b>\n\nBalance: <b>${credits2} Credits</b>\n\n` +
+      `<b>Use Credits for:</b>\n` +
+      `• ✍️ Copywriter: 2 cr/msg\n` +
+      `• 🎨 UX Designer: 3 cr/msg\n` +
+      `• 📊 Tokenomics: 7 cr/msg\n` +
+      `• 🚀 GTM Advisor: 7 cr/msg\n` +
+      `• 💻 Code Review: 5 cr/msg\n\n` +
+      `<i>Buy with $BLUEAGENT — coming soon\n1M $BLUEAGENT = 20 Credits</i>`,
+      { inline_keyboard: [[{ text: '🤖 Meet Agents', callback_data: 'menu_agents' }, { text: '💰 Buy Credits', callback_data: 'credits_buy' }], NAV_ROW] }
+    )
+    return
+  }
   if (data === 'menu_news') {
     await editMenu(query, `<b>📡 Base Builder Feed</b>\n\n⏳ Fetching latest updates...`, { inline_keyboard: [NAV_ROW] })
     bot.sendChatAction(chatId, 'typing').catch(() => {})
@@ -2644,182 +3047,6 @@ bot.on('callback_query', async (query) => {
     finally { clearInterval(typingInterval2) }
     return
   }
-  if (data === 'menu_community_kit') {
-    await editMenu(query,
-      `🤖 <b>Blue Agent Community Kit</b>\n\n` +
-      `<i>Launch your own AI-powered Telegram community in 5 minutes.</i>\n\n` +
-      `✅ Points & Leaderboard\n` +
-      `✅ Referrals & Auto-onboarding\n` +
-      `✅ Project Directory\n` +
-      `✅ Token Rewards\n` +
-      `✅ AI Chat + Gem Signals\n` +
-      `✅ Raffle, Quests, Proposals\n\n` +
-      `<code>npx blueagent init</code> — live in 5 min`,
-      { inline_keyboard: [
-        [{ text: '💳 Subscribe', callback_data: 'ck_subscribe' }, { text: '📊 Pricing', callback_data: 'ck_pricing' }],
-        [{ text: '📖 Docs & Quick Start', callback_data: 'ck_docs' }],
-        [{ text: '⭐ GitHub', url: 'https://github.com/madebyshun/community-kit' }, { text: '💬 DM @blockyagent_bot', url: 'https://t.me/blockyagent_bot' }],
-        NAV_ROW
-      ]}
-    )
-    return
-  }
-
-  // Community Kit submenus
-  if (data === 'ck_pricing') {
-    await editMenu(query,
-      `📊 <b>Community Kit — Pricing</b>\n\n` +
-      `🆓 <b>Free</b> — $0\n` +
-      `Points, Leaderboard, Referrals, Onboarding, Projects\n\n` +
-      `🌱 <b>Seed</b> — $49/mo\n` +
-      `+ Price Alerts, Gem Signals, Raffle, Scheduled Posts\n\n` +
-      `⚡ <b>Pro</b> — $199/mo\n` +
-      `+ Token Claim, Broadcast DM, Flash Quests, Bounties, Proposals\n\n` +
-      `🚀 <b>Scale</b> — $499/mo\n` +
-      `+ Analytics Export, Token Gate, Custom Branding\n\n` +
-      `💰 Pay <b>USDC</b> or <b>$BLUEAGENT</b> (-20%) on Base\n` +
-      `📊 Multi-month: 3mo -10% · 6mo -15% · 12mo -20%`,
-      { inline_keyboard: [
-        [{ text: '💳 Subscribe Now', callback_data: 'start_subscribe' }],
-        [{ text: '← Back', callback_data: 'menu_community_kit' }]
-      ]}
-    )
-    return
-  }
-
-  if (data === 'ck_subscribe') {
-    subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
-    await editMenu(query,
-      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
-      { inline_keyboard: [
-        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
-        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
-        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
-        [{ text: '← Back', callback_data: 'menu_community_kit' }]
-      ]}
-    )
-    return
-  }
-
-  if (data === 'ck_docs') {
-    await editMenu(query,
-      `📖 <b>Quick Start</b>\n\n` +
-      `<b>1.</b> Create bot via @BotFather\n` +
-      `<b>2.</b> Run setup wizard:\n` +
-      `<code>npx blueagent init</code>\n\n` +
-      `<b>3.</b> Choose template:\n` +
-      `�ꪙ Token Community\n` +
-      `🎮 Gaming Guild\n` +
-      `🏗️ Builder DAO\n` +
-      `🤖 AI Agent\n\n` +
-      `<b>4.</b> Paste bot token → bot goes live\n\n` +
-      `📘 Full docs on GitHub`,
-      { inline_keyboard: [
-        [{ text: '📘 Full README', url: 'https://github.com/madebyshun/community-kit#readme' }],
-        [{ text: '💳 Subscribe', callback_data: 'ck_subscribe' }],
-        [{ text: '← Back', callback_data: 'menu_community_kit' }]
-      ]}
-    )
-    return
-  }
-
-  if (data === 'menu_pricing') {
-    await editMenu(query,
-      `💳 <b>Community Kit — Pricing</b>\n\n` +
-      `🆓 <b>Free</b> — $0\nPoints, Leaderboard, Referrals, Onboarding, Projects\n\n` +
-      `🌱 <b>Seed</b> — $49/mo\n+ Price Alerts, Gem Signals, Raffle, Scheduled Posts\n\n` +
-      `⚡ <b>Pro</b> — $199/mo\n+ Token Claim, Broadcast DM, Flash Quests, Bounties, Proposals\n\n` +
-      `🚀 <b>Scale</b> — $499/mo\n+ Analytics Export, Token Gate, Custom Branding\n\n` +
-      `💰 Pay USDC or $BLUEAGENT (-20%) on Base\n📊 Multi-month: 3mo -10% | 6mo -15% | 12mo -20%`,
-      { inline_keyboard: [
-        [{ text: '💳 Subscribe Now', callback_data: 'start_subscribe' }],
-        [{ text: '🌐 github.com/madebyshun/community-kit', url: 'https://github.com/madebyshun/community-kit' }],
-        NAV_ROW
-      ]}
-    )
-    return
-  }
-
-  // ── Subscribe flow (inline in main handler) ──
-  if (data === 'start_subscribe') {
-    subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
-    await editMenu(query,
-      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
-      { inline_keyboard: [
-        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
-        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
-        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
-        [{ text: '← Back', callback_data: 'menu_community_kit' }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}
-    )
-    return
-  }
-
-  if (data.startsWith('sub_tier_')) {
-    const tier = data.replace('sub_tier_', '')
-    subSessions.set(userId, { tier, months: 1, currency: 'usdc', step: 'months' })
-    const p1=calcPrice(tier,1), p3=calcPrice(tier,3), p6=calcPrice(tier,6), p12=calcPrice(tier,12)
-    await editMenu(query,
-      `📅 <b>Choose duration</b> (${tier.toUpperCase()})\n\n1 month — <b>$${p1}</b>\n3 months — <b>$${p3}</b> <i>(-10%)</i>\n6 months — <b>$${p6}</b> <i>(-15%)</i>\n12 months — <b>$${p12}</b> <i>(-20%)</i>`,
-      { inline_keyboard: [
-        [{ text: `1 month — $${p1}`, callback_data: `sub_months_${tier}_1` }, { text: `3 months — $${p3}`, callback_data: `sub_months_${tier}_3` }],
-        [{ text: `6 months — $${p6}`, callback_data: `sub_months_${tier}_6` }, { text: `12 months — $${p12}`, callback_data: `sub_months_${tier}_12` }],
-        [{ text: '← Back', callback_data: 'sub_back_tier' }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}
-    )
-    return
-  }
-
-  if (data === 'sub_back_tier') {
-    await editMenu(query,
-      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
-      { inline_keyboard: [
-        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
-        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
-        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
-        [{ text: '← Back', callback_data: 'menu_community_kit' }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}
-    )
-    return
-  }
-
-  if (data.startsWith('sub_months_')) {
-    const parts = data.replace('sub_months_', '').split('_')
-    const tier = parts.slice(0, -1).join('_')
-    const months = parseInt(parts[parts.length - 1])
-    const session = subSessions.get(userId) || { tier, months, currency: 'usdc' as const, step: 'currency' }
-    session.tier = tier; session.months = months; session.step = 'currency'
-    subSessions.set(userId, session)
-    const uAmt=calcPrice(tier,months,'usdc'), bAmt=calcPrice(tier,months,'blueagent')
-    await editMenu(query,
-      `💰 <b>Choose payment</b>\n\nPlan: <b>${tier.toUpperCase()}</b> · ${months} month${months>1?'s':''}\n\n💵 USDC — <b>$${uAmt}</b>\n🟦 $BLUEAGENT — <b>$${bAmt}</b> <i>(-20%)</i>`,
-      { inline_keyboard: [
-        [{ text: `💵 Pay $${uAmt} USDC`, callback_data: 'sub_pay_usdc' }],
-        [{ text: `🟦 Pay $${bAmt} $BLUEAGENT (-20%)`, callback_data: 'sub_pay_blueagent' }],
-        [{ text: '← Back', callback_data: `sub_tier_${tier}` }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}
-    )
-    return
-  }
-
-  if (data.startsWith('sub_pay_')) {
-    const currency = data.replace('sub_pay_', '') as 'usdc' | 'blueagent'
-    const session = subSessions.get(userId) || { tier: '', months: 1, currency, step: 'awaiting_tx' }
-    session.currency = currency; session.step = 'awaiting_tx'
-    subSessions.set(userId, session)
-    const amount = calcPrice(session.tier, session.months, currency)
-    const isBA = currency === 'blueagent'
-    const tokenAddr = isBA ? TOKEN_CONTRACT : '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-    const tokenName = isBA ? '$BLUEAGENT' : 'USDC'
-    await editMenu(query,
-      `💳 <b>Payment Instructions</b>\n\nPlan: <b>${session.tier.toUpperCase()}</b> · ${session.months} month${session.months>1?'s':''}\nAmount: <b>$${amount} ${tokenName}</b>\n\nSend to treasury on <b>Base</b>:\n<code>${PAYMENT_ADDRESS}</code>\n\nToken: <code>${tokenAddr}</code>\n\n⚠️ After sending, paste your <b>tx hash</b> (0x...) here.`,
-      { inline_keyboard: [
-        [{ text: '← Back', callback_data: `sub_tier_${session.tier}` }, { text: '❌ Close', callback_data: 'menu_close' }]
-      ]}
-    )
-    return
-  }
-
   if (data === 'menu_help') {
     await editMenu(query,
       `<b>Blue Agent 🟦 — What I can do</b>\n\n` +
@@ -2856,6 +3083,15 @@ bot.on('callback_query', async (query) => {
     proj.votes++
     proj.voters.push(userId)
     saveProjects(projects)
+
+    // +2 pts for project submitter
+    const usersVote = loadUsers()
+    const submitter = usersVote[proj.submitterId]
+    if (submitter) {
+      submitter.points = (submitter.points || 0) + 2
+      saveUsers(usersVote)
+    }
+
     await bot.answerCallbackQuery(query.id, { text: `👍 Voted! Total: ${proj.votes}` })
     return
   }
@@ -2973,12 +3209,105 @@ bot.on('callback_query', async (query) => {
 // MAIN MESSAGE HANDLER
 // Flow: Bankr Agent (real-time data) → LLM fallback (personality)
 // =======================
+// ==========================================
+// TOKEN SCANNER — auto-detect CA in messages
+// ==========================================
+async function scanToken(ca: string): Promise<string> {
+  try {
+    // Fetch from DexScreener
+    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${ca}`)
+    const data = await res.json() as any
+    const pairs = data.pairs
+    if (!pairs || pairs.length === 0) {
+      return `❌ Token not found on DexScreener.\n\n<code>${ca}</code>`
+    }
+
+    // Pick best pair (highest liquidity)
+    const pair = pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]
+    const token = pair.baseToken
+    const price = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(6)}` : 'N/A'
+    const change24h = pair.priceChange?.h24
+    const changeStr = change24h !== undefined
+      ? `${change24h > 0 ? '📈 +' : '📉 '}${change24h.toFixed(2)}%`
+      : 'N/A'
+    const mcapNum2 = pair.marketCap || pair.fdv || 0
+    const mcap = mcapNum2 === 0 ? 'N/A'
+      : mcapNum2 >= 1e6 ? `$${(mcapNum2 / 1e6).toFixed(2)}M`
+      : mcapNum2 >= 1e3 ? `$${(mcapNum2 / 1e3).toFixed(1)}K`
+      : `$${mcapNum2.toFixed(0)}`
+    const liq = pair.liquidity?.usd ? `$${(pair.liquidity.usd / 1e3).toFixed(1)}K` : 'N/A'
+    const vol24h = pair.volume?.h24 ? `$${(pair.volume.h24 / 1e3).toFixed(1)}K` : 'N/A'
+    const buys = pair.txns?.h24?.buys || 0
+    const sells = pair.txns?.h24?.sells || 0
+    const chain = pair.chainId || 'unknown'
+    const dexUrl = pair.url || `https://dexscreener.com/${chain}/${ca}`
+    const age = pair.pairCreatedAt
+      ? `${Math.floor((Date.now() - pair.pairCreatedAt) / 86400000)}d`
+      : 'N/A'
+
+    // Basescan contract check
+    const basescanKey = process.env.BASESCAN_API_KEY || ''
+    let contractInfo = ''
+    if (chain === 'base' && basescanKey) {
+      try {
+        const abiRes = await fetch(`https://api.basescan.org/api?module=contract&action=getabi&address=${ca}&apikey=${basescanKey}`)
+        const abiData = await abiRes.json() as any
+        contractInfo = abiData.status === '1' ? '✅ Verified' : '⚠️ Unverified'
+      } catch { contractInfo = '⚠️ Unknown' }
+    }
+
+    // Simple risk assessment
+    const liqNum = pair.liquidity?.usd || 0
+    const mcapNum = pair.marketCap || pair.fdv || 0
+    const risk = liqNum < 10000 ? '🔴 HIGH' : liqNum < 50000 ? '🟡 MEDIUM' : '🟢 LOW'
+
+    return (
+      `🔍 <b>${token.name}</b> ($${token.symbol})\n` +
+      `<code>${ca.slice(0, 6)}...${ca.slice(-4)}</code> · ${chain}\n` +
+      `──────────────\n` +
+      `💰 Price: <b>${price}</b> ${changeStr}\n` +
+      `📊 MCap: <b>${mcap}</b>\n` +
+      `💧 Liquidity: <b>${liq}</b>\n` +
+      `📈 Vol 24h: <b>${vol24h}</b>\n` +
+      `🔄 Buys/Sells: <b>${buys} / ${sells}</b>\n` +
+      `🕐 Age: <b>${age}</b>\n` +
+      `${contractInfo ? `📋 Contract: <b>${contractInfo}</b>\n` : ''}` +
+      `⚠️ Risk: <b>${risk}</b>\n` +
+      `──────────────\n` +
+      `<a href="${dexUrl}">📊 DexScreener</a> · <a href="https://basescan.org/token/${ca}">🔍 Basescan</a>`
+    )
+  } catch (err) {
+    return `❌ Failed to scan token. Please try again.`
+  }
+}
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id
   const userId = msg.from?.id || chatId
   const text = msg.text?.trim()
 
   if (!text || text.startsWith('/')) return
+
+  // Auto-detect contract address (0x + 40 hex chars)
+  const caMatch = text.match(/\b(0x[a-fA-F0-9]{40})\b/)
+  if (caMatch && !dexPaySessions.has(userId) && !x402Sessions.has(userId)) {
+    const ca = caMatch[1]
+    // Don't scan if it's a wallet address the user is sending to
+    const isKnownWallet = ca.toLowerCase() === '0xf31f59e7b8b58555f7871f71973a394c8f1bffe5'
+    if (!isKnownWallet) {
+      bot.sendChatAction(chatId, 'typing').catch(() => {})
+      const report = await scanToken(ca)
+      await bot.sendMessage(chatId, report, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_to_message_id: msg.message_id,
+      } as any)
+      return
+    }
+  }
+
+  // If user is in a DexPay session, let the DexPay handler take over
+  if (dexPaySessions.has(userId)) return
 
   // Handle persistent Reply keyboard buttons
   if (text === '📱 Menu') {
@@ -3070,15 +3399,12 @@ bot.on('message', async (msg) => {
     return
   }
 
-  // Group mode — only respond when mentioned or replied to, and only in General (blue-chat)
+  // Group mode — only respond when mentioned or replied to (any topic)
   const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup'
   if (isGroup) {
-    const msgThreadId = (msg as any).message_thread_id
-    // Only respond in General topic (thread 1 or no thread)
-    if (msgThreadId && msgThreadId !== 1) return
-    const botInfo = await bot.getMe()
-    const mentioned = text.toLowerCase().includes(`@${botInfo.username?.toLowerCase()}`)
-    const isReplyToBot = msg.reply_to_message?.from?.id === botInfo.id
+    const mentioned = text.toLowerCase().includes(`@${BOT_USERNAME.toLowerCase()}`)
+    const isReplyToBot = msg.reply_to_message?.from?.id === BOT_ID
+    console.log(`[Group] msg from ${userId} | mentioned: ${mentioned} | reply: ${isReplyToBot} | text: ${text.slice(0, 50)}`)
     if (!mentioned && !isReplyToBot) return
     // In group context, clear any active DM sessions to avoid flow conflicts
     launchSessions.delete(userId)
@@ -3086,8 +3412,7 @@ bot.on('message', async (msg) => {
     walletSessions.delete(userId)
     xHandleSessions.delete(userId)
     // Strip the @botname mention from text for clean processing
-    const botUsername = botInfo.username || ''
-    const cleanText = text.replace(new RegExp(`@${botUsername}`, 'gi'), '').trim()
+    const cleanText = text.replace(new RegExp(`@${BOT_USERNAME}`, 'gi'), '').trim()
     if (!cleanText) {
       await bot.sendMessage(chatId, "Hey! 🟦 I'm Blue Agent. What do you need?")
       return
@@ -3116,15 +3441,11 @@ bot.on('message', async (msg) => {
         if (reply) addToHistory(userId, 'assistant', reply)
       }
       if (!reply) reply = "Couldn't process that right now. Try again! 🔄"
-      const sendOpts: any = {
+      await bot.sendMessage(chatId, reply, {
         parse_mode: 'HTML',
         reply_to_message_id: msg.message_id,
         disable_web_page_preview: true,
-      }
-      // Preserve topic thread so reply stays in the correct topic
-      const replyThreadId = (msg as any).message_thread_id
-      if (replyThreadId) sendOpts.message_thread_id = replyThreadId
-      await bot.sendMessage(chatId, reply, sendOpts)
+      } as any)
     } catch (err) {
       await bot.sendMessage(chatId, "Something went wrong. Try again! 🔄")
     }
@@ -3137,7 +3458,82 @@ bot.on('message', async (msg) => {
     return
   }
 
-  // X Handle session
+  // x402 input session
+  if (x402Sessions.has(userId)) {
+    const session = x402Sessions.get(userId)!
+    if (session.step === 'input') {
+      let input = text.trim()
+      // Handle "me" for wallet-based services
+      if (input === 'me' && (session.service === 'quantum' || session.service === 'pnl')) {
+        const users2 = loadUsers()
+        input = users2[userId]?.evmAddress || ''
+        if (!input) {
+          await bot.sendMessage(chatId, '⚠️ No wallet linked. Use /wallet first.')
+          x402Sessions.delete(userId)
+          return
+        }
+      }
+      const svc = X402_SERVICES[session.service]
+      x402Sessions.set(userId, { ...session, step: 'confirm', input })
+      const preview = input.startsWith('0x') ? `<code>${input.slice(0, 6)}...${input.slice(-4)}</code>` : `<i>${input.slice(0, 60)}</i>`
+      await bot.sendMessage(chatId,
+        `${svc.emoji} <b>${svc.name}</b>\n\nInput: ${preview}\nCost: <b>$${svc.price.toFixed(2)} USDC</b>\n\nConfirm payment?`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ Confirm', callback_data: 'x402_confirm' }, { text: '❌ Cancel', callback_data: 'x402_cancel' }]] } } as any
+      )
+    }
+    return
+  }
+
+  // X Verify session (tweet-code verification)
+  if (xVerifySessions.has(userId)) {
+    const session = xVerifySessions.get(userId)!
+    if (Date.now() > session.expiresAt) {
+      xVerifySessions.delete(userId)
+      await bot.sendMessage(chatId, '⏱ Verification code expired. Please try again with /profile', { parse_mode: 'HTML' } as any)
+      return
+    }
+    // Extract tweet ID from URL
+    const tweetMatch = text.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/)
+    if (!tweetMatch) {
+      await bot.sendMessage(chatId, '⚠️ Please paste a valid tweet URL (e.g. https://x.com/yourhandle/status/123...)', { parse_mode: 'HTML' } as any)
+      return
+    }
+    const tweetId = tweetMatch[1]
+    try {
+      const tweetRes = await axios.get(
+        `https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=text&expansions=author_id&user.fields=username`,
+        { headers: { Authorization: `Bearer ${process.env.X_BEARER_TOKEN}` } }
+      )
+      const tweetText2 = tweetRes.data?.data?.text || ''
+      const xUsername = tweetRes.data?.includes?.users?.[0]?.username || ''
+      if (!tweetText2.includes(session.code)) {
+        await bot.sendMessage(chatId, `❌ Tweet does not contain the verification code <code>${session.code}</code>.\n\nMake sure you copied the exact text.`, { parse_mode: 'HTML' } as any)
+        return
+      }
+      xVerifySessions.delete(userId)
+      const users2 = loadUsers()
+      if (!users2[userId]) users2[userId] = { id: userId, points: 0, joinedAt: Date.now() }
+      users2[userId].xHandle = xUsername
+      users2[userId].xVerified = true
+      users2[userId].telegramUsername = msg.from?.username
+      users2[userId].telegramName = msg.from?.first_name
+      saveUsers(users2)
+      autoCompleteQuest(userId, 'set_x_handle', chatId)
+      await bot.sendMessage(chatId,
+        `✅ X account verified! <b>@${xUsername}</b> is now linked to your profile. 🎉`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '🐦 Share on X', callback_data: 'share_on_x' }], NAV_ROW] }
+        } as any
+      )
+    } catch (err: any) {
+      console.error('[X Verify]', err?.response?.data || err.message)
+      await bot.sendMessage(chatId, '❌ Could not verify tweet. Make sure the tweet is public and try again.')
+    }
+    return
+  }
+
+  // X Handle session (legacy fallback — should not reach here normally)
   if (xHandleSessions.has(userId)) {
     xHandleSessions.delete(userId)
     const handle = text.replace('@', '').trim()
@@ -3185,75 +3581,6 @@ bot.on('message', async (msg) => {
     const label = actionLabels[session.action] || 'action'
 
     bot.sendChatAction(chatId, 'typing').catch(() => {})
-
-    // ── Native swap ──
-    if (session.action === 'wallet_swap') {
-      const parsed = parseSwapIntent(text)
-      if (!parsed) {
-        await bot.sendMessage(chatId,
-          `⚠️ Couldn't parse swap. Try:\n<code>swap 10 USDC to ETH</code>\n<code>buy $BLUEAGENT with 5 USDC</code>`,
-          { parse_mode: 'HTML' } as any
-        )
-        return
-      }
-      const usersForSwap = loadUsers()
-      const pk = usersForSwap[userId]?.privateKey
-      if (!pk) { await bot.sendMessage(chatId, '⚠️ Wallet not found. Type /start.'); return }
-
-      await bot.sendMessage(chatId, `⏳ Swapping ${parsed.amount} ${parsed.fromToken} → ${parsed.toToken}...\n<i>~15-30s</i>`, { parse_mode: 'HTML' } as any)
-      const swapResult = await swapTokens(pk, parsed.fromToken, parsed.toToken, parsed.amount)
-      if ('error' in swapResult) {
-        await bot.sendMessage(chatId, `❌ Swap failed: ${swapResult.error}`)
-      } else {
-        await bot.sendMessage(chatId,
-          `✅ <b>Swap complete!</b>\n\n` +
-          `${parsed.amount} ${parsed.fromToken.toUpperCase()} → <b>${swapResult.amountOut}</b>\n\n` +
-          `🔗 <a href="${swapResult.explorerUrl}">View on Basescan</a>`,
-          { parse_mode: 'HTML', disable_web_page_preview: true } as any
-        )
-      }
-      return
-    }
-
-    // ── Native send ──
-    if (session.action === 'wallet_send') {
-      const parsed = parseSendIntent(text)
-      if (!parsed) {
-        await bot.sendMessage(chatId,
-          `⚠️ Couldn't parse. Try:\n<code>send 5 USDC to 0x...</code>\n<code>send 0.01 ETH to 0x...</code>`,
-          { parse_mode: 'HTML' } as any
-        )
-        return
-      }
-      const usersForSend = loadUsers()
-      const pk = usersForSend[userId]?.privateKey
-      if (!pk) { await bot.sendMessage(chatId, '⚠️ Wallet not found. Type /start.'); return }
-
-      await bot.sendMessage(chatId, `⏳ Sending ${parsed.amount} ${parsed.token}...\n<i>~15-30s</i>`, { parse_mode: 'HTML' } as any)
-      const sendResult = await sendToken(pk, parsed.toAddress, parsed.token, parsed.amount)
-      if ('error' in sendResult) {
-        await bot.sendMessage(chatId, `❌ Send failed: ${sendResult.error}`)
-      } else {
-        await bot.sendMessage(chatId,
-          `✅ <b>Sent!</b>\n\n` +
-          `${parsed.amount} ${parsed.token.toUpperCase()} → <code>${parsed.toAddress.slice(0,6)}...${parsed.toAddress.slice(-4)}</code>\n\n` +
-          `🔗 <a href="${sendResult.explorerUrl}">View on Basescan</a>`,
-          { parse_mode: 'HTML', disable_web_page_preview: true } as any
-        )
-      }
-      return
-    }
-
-    // ── Bridge / DCA / Limit / Perps → redirect to bankr.bot ──
-    if (['wallet_bridge', 'wallet_dca', 'wallet_limit', 'wallet_stoploss'].includes(session.action)) {
-      await bot.sendMessage(chatId,
-        `🌉 <b>${label.charAt(0).toUpperCase() + label.slice(1)}</b> requires Bankr directly.\n\n` +
-        `👉 <a href="https://bankr.bot">bankr.bot</a> — connect your wallet there to use bridge, DCA, and limit orders.`,
-        { parse_mode: 'HTML', disable_web_page_preview: true } as any
-      )
-      return
-    }
-
     await bot.sendMessage(chatId, `⏳ Processing your ${label}...`)
 
     // Build enriched prompt with wallet context
@@ -3374,6 +3701,9 @@ bot.on('message', async (msg) => {
     return
   }
 
+  // If user is in score/xHandle session — handled above, don't fall through to AI
+  if (scoreSessions.has(userId) || xHandleSessions.has(userId) || xVerifySessions.has(userId) || x402Sessions.has(userId)) return
+
   // Typing indicator
   bot.sendChatAction(chatId, 'typing').catch(() => {})
   const typingInterval = setInterval(() => {
@@ -3383,58 +3713,6 @@ bot.on('message', async (msg) => {
 
   try {
     let reply = ''
-
-    // ── Native swap intercept (natural language) ──
-    const swapParsed = parseSwapIntent(text)
-    if (swapParsed) {
-      const usersNative = loadUsers()
-      const pk = usersNative[userId]?.privateKey
-      if (pk) {
-        await bot.sendMessage(chatId,
-          `⏳ Swapping ${swapParsed.amount} ${swapParsed.fromToken} → ${swapParsed.toToken}...\n<i>~15-30s</i>`,
-          { parse_mode: 'HTML' } as any
-        )
-        const swapRes = await swapTokens(pk, swapParsed.fromToken, swapParsed.toToken, swapParsed.amount)
-        if ('error' in swapRes) {
-          await bot.sendMessage(chatId, `❌ Swap failed: ${swapRes.error}`)
-        } else {
-          await bot.sendMessage(chatId,
-            `✅ <b>Swap complete!</b>\n\n` +
-            `${swapParsed.amount} ${swapParsed.fromToken.toUpperCase()} → <b>${swapRes.amountOut}</b>\n\n` +
-            `🔗 <a href="${swapRes.explorerUrl}">View on Basescan</a>`,
-            { parse_mode: 'HTML', disable_web_page_preview: true } as any
-          )
-        }
-        clearInterval(typingInterval)
-        return
-      }
-    }
-
-    // ── Native send intercept (natural language) ──
-    const sendParsed = parseSendIntent(text)
-    if (sendParsed) {
-      const usersNative = loadUsers()
-      const pk = usersNative[userId]?.privateKey
-      if (pk) {
-        await bot.sendMessage(chatId,
-          `⏳ Sending ${sendParsed.amount} ${sendParsed.token}...\n<i>~15-30s</i>`,
-          { parse_mode: 'HTML' } as any
-        )
-        const sendRes = await sendToken(pk, sendParsed.toAddress, sendParsed.token, sendParsed.amount)
-        if ('error' in sendRes) {
-          await bot.sendMessage(chatId, `❌ Send failed: ${sendRes.error}`)
-        } else {
-          await bot.sendMessage(chatId,
-            `✅ <b>Sent!</b>\n\n` +
-            `${sendParsed.amount} ${sendParsed.token.toUpperCase()} → <code>${sendParsed.toAddress.slice(0,6)}...${sendParsed.toAddress.slice(-4)}</code>\n\n` +
-            `🔗 <a href="${sendRes.explorerUrl}">View on Basescan</a>`,
-            { parse_mode: 'HTML', disable_web_page_preview: true } as any
-          )
-        }
-        clearInterval(typingInterval)
-        return
-      }
-    }
 
     if (needsAgent(text)) {
       // Inject user wallet address when query is about their wallet/portfolio
@@ -3492,6 +3770,7 @@ bot.setMyCommands([
   { command: 'menu', description: '📱 Control Panel' },
   { command: 'score', description: '📊 Builder Score (@handle)' },
   { command: 'points', description: '⭐ My Points & Rank' },
+  { command: 'credits', description: '🪙 My Credits & Tier' },
   { command: 'wallet', description: '💰 Wallet & Trade' },
   { command: 'profile', description: '👤 My Profile' },
   { command: 'rewards', description: '🎁 Rewards & Claim' },
@@ -3503,6 +3782,11 @@ bot.setMyCommands([
   { command: 'launch', description: '🚀 Deploy Token on Base' },
   { command: 'stats', description: '📈 Blue Agent Stats' },
   { command: 'agents', description: '🤖 Bankr Agent Leaderboard' },
+  { command: 'x402', description: '⚛️ AI Services (pay-per-use)' },
+  { command: 'analyze', description: '🔍 Analyze token $0.35' },
+  { command: 'quantum', description: '⚛️ Quantum risk check $1.50' },
+  { command: 'pnl', description: '💼 Wallet PnL report $1.00' },
+  { command: 'riskcheck', description: '🛡️ Safety check $0.05' },
   { command: 'help', description: '❓ Help' },
 ]).catch(() => {})
 
@@ -3535,7 +3819,10 @@ bot.setMyCommands([
   { command: 'status', description: '🔍 Health Check' },
 ], { scope: { type: 'chat', chat_id: OWNER_ID } } as any).catch(() => {})
 
+let BOT_ID = 0
+
 bot.getMe().then((me) => {
+  BOT_ID = me.id
   console.log(`🟦 Blue Agent started: @${me.username}`)
   console.log(`LLM key: ${BANKR_LLM_KEY ? 'loaded' : 'MISSING'}`)
   console.log(`Agent key: ${BANKR_API_KEY ? 'loaded' : 'MISSING'}`)
@@ -4129,7 +4416,7 @@ bot.on('new_chat_members', async (msg) => {
       await bot.sendMessage(ALPHA_CHAT_ID,
         `👋 Welcome <b>${username}</b>! 🟦\n\n` +
         `Blue Agent is your onchain AI agent on Base — wallet, trading, builder score, and $BLUEAGENT rewards. All in Telegram.\n\n` +
-        `DM @blockyagent_bot to get started:\n` +
+        `DM @BlueAgent_bot to get started:\n` +
         `• /score — check your builder rank\n` +
         `• /points — see your earnings\n` +
         `• /rewards — claim $BLUEAGENT\n\n` +
@@ -4190,13 +4477,23 @@ async function postWeeklyRecap() {
   const weeklyRefs = referrals.filter(r => r.timestamp > weekAgo).length
 
   // Top 3 builders by points
-  const top3 = Object.values(users)
+  const sortedUsers = Object.values(users)
     .sort((a: any, b: any) => (b.points || 0) - (a.points || 0))
-    .slice(0, 3)
-    .map((u: any, i: number) => {
+
+  const top3 = sortedUsers.slice(0, 3)
+
+  // Award +100 pts to top 3
+  top3.forEach((u: any, i: number) => {
+    if (users[u.id]) {
+      users[u.id].points = (users[u.id].points || 0) + 100
+    }
+  })
+  saveUsers(users)
+
+  const top3Lines = top3.map((u: any, i: number) => {
       const medal = ['🥇', '🥈', '🥉'][i]
       const name = u.telegramUsername ? `@${u.telegramUsername}` : u.telegramName || 'Builder'
-      return `${medal} ${name} — <b>${u.points || 0} pts</b>`
+      return `${medal} ${name} — <b>${u.points || 0} pts</b> (+100 bonus 🎉)`
     })
 
   const recap =
@@ -4207,7 +4504,7 @@ async function postWeeklyRecap() {
     `🔗 Referrals made: <b>${weeklyRefs}</b>\n` +
     `──────────────\n` +
     `<b>🏆 Top Builders This Week:</b>\n` +
-    top3.join('\n') +
+    top3Lines.join('\n') +
     `\n──────────────\n` +
     `<i>Keep building. See you next week 🟦</i>`
 
@@ -5559,12 +5856,9 @@ interface Subscription {
   userId?: number
   projectName: string
   tier: string
-  months?: number
   address: string      // buyer's wallet
   amount: number       // USDC amount
   txHash?: string
-  licenseKey?: string
-  reminderSent?: boolean
   startAt: number
   expiresAt: number
   active: boolean
@@ -5579,24 +5873,11 @@ const PAYMENT_ADDRESS = process.env.PAYMENT_ADDRESS || '0xf31f59e7b8b58555f7871f
 
 // Tier pricing in USDC
 const TIER_PRICE: Record<string, number> = {
-  seed:  49,
-  pro:   199,
-  scale: 499
+  seed:   49,
+  growth: 99,
+  pro:    199,
+  scale:  499
 }
-
-// Multi-month discount
-const MONTH_DISCOUNT: Record<number, number> = { 1: 0, 3: 0.10, 6: 0.15, 12: 0.20 }
-const BLUEAGENT_DISCOUNT = 0.20
-
-function calcPrice(tier: string, months: number, currency: 'usdc' | 'blueagent' = 'usdc'): number {
-  const base = TIER_PRICE[tier] || 0
-  const discount = MONTH_DISCOUNT[months] || 0
-  const total = base * months * (1 - discount)
-  if (currency === 'blueagent') return Math.round(total * (1 - BLUEAGENT_DISCOUNT) * 100) / 100
-  return Math.round(total * 100) / 100
-}
-
-const subSessions = new Map<number, { tier: string; months: number; currency: 'usdc' | 'blueagent'; step: string }>()
 
 // =======================
 // PORTFOLIO
@@ -5807,70 +6088,74 @@ bot.onText(/\/pricing/, async (msg) => {
   const chatId = msg.chat.id
   await bot.sendMessage(chatId,
     `💳 <b>Community Kit — Pricing</b>\n\n` +
-    `🆓 <b>Free</b> — $0\nPoints, Leaderboard, Referrals, Onboarding, Projects\n\n` +
-    `🌱 <b>Seed</b> — $49/month\n+ Price Alerts, Gem Signals, Raffle, Scheduled Posts\n\n` +
-    `⚡ <b>Pro</b> — $199/month\n+ Token Claim, Broadcast DM, Flash Quests, Bounties, Proposals\n\n` +
-    `🚀 <b>Scale</b> — $499/month\n+ Analytics Export, Token Gate, Custom Branding\n\n` +
+    `🆓 <b>Free</b> — $0\nCore community features, self-host\n\n` +
+    `🌱 <b>Seed</b> — $49/month\nTrade tracker, alerts, mini-games, raffle\n\n` +
+    `⚡ <b>Growth</b> — $99/month\nBuilder score, bounties, proposals, X quests\n\n` +
+    `🔥 <b>Pro</b> — $199/month\nToken claim, broadcast DM, analytics\n\n` +
+    `🏆 <b>Scale</b> — $499/month\nEverything + white label + managed hosting\n\n` +
     `──────────────\n` +
-    `💰 Pay <b>USDC</b> or <b>$BLUEAGENT</b> (-20%) on Base\n` +
-    `📊 Multi-month: 3mo -10% | 6mo -15% | 12mo -20%\n\n` +
-    `<i>Use /subscribe to get started</i>`,
+    `💰 Pay with <b>USDC on Base</b>\n` +
+    `📩 DM @madebyshun to subscribe\n\n` +
+    `<i>Annual plans: 20% discount</i>`,
     {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [
-        [{ text: '💳 Subscribe Now', callback_data: 'start_subscribe' }],
-        [{ text: '⭐ GitHub', url: 'https://github.com/madebyshun/community-kit' }, { text: '💬 DM @blockyagent_bot', url: 'https://t.me/blockyagent_bot' }]
+        [{ text: '📩 Subscribe Now', url: 'https://t.me/madebyshun' }],
+        [{ text: '🌐 See full features', url: 'https://blueagent.xyz/community-kit' }]
       ]}
     } as any
   )
 })
 
-// /subscribe — self-service payment flow
-bot.onText(/^\/subscribe(@\w+)?$/, async (msg) => {
-  const chatId = msg.chat.id
-  const userId = msg.from?.id || chatId
-  if (msg.chat.type !== 'private') {
-    await bot.sendMessage(chatId, '🔒 Please DM me to subscribe: @' + BOT_USERNAME)
-    return
-  }
-  subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
-  await bot.sendMessage(chatId,
-    `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-      [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
-      [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
-      [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
-      [{ text: '💰 View pricing details', callback_data: 'sub_pricing' }]
-    ]}} as any
-  )
-})
-
-// /subscribe_admin — owner manually records
-bot.onText(/\/subscribe_admin(?:\s+(.+))?/, async (msg) => {
+// /subscribe — owner records a subscription
+bot.onText(/\/subscribe(?:\s+(.+))?/, async (msg) => {
   if (!isOwner(msg)) return
   const chatId = msg.chat.id
   const input = msg.text?.split('\n').slice(1).join('\n').trim() || ''
+
   if (!input) {
     await bot.sendMessage(chatId,
-      `💳 <b>Record Subscription (Admin)</b>\n\nFormat:\n<code>/subscribe_admin\nproject: My Project\ntier: seed\nmonths: 3\naddress: 0x...\ntx: 0x...\n</code>`,
-      { parse_mode: 'HTML' } as any)
+      `💳 <b>Record Subscription</b>\n\nFormat:\n<code>/subscribe\nproject: My Project\ntier: seed\naddress: 0x...\ntx: 0x... (optional)\n</code>`,
+      { parse_mode: 'HTML' } as any
+    )
     return
   }
+
   const lines = input.split('\n')
-  let project = '', tier = '', address = '', tx = '', months = 1
+  let project = '', tier = '', address = '', tx = ''
   for (const line of lines) {
     if (line.startsWith('project:')) project = line.replace('project:', '').trim()
     else if (line.startsWith('tier:')) tier = line.replace('tier:', '').trim().toLowerCase()
-    else if (line.startsWith('months:')) months = parseInt(line.replace('months:', '').trim()) || 1
     else if (line.startsWith('address:')) address = line.replace('address:', '').trim()
     else if (line.startsWith('tx:')) tx = line.replace('tx:', '').trim()
   }
+
   if (!project || !tier || !address) { await bot.sendMessage(chatId, '❌ Need: project, tier, address'); return }
-  if (!TIER_PRICE[tier]) { await bot.sendMessage(chatId, `❌ Invalid tier: ${Object.keys(TIER_PRICE).join(', ')}`); return }
-  const amount = calcPrice(tier, months)
-  const sub: Subscription = { userId: undefined, projectName: project, tier, address, txHash: tx||undefined, amount, startAt: Date.now(), expiresAt: Date.now() + months*30*24*60*60*1000, active: true }
-  const subs = loadSubs(); subs.push(sub); saveSubs(subs)
-  await bot.sendMessage(chatId, `✅ Recorded: ${project} | ${tier} | ${months}mo | $${amount}${tx?`\nTX: <code>${tx.slice(0,20)}...</code>`:''}`, { parse_mode: 'HTML' } as any)
+  if (!TIER_PRICE[tier]) { await bot.sendMessage(chatId, `❌ Invalid tier. Options: ${Object.keys(TIER_PRICE).join(', ')}`); return }
+
+  const sub: Subscription = {
+    projectName: project,
+    tier,
+    address,
+    txHash: tx || undefined,
+    amount: TIER_PRICE[tier],
+    startAt: Date.now(),
+    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    active: true
+  }
+
+  const subs = loadSubs()
+  subs.push(sub)
+  saveSubs(subs)
+
+  await bot.sendMessage(chatId,
+    `✅ <b>Subscription recorded!</b>\n\n` +
+    `📦 Project: ${project}\n` +
+    `🏷️ Tier: ${tier} ($${TIER_PRICE[tier]}/mo)\n` +
+    `📅 Expires: ${new Date(sub.expiresAt).toLocaleDateString()}\n` +
+    `${tx ? `🔗 TX: <code>${tx.slice(0, 20)}...</code>` : ''}`,
+    { parse_mode: 'HTML' } as any
+  )
 })
 
 // /subs — list subscriptions
@@ -5894,206 +6179,545 @@ bot.onText(/\/subs/, async (msg) => {
 console.log('💳 USDC Payment & subscription tracking initialized')
 
 // =======================
-// SUBSCRIPTION CALLBACKS
+// /dexpay — DexScreener Enhanced Token Info
+// Pay $300 USDC to update token info on DexScreener
 // =======================
+import sharp from 'sharp'
 
-// =======================
-// LICENSE KEY SYSTEM
-// =======================
-function generateLicenseKey(tier: string, months: number): string {
-  const rand = Math.random().toString(36).slice(2, 10).toUpperCase()
-  return `ck_${tier}_${months}mo_${rand}`
+interface DexPayState {
+  step: 'chain' | 'ca' | 'website' | 'twitter' | 'telegram' | 'description' | 'icon' | 'header' | 'review' | 'payment' | 'update_field' | 'update_value'
+  chain?: string
+  ca?: string
+  website?: string
+  twitter?: string
+  telegramLink?: string
+  description?: string
+  iconPath?: string
+  headerPath?: string
+  updateField?: string
+  orderRef?: string
 }
 
-function parseLicenseKey(key: string): { tier: string; months: number } | null {
-  const match = key.match(/^ck_(seed|pro|scale)_(\d+)mo_[A-Z0-9]+$/)
-  if (!match) return null
-  return { tier: match[1], months: parseInt(match[2]) }
+const dexPaySessions = new Map<number, DexPayState>()
+
+const DEXPAY_TREASURY = process.env.TREASURY_ADDRESS || '0xf31f59e7b8b58555f7871f71973a394c4c8f1bffe5'
+const DEXPAY_OWNER_ID = parseInt(process.env.OWNER_ID || process.env.OWNER_TELEGRAM_ID || '6614397596', 10)
+
+const DEXPAY_CHAINS = [
+  [{ text: '◎ Solana', callback_data: 'dexpay_chain_solana' }, { text: '⧫ ETH', callback_data: 'dexpay_chain_eth' }],
+  [{ text: '🔵 Base', callback_data: 'dexpay_chain_base' }, { text: '🟡 BSC', callback_data: 'dexpay_chain_bsc' }],
+  [{ text: '🔷 Arbitrum', callback_data: 'dexpay_chain_arbitrum' }, { text: '🟣 Polygon', callback_data: 'dexpay_chain_polygon' }],
+  [{ text: '🔺 Avalanche', callback_data: 'dexpay_chain_avalanche' }, { text: '🔴 Optimism', callback_data: 'dexpay_chain_optimism' }],
+  [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+]
+
+function dexPayChainLabel(chain: string): string {
+  const map: Record<string, string> = {
+    solana: '◎ Solana', eth: '⧫ ETH', base: '🔵 Base', bsc: '🟡 BSC',
+    arbitrum: '🔷 Arbitrum', polygon: '🟣 Polygon', avalanche: '🔺 Avalanche', optimism: '🔴 Optimism'
+  }
+  return map[chain] || chain
 }
 
-// /my-license — buyer checks their license
-bot.onText(/\/my_license|^\/mylicense/, async (msg) => {
+function dexPaySummary(s: DexPayState): string {
+  return (
+    `📋 <b>Order Summary</b>\n\n` +
+    `⛓ Chain: <b>${dexPayChainLabel(s.chain!)}</b>\n` +
+    `📝 CA: <code>${s.ca}</code>\n\n` +
+    `🌐 Website: ${s.website || '—'}\n` +
+    `🐦 Twitter: ${s.twitter ? '@' + s.twitter : '—'}\n` +
+    `💬 Telegram: ${s.telegramLink || '—'}\n` +
+    `📄 Description: ${s.description || '—'}\n\n` +
+    `🖼 Icon: ${s.iconPath ? '✅ Uploaded' : '—'}\n` +
+    `🖼 Header: ${s.headerPath ? '✅ Uploaded' : '—'}\n\n` +
+    `──────────────────\n` +
+    `` +
+    `` +
+    `💵 Price: <b>$300 USDC</b>`
+  )
+}
+
+// /dexpay update — update existing order
+bot.onText(/\/dexpay update(?:\s+(\S+))?/, async (msg, match) => {
   const chatId = msg.chat.id
   const userId = msg.from?.id || chatId
-  const subs = loadSubs()
-  const userSubs = subs.filter(s => s.userId === userId && s.active && Date.now() < s.expiresAt)
-  if (!userSubs.length) {
-    await bot.sendMessage(chatId,
-      `🔑 No active license found.\n\nUse /subscribe to get Community Kit.`,
-      { parse_mode: 'HTML' } as any)
-    return
-  }
-  const sub = userSubs[userSubs.length - 1]
-  const key = sub.licenseKey || 'Key not found — contact @blockyagent_bot'
-  const daysLeft = Math.ceil((sub.expiresAt - Date.now()) / (1000 * 60 * 60 * 24))
-  await bot.sendMessage(chatId,
-    `🔑 <b>Your License</b>\n\n` +
-    `🏷️ Plan: <b>${sub.tier.toUpperCase()}</b>\n` +
-    `⏰ Expires: ${new Date(sub.expiresAt).toLocaleDateString()} (${daysLeft} days left)\n\n` +
-    `<b>License Key:</b>\n<code>${key}</code>\n\n` +
-    `Add to your bot's <code>.env</code>:\n` +
-    `<code>COMMUNITY_KIT_LICENSE=${key}</code>\n\n` +
-    `Then restart your bot → features unlock automatically.`,
-    { parse_mode: 'HTML' } as any)
-})
-
-// TX hash verification for subscription
-bot.on('message', async (msg) => {
   if (msg.chat.type !== 'private') return
-  const userId = msg.from?.id; if (!userId) return
-  const session = subSessions.get(userId)
-  if (!session || session.step !== 'awaiting_tx') return
-  const text = msg.text?.trim() || ''
-  if (!text.startsWith('0x') || text.length < 60) return
-  const chatId = msg.chat.id
-  await bot.sendMessage(chatId, '⏳ Verifying on Base...')
-  try {
-    const res = await axios.get(`https://api.basescan.org/api?module=transaction&action=gettxreceiptstatus&txhash=${text}&apikey=${BASESCAN_API}`, { timeout: 10000 })
-    const status = res.data?.result?.status
-    if (status === '1') {
-      const amount = calcPrice(session.tier, session.months, session.currency)
-      const licenseKey = generateLicenseKey(session.tier, session.months)
-      const sub: Subscription = {
-        userId, projectName: `User ${userId}`, tier: session.tier, address: '',
-        txHash: text, amount, licenseKey,
-        startAt: Date.now(),
-        expiresAt: Date.now() + session.months * 30 * 24 * 60 * 60 * 1000,
-        active: true
-      }
-      const subs = loadSubs(); subs.push(sub); saveSubs(subs)
-      subSessions.delete(userId)
 
-      await bot.sendMessage(chatId,
-        `✅ <b>Payment verified!</b>\n\n` +
-        `🏷️ Plan: <b>${session.tier.toUpperCase()}</b> · ${session.months} month${session.months>1?'s':''}\n` +
-        `💰 $${amount} ${session.currency.toUpperCase()}\n` +
-        `⏰ Expires: ${new Date(sub.expiresAt).toLocaleDateString()}\n\n` +
-        `🔑 <b>Your License Key:</b>\n<code>${licenseKey}</code>\n\n` +
-        `Add to your bot's <code>.env</code>:\n` +
-        `<code>COMMUNITY_KIT_LICENSE=${licenseKey}</code>\n\n` +
-        `Restart your bot → <b>${session.tier.toUpperCase()} features unlock automatically</b> ✅\n\n` +
-        `📖 Setup guide: github.com/madebyshun/community-kit\n` +
-        `💬 Need help? /my_license or @blockyagent_bot`,
-        { parse_mode: 'HTML' } as any)
-
-      await bot.sendMessage(OWNER_ID,
-        `💰 <b>New Subscription!</b>\n\n` +
-        `User: @${msg.from?.username || userId} (${userId})\n` +
-        `Tier: <b>${session.tier}</b> · ${session.months}mo\n` +
-        `Amount: $${amount} ${session.currency.toUpperCase()}\n` +
-        `Key: <code>${licenseKey}</code>\n` +
-        `TX: <code>${text}</code>`,
-        { parse_mode: 'HTML' } as any)
-
-    } else if (status === '0') {
-      await bot.sendMessage(chatId, '❌ Transaction failed on-chain. Please try again.')
-    } else {
-      await bot.sendMessage(chatId, '⚠️ Cannot verify yet — may be pending. Wait 1 min and paste again.')
-    }
-  } catch {
-    await bot.sendMessage(chatId, '⚠️ Verification error. Contact @blockyagent_bot with your TX hash.')
+  const orderRef = match?.[1]
+  if (orderRef) {
+    dexPaySessions.set(userId, { step: 'update_field', orderRef })
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update Order Info</b>\n\n📋 Ref: <code>${orderRef}</code>\n\nWhat do you want to update?`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🌐 Website', callback_data: 'dexpay_upd_website' }, { text: '🐦 Twitter', callback_data: 'dexpay_upd_twitter' }],
+            [{ text: '💬 Telegram', callback_data: 'dexpay_upd_telegram' }, { text: '📄 Description', callback_data: 'dexpay_upd_description' }],
+            [{ text: '🖼 Icon Image', callback_data: 'dexpay_upd_icon' }, { text: '🖼 Header Image', callback_data: 'dexpay_upd_header' }],
+            [{ text: '📝 Other Info', callback_data: 'dexpay_upd_other' }],
+            [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }],
+          ]
+        }
+      } as any
+    )
+  } else {
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update DexPay Order</b>\n\n` +
+      `Enter your order reference number:\n<code>/dexpay update DP-xxxxx</code>\n\n` +
+      `📋 You can find your ref in the order confirmation message.`,
+      { parse_mode: 'HTML' } as any
+    )
   }
 })
 
-// Expiry reminder cron — check daily, DM users 7 days before expiry
-setInterval(async () => {
-  try {
-    const subs = loadSubs()
-    const now = Date.now()
-    const sevenDays = 7 * 24 * 60 * 60 * 1000
-    for (const sub of subs) {
-      if (!sub.active || !sub.userId) continue
-      const timeLeft = sub.expiresAt - now
-      if (timeLeft > 0 && timeLeft <= sevenDays && !sub.reminderSent) {
-        const daysLeft = Math.ceil(timeLeft / (1000 * 60 * 60 * 24))
-        try {
-          await bot.sendMessage(sub.userId,
-            `⏰ <b>License expiring soon!</b>\n\n` +
-            `Your <b>${sub.tier.toUpperCase()}</b> plan expires in <b>${daysLeft} day${daysLeft>1?'s':''}</b>.\n\n` +
-            `Renew now to keep your features active:\n/subscribe`,
-            { parse_mode: 'HTML' } as any)
-          // Mark reminder sent
-          const idx = subs.indexOf(sub)
-          subs[idx].reminderSent = true
-          saveSubs(subs)
-        } catch {}
-      }
-    }
-  } catch {}
-}, 24 * 60 * 60 * 1000) // check every 24h
-
-console.log('🔑 License key system initialized')
-
-// =======================
-// RENEW COMMAND
-// =======================
-bot.onText(/\/renew/, async (msg) => {
+// /dexpay command
+bot.onText(/\/dexpay/, async (msg) => {
   const chatId = msg.chat.id
   const userId = msg.from?.id || chatId
+
+  // Only in DM
   if (msg.chat.type !== 'private') {
-    await bot.sendMessage(chatId, '🔒 Please DM me to renew: @' + BOT_USERNAME)
+    await bot.sendMessage(chatId,
+      '🔒 Please use /dexpay in a private chat with the bot.',
+      { parse_mode: 'HTML' } as any
+    )
     return
   }
-  const subs = loadSubs()
-  const lastSub = subs.filter(s => s.userId === userId).sort((a,b) => b.startAt - a.startAt)[0]
-  const currentTier = lastSub?.tier || ''
-  subSessions.set(userId, { tier: currentTier, months: 1, currency: 'usdc', step: 'tier' })
+
+  dexPaySessions.set(userId, { step: 'chain' })
+
   await bot.sendMessage(chatId,
-    `🔄 <b>Renew Subscription</b>\n\n` +
-    `${lastSub ? `Current plan: <b>${lastSub.tier.toUpperCase()}</b> · expires ${new Date(lastSub.expiresAt).toLocaleDateString()}\n\n` : ''}` +
-    `Choose plan to renew:`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-      [{ text: `🌱 Seed — $49/mo${currentTier==='seed'?' ✓':''}`, callback_data: 'sub_tier_seed' }],
-      [{ text: `⚡ Pro — $199/mo${currentTier==='pro'?' ✓':''}`, callback_data: 'sub_tier_pro' }],
-      [{ text: `🚀 Scale — $499/mo${currentTier==='scale'?' ✓':''}`, callback_data: 'sub_tier_scale' }]
-    ]}} as any
+    `🟦 <b>DexScreener Enhanced Token Info</b>\n\n` +
+    `Get your token's info updated on DexScreener with website, socials, description & images.\n\n` +
+    `💵 Price: <b>$300 USDC</b>\n\n` +
+    `<b>Step 1/6 — Select Chain:</b>`,
+    { parse_mode: 'HTML', reply_markup: { inline_keyboard: DEXPAY_CHAINS } } as any
   )
 })
 
-// =======================
-// OWNER REVENUE STATS
-// =======================
-bot.onText(/\/revenue/, async (msg) => {
-  if (!isOwner(msg)) return
-  const chatId = msg.chat.id
-  const subs = loadSubs()
-  const now = Date.now()
-  const active = subs.filter(s => s.active && now < s.expiresAt)
-  const expiringSoon = active.filter(s => s.expiresAt - now < 7 * 24 * 60 * 60 * 1000)
-  const thisMonth = subs.filter(s => s.startAt > now - 30 * 24 * 60 * 60 * 1000)
-  const mrr = active.reduce((sum, s) => sum + (s.amount / (s.months || 1)), 0)
-  const tierCount = active.reduce((acc: Record<string,number>, s) => { acc[s.tier] = (acc[s.tier]||0)+1; return acc }, {})
+// callback_query handler for dexpay_*
+bot.on('callback_query', async (query) => {
+  const data = query.data
+  if (!data || !data.startsWith('dexpay_')) return
 
-  await bot.sendMessage(chatId,
-    `💰 <b>Revenue Dashboard</b>\n\n` +
-    `📊 <b>Active subs:</b> ${active.length}\n` +
-    `📅 <b>New this month:</b> ${thisMonth.length}\n` +
-    `⚠️ <b>Expiring soon (7d):</b> ${expiringSoon.length}\n\n` +
-    `<b>By tier:</b>\n` +
-    `🌱 Seed: ${tierCount['seed']||0}\n` +
-    `⚡ Pro: ${tierCount['pro']||0}\n` +
-    `🚀 Scale: ${tierCount['scale']||0}\n\n` +
-    `💵 <b>Est. MRR: $${Math.round(mrr)}</b>\n\n` +
-    `${expiringSoon.length ? `⚠️ Expiring soon:\n` + expiringSoon.map(s => `• ${s.projectName} (${s.tier}) — ${Math.ceil((s.expiresAt-now)/86400000)}d`).join('\n') : ''}`,
-    { parse_mode: 'HTML' } as any)
+  const chatId = query.message?.chat.id
+  const userId = query.from?.id || 0
+  if (!chatId) return
+
+  await bot.answerCallbackQuery(query.id).catch(() => {})
+
+  // Cancel
+  if (data === 'dexpay_cancel') {
+    dexPaySessions.delete(userId)
+    await bot.deleteMessage(chatId, query.message?.message_id!).catch(() => {})
+    return
+  }
+
+  // Update order — user clicks "✏️ Update Order Info"
+  if (data.startsWith('dexpay_update_')) {
+    const orderRef = data.replace('dexpay_update_', '')
+    dexPaySessions.set(userId, { step: 'update_field', orderRef })
+    await bot.answerCallbackQuery(query.id)
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update Order Info</b>\n\n` +
+      `📋 Ref: <code>${orderRef}</code>\n\n` +
+      `What do you want to update?`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🌐 Website', callback_data: 'dexpay_upd_website' }, { text: '🐦 Twitter', callback_data: 'dexpay_upd_twitter' }],
+            [{ text: '💬 Telegram', callback_data: 'dexpay_upd_telegram' }, { text: '📄 Description', callback_data: 'dexpay_upd_description' }],
+            [{ text: '🖼 Icon Image', callback_data: 'dexpay_upd_icon' }, { text: '🖼 Header Image', callback_data: 'dexpay_upd_header' }],
+            [{ text: '📝 Other Info', callback_data: 'dexpay_upd_other' }],
+            [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }],
+          ]
+        }
+      } as any
+    )
+    return
+  }
+
+  // Update field selected
+  if (data.startsWith('dexpay_upd_')) {
+    const field = data.replace('dexpay_upd_', '')
+    const session = dexPaySessions.get(userId)
+    if (!session) return
+    await bot.answerCallbackQuery(query.id)
+
+    session.step = 'update_value'
+    session.updateField = field
+    dexPaySessions.set(userId, session)
+
+    const fieldLabels: Record<string, string> = {
+      website: '🌐 New website URL:',
+      twitter: '🐦 New Twitter handle (without @):',
+      telegram: '💬 New Telegram link:',
+      description: '📄 New description (max 300 chars):',
+      icon: '🖼 Upload new Icon image (1:1 ratio, will be resized to 512×512):',
+      header: '🖼 Upload new Header image (3:1 ratio, will be resized to 1500×500):',
+      other: '📝 Type the additional info you want to add to your order:',
+    }
+
+    await bot.sendMessage(chatId,
+      `✏️ <b>Update — ${field.charAt(0).toUpperCase() + field.slice(1)}</b>\n\n` +
+      (fieldLabels[field] || 'Enter new value:'),
+      {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] }
+      } as any
+    )
+    return
+  }
+
+  // Chain selection
+  if (data.startsWith('dexpay_chain_')) {
+    const chain = data.replace('dexpay_chain_', '')
+    const session = dexPaySessions.get(userId) || { step: 'chain' as const }
+    session.chain = chain
+    session.step = 'ca'
+    dexPaySessions.set(userId, session)
+
+    await bot.editMessageText(
+      `✅ Chain: <b>${dexPayChainLabel(chain)}</b>\n\n<b>Step 2/6 — Enter Contract Address (CA):</b>`,
+      { chat_id: chatId, message_id: query.message?.message_id, parse_mode: 'HTML' } as any
+    ).catch(() => {})
+    return
+  }
+
+  // Confirm order → go to payment
+  if (data === 'dexpay_confirm') {
+    const session = dexPaySessions.get(userId)
+    if (!session) return
+
+    session.step = 'payment'
+    dexPaySessions.set(userId, session)
+
+    await bot.sendMessage(chatId,
+      `💳 <b>Step 6/6 — Payment</b>\n\n` +
+      `Send exactly <b>$300 USDC</b> to the address below on any supported chain:\n\n` +
+      `<code>${DEXPAY_TREASURY}</code>\n\n` +
+      `⚠️ After payment, click <b>✅ I've Paid</b> below to submit your order.`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ I\'ve Paid — Submit Order', callback_data: 'dexpay_paid' }],
+            [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+          ]
+        }
+      } as any
+    )
+    return
+  }
+
+  // Skip buttons
+  if (data.startsWith('dexpay_skip_')) {
+    const field = data.replace('dexpay_skip_', '')
+    const session = dexPaySessions.get(userId) || { step: 'chain' as const }
+
+    if (field === 'website') {
+      session.website = undefined; session.step = 'twitter'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Website skipped.\n\n🐦 Twitter handle:\n<i>e.g. @mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_twitter' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'twitter') {
+      session.twitter = undefined; session.step = 'telegram'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Twitter skipped.\n\n💬 Telegram link:\n<i>e.g. https://t.me/mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_telegram' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'telegram') {
+      session.telegramLink = undefined; session.step = 'description'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Telegram skipped.\n\n📄 Description <i>(max 300 chars)</i>:`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_description' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'description') {
+      session.description = undefined; session.step = 'icon'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Description skipped.\n\n<b>Step 4/6 — Upload Images</b>\n\n🖼 Upload your token <b>Icon</b> (1:1 ratio).\nBot will auto-resize to 512×512.`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Icon', callback_data: 'dexpay_skip_icon' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'icon') {
+      session.iconPath = undefined; session.step = 'header'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId, `⏭ Icon skipped.\n\n🖼 Upload your token <b>Header</b> (3:1 ratio).\nBot will auto-resize to 1500×500.`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Header', callback_data: 'dexpay_skip_header' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    } else if (field === 'header') {
+      session.headerPath = undefined; session.step = 'review'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        dexPaySummary(session) + '\n\n<b>Step 5/6 — Review Order</b>\n\nLooks good?',
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ Confirm & Proceed to Payment', callback_data: 'dexpay_confirm' }], [{ text: '✏️ Edit Info', callback_data: 'dexpay_edit' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any)
+    }
+    return
+  }
+
+  // Edit info — go back to step
+  if (data === 'dexpay_edit') {
+    const session = dexPaySessions.get(userId)
+    if (!session) return
+    session.step = 'website'
+    dexPaySessions.set(userId, session)
+    await bot.sendMessage(chatId,
+      `✏️ <b>Edit Info</b>\n\n<b>Step 3/6 — Website URL:</b>\n<i>Type "skip" to leave blank</i>`,
+      { parse_mode: 'HTML' } as any
+    )
+    return
+  }
+
+  // User paid — finalize order
+  if (data === 'dexpay_paid') {
+    const session = dexPaySessions.get(userId)
+    if (!session) {
+      await bot.sendMessage(chatId, '❌ Session expired. Please run /dexpay again.')
+      return
+    }
+
+    dexPaySessions.delete(userId)
+
+    const username = query.from?.username ? `@${query.from.username}` : query.from?.first_name || `ID:${userId}`
+
+    // Notify user
+    const orderRef = `DP-${userId}-${Date.now()}`
+
+    await bot.sendMessage(chatId,
+      `✅ <b>Order Received!</b>\n\n` +
+      `We'll process your DexScreener Enhanced Token Info update within <b>12 hours</b>.\n\n` +
+      `📋 Order ref: <code>${orderRef}</code>\n\n` +
+      `Need to add more info? Use the button below anytime.\n\n` +
+      `Thank you! 🟦`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✏️ Update Order Info', callback_data: `dexpay_update_${orderRef}` }]
+          ]
+        }
+      } as any
+    )
+
+    // Notify owner
+    const ownerMsg =
+      `🛒 <b>New DexPay Order!</b>\n\n` +
+      `👤 User: ${username} (ID: ${userId})\n` +
+      `📋 Ref: <code>${orderRef}</code>\n\n` +
+      dexPaySummary(session) +
+      `\n\n💡 Process manually on DexScreener.`
+
+    bot.sendMessage(DEXPAY_OWNER_ID, ownerMsg, { parse_mode: 'HTML' } as any).catch(console.error)
+    return
+  }
 })
 
-// =======================
-// UPSELL ON GATED FEATURES
-// =======================
-function upgradePrompt(feature: string, chatId: number) {
-  const tierMap: Record<string, string> = {
-    gem_signals: 'seed', raffle: 'seed', price_alerts: 'seed', scheduled_posts: 'seed',
-    token_claim: 'pro', broadcast_dm: 'pro', flash_quests: 'pro', bounties: 'pro', proposal_voting: 'pro',
-    analytics_export: 'scale', token_gate: 'scale', custom_branding: 'scale'
+// bot.on('message') handler for dexpay text & photo inputs
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from?.id || chatId
+
+  const session = dexPaySessions.get(userId)
+  if (!session) return
+
+  // ── Update order text/photo input ──
+  if (session.step === 'update_value') {
+    const field = session.updateField || 'other'
+    const orderRef = session.orderRef || 'unknown'
+    const username = msg.from?.username ? `@${msg.from.username}` : msg.from?.first_name || `ID:${userId}`
+
+    // Handle photo for icon/header
+    if ((field === 'icon' || field === 'header') && (msg.photo || msg.document)) {
+      let fileId: string | undefined
+      if (msg.photo) fileId = msg.photo[msg.photo.length - 1]?.file_id
+      else if (msg.document) fileId = msg.document.file_id
+
+      if (fileId) {
+        await bot.sendMessage(chatId, `✅ Image received! We'll update your order.\n\n📋 Ref: <code>${orderRef}</code>`, { parse_mode: 'HTML' } as any)
+        bot.sendMessage(DEXPAY_OWNER_ID,
+          `✏️ <b>DexPay Update Request</b>\n\n👤 ${username} (ID: ${userId})\n📋 Ref: <code>${orderRef}</code>\n📌 Field: <b>${field}</b>\n\n⬆️ Image uploaded above.`,
+          { parse_mode: 'HTML' } as any
+        ).catch(() => {})
+        bot.forwardMessage(DEXPAY_OWNER_ID, chatId, msg.message_id).catch(() => {})
+        dexPaySessions.delete(userId)
+      }
+      return
+    }
+
+    // Handle text update
+    if (msg.text && !msg.text.startsWith('/')) {
+      const value = msg.text.trim()
+      dexPaySessions.delete(userId)
+
+      await bot.sendMessage(chatId,
+        `✅ <b>Update Received!</b>\n\n` +
+        `📋 Ref: <code>${orderRef}</code>\n` +
+        `📌 Field: <b>${field}</b>\n` +
+        `📝 Value: ${value}\n\n` +
+        `We'll apply this to your order within 12 hours. 🟦`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: '✏️ Update More', callback_data: `dexpay_update_${orderRef}` }]] }
+        } as any
+      )
+
+      bot.sendMessage(DEXPAY_OWNER_ID,
+        `✏️ <b>DexPay Update Request</b>\n\n` +
+        `👤 ${username} (ID: ${userId})\n` +
+        `📋 Ref: <code>${orderRef}</code>\n` +
+        `📌 Field: <b>${field}</b>\n` +
+        `📝 New value: ${value}`,
+        { parse_mode: 'HTML' } as any
+      ).catch(() => {})
+      return
+    }
+    return
   }
-  const needed = tierMap[feature] || 'pro'
-  const price: Record<string,string> = { seed: '$49/mo', pro: '$199/mo', scale: '$499/mo' }
-  bot.sendMessage(chatId,
-    `⚡ <b>This feature requires Community Kit ${needed.toUpperCase()}</b> (${price[needed]})\n\n` +
-    `Upgrade to unlock it + all ${needed} features:`,
-    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-      [{ text: `💳 Upgrade to ${needed.toUpperCase()} — ${price[needed]}`, callback_data: `sub_tier_${needed}` }],
-      [{ text: '📊 See all features', callback_data: 'ck_pricing' }]
-    ]}} as any)
-}
+
+  // ── Text inputs ──
+  if (msg.text && !msg.text.startsWith('/')) {
+    const text = msg.text.trim()
+
+    if (session.step === 'ca') {
+      session.ca = text
+      session.step = 'website'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ CA saved.\n\n<b>Step 3/6 — Token Info</b>\n\n🌐 Website URL:`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_website' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'website') {
+      session.website = text.toLowerCase() === 'skip' ? undefined : text
+      session.step = 'twitter'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Website saved.\n\n🐦 Twitter handle:\n<i>e.g. @mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_twitter' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'twitter') {
+      session.twitter = text.toLowerCase() === 'skip' ? undefined : text.replace(/^@/, '')
+      session.step = 'telegram'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Twitter saved.\n\n💬 Telegram link:\n<i>e.g. https://t.me/mytoken</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_telegram' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'telegram') {
+      session.telegramLink = text.toLowerCase() === 'skip' ? undefined : text
+      session.step = 'description'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Telegram saved.\n\n📄 Description <i>(max 300 chars)</i>:`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_description' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'description') {
+      if (text.toLowerCase() !== 'skip' && text.length > 300) {
+        await bot.sendMessage(chatId, `⚠️ Too long (${text.length}/300 chars). Shorten it:`,
+          { reply_markup: { inline_keyboard: [[{ text: '⏭ Skip', callback_data: 'dexpay_skip_description' }]] } } as any
+        )
+        return
+      }
+      session.description = text.toLowerCase() === 'skip' ? undefined : text
+      session.step = 'icon'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        `✅ Description saved.\n\n<b>Step 4/6 — Upload Images</b>\n\n🖼 Upload your token <b>Icon</b> (1:1 ratio).\nBot will auto-resize to 512×512.`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Icon', callback_data: 'dexpay_skip_icon' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+      )
+      return
+    }
+
+    if (session.step === 'header' && text.toLowerCase() === 'skip') {
+      session.step = 'review'
+      dexPaySessions.set(userId, session)
+      await bot.sendMessage(chatId,
+        dexPaySummary(session) + '\n\n<b>Step 5/6 — Review Order</b>\n\nLooks good?',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ Confirm & Proceed to Payment', callback_data: 'dexpay_confirm' }],
+              [{ text: '✏️ Edit Info', callback_data: 'dexpay_edit' }],
+              [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+            ]
+          }
+        } as any
+      )
+      return
+    }
+  }
+
+  // ── Photo inputs ──
+  if (msg.photo || msg.document) {
+    if (session.step !== 'icon' && session.step !== 'header') return
+
+    // Get largest photo or document
+    let fileId: string | undefined
+    if (msg.photo) {
+      const photos = msg.photo
+      fileId = photos[photos.length - 1]?.file_id
+    } else if (msg.document) {
+      fileId = msg.document.file_id
+    }
+
+    if (!fileId) return
+
+    try {
+      const fileInfo = await (bot as any).getFile(fileId)
+      const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfo.file_path}`
+
+      // Download file buffer
+      const imgRes = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 })
+      const inputBuffer = Buffer.from(imgRes.data)
+
+      const uploadsDir = path.join(__dirname, '..', 'data', 'dexpay_uploads')
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
+
+      if (session.step === 'icon') {
+        const outPath = path.join(uploadsDir, `icon_${userId}_${Date.now()}.png`)
+        await sharp(inputBuffer).resize(512, 512, { fit: 'cover' }).toFormat('png').toFile(outPath)
+        session.iconPath = outPath
+        session.step = 'header'
+        dexPaySessions.set(userId, session)
+        await bot.sendMessage(chatId,
+          `✅ Icon uploaded & resized to 512×512!\n\n🖼 Now upload your token <b>Header</b> (3:1 ratio).\nBot will auto-resize to 1500×500.`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⏭ Skip Header', callback_data: 'dexpay_skip_header' }], [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]] } } as any
+        )
+      } else if (session.step === 'header') {
+        const outPath = path.join(uploadsDir, `header_${userId}_${Date.now()}.png`)
+        await sharp(inputBuffer).resize(1500, 500, { fit: 'cover' }).toFormat('png').toFile(outPath)
+        session.headerPath = outPath
+        session.step = 'review'
+        dexPaySessions.set(userId, session)
+        await bot.sendMessage(chatId,
+          dexPaySummary(session) + '\n\n<b>Step 5/6 — Review Order</b>\n\nLooks good?',
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '✅ Confirm & Proceed to Payment', callback_data: 'dexpay_confirm' }],
+                [{ text: '✏️ Edit Info', callback_data: 'dexpay_edit' }],
+                [{ text: '❌ Cancel', callback_data: 'dexpay_cancel' }]
+              ]
+            }
+          } as any
+        )
+      }
+    } catch (e: any) {
+      console.error('[DexPay] Image processing error:', e.message)
+      await bot.sendMessage(chatId, '⚠️ Failed to process image. Please try again or type "skip".').catch(() => {})
+    }
+    return
+  }
+})
+
+console.log('🟦 /dexpay — DexScreener Enhanced Token Info initialized')
