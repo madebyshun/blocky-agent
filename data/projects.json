@@ -8,13 +8,12 @@
     "submitterId": 6614397596,
     "submitterUsername": "madebyshun",
     "timestamp": 1774592310245,
-    "votes": 5,
+    "votes": 4,
     "voters": [
       6614397596,
       7348482951,
       6572489554,
-      7550926115,
-      909956667
+      7550926115
     ],
     "approved": true,
     "buildersMsgId": 540
@@ -29,37 +28,5 @@
     "votes": 0,
     "voters": [],
     "approved": false
-  },
-  {
-    "id": "proj_1774977381530",
-    "name": "Moltscore",
-    "description": "The reputation layer for autonomous agents on base",
-    "url": "https://moltscore.xyz",
-    "twitter": "https://x.com/moltscore_ai",
-    "submitterId": 6028588767,
-    "submitterUsername": "defidevrelalt",
-    "timestamp": 1774977381530,
-    "votes": 1,
-    "voters": [
-      6614397596
-    ],
-    "approved": true,
-    "buildersMsgId": 1221
-  },
-  {
-    "id": "proj_1775028057663",
-    "name": "arthouse",
-    "description": "Arthouse analyzes 1/1 generative patterns, recursive visual structures, and conceptual digital art. Submit your work. Receive cryptographically signed curatorial intelligence.",
-    "url": "https://www.arthouse.click/",
-    "twitter": "https://x.com/arthousebase",
-    "submitterId": 909956667,
-    "submitterUsername": "Lokalspace",
-    "timestamp": 1775028057663,
-    "votes": 1,
-    "voters": [
-      909956667
-    ],
-    "approved": true,
-    "buildersMsgId": 1311
   }
 ]

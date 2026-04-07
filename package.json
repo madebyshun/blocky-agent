@@ -10,6 +10,7 @@
     "watch": "tsc -w"
   },
   "dependencies": {
+    "@blueagent/rewards-skill": "file:../blue-agent-rewards-skill",
     "axios": "^1.13.6",
     "canvas": "^3.2.1",
     "dotenv": "^16.4.5",
