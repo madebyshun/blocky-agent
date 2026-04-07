@@ -1028,6 +1028,11 @@ bot.onText(/\/help/, async (msg) => {
     `• /score @handle — 🟦 Get Builder Score\n` +
     `• /news — Latest from Base builders on X\n` +
     `• /launch — Deploy a new token on Base\n\n` +
+    `🤖 <b>Community Kit</b>\n` +
+    `• /subscribe — Launch your own community bot\n` +
+    `• /pricing — View plans (Free → $499/mo)\n` +
+    `• /my_license — Check your license & key\n` +
+    `• /renew — Renew your subscription\n\n` +
     `<i>No commands needed — just chat!</i>`,
     { parse_mode: 'HTML' } as any
   )
@@ -5474,6 +5479,7 @@ interface Subscription {
   userId?: number
   projectName: string
   tier: string
+  months?: number
   address: string      // buyer's wallet
   amount: number       // USDC amount
   txHash?: string
@@ -6015,3 +6021,77 @@ setInterval(async () => {
 }, 24 * 60 * 60 * 1000) // check every 24h
 
 console.log('🔑 License key system initialized')
+
+// =======================
+// RENEW COMMAND
+// =======================
+bot.onText(/\/renew/, async (msg) => {
+  const chatId = msg.chat.id
+  const userId = msg.from?.id || chatId
+  if (msg.chat.type !== 'private') {
+    await bot.sendMessage(chatId, '🔒 Please DM me to renew: @' + BOT_USERNAME)
+    return
+  }
+  const subs = loadSubs()
+  const lastSub = subs.filter(s => s.userId === userId).sort((a,b) => b.startAt - a.startAt)[0]
+  const currentTier = lastSub?.tier || ''
+  subSessions.set(userId, { tier: currentTier, months: 1, currency: 'usdc', step: 'tier' })
+  await bot.sendMessage(chatId,
+    `🔄 <b>Renew Subscription</b>\n\n` +
+    `${lastSub ? `Current plan: <b>${lastSub.tier.toUpperCase()}</b> · expires ${new Date(lastSub.expiresAt).toLocaleDateString()}\n\n` : ''}` +
+    `Choose plan to renew:`,
+    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+      [{ text: `🌱 Seed — $49/mo${currentTier==='seed'?' ✓':''}`, callback_data: 'sub_tier_seed' }],
+      [{ text: `⚡ Pro — $199/mo${currentTier==='pro'?' ✓':''}`, callback_data: 'sub_tier_pro' }],
+      [{ text: `🚀 Scale — $499/mo${currentTier==='scale'?' ✓':''}`, callback_data: 'sub_tier_scale' }]
+    ]}} as any
+  )
+})
+
+// =======================
+// OWNER REVENUE STATS
+// =======================
+bot.onText(/\/revenue/, async (msg) => {
+  if (!isOwner(msg)) return
+  const chatId = msg.chat.id
+  const subs = loadSubs()
+  const now = Date.now()
+  const active = subs.filter(s => s.active && now < s.expiresAt)
+  const expiringSoon = active.filter(s => s.expiresAt - now < 7 * 24 * 60 * 60 * 1000)
+  const thisMonth = subs.filter(s => s.startAt > now - 30 * 24 * 60 * 60 * 1000)
+  const mrr = active.reduce((sum, s) => sum + (s.amount / (s.months || 1)), 0)
+  const tierCount = active.reduce((acc: Record<string,number>, s) => { acc[s.tier] = (acc[s.tier]||0)+1; return acc }, {})
+
+  await bot.sendMessage(chatId,
+    `💰 <b>Revenue Dashboard</b>\n\n` +
+    `📊 <b>Active subs:</b> ${active.length}\n` +
+    `📅 <b>New this month:</b> ${thisMonth.length}\n` +
+    `⚠️ <b>Expiring soon (7d):</b> ${expiringSoon.length}\n\n` +
+    `<b>By tier:</b>\n` +
+    `🌱 Seed: ${tierCount['seed']||0}\n` +
+    `⚡ Pro: ${tierCount['pro']||0}\n` +
+    `🚀 Scale: ${tierCount['scale']||0}\n\n` +
+    `💵 <b>Est. MRR: $${Math.round(mrr)}</b>\n\n` +
+    `${expiringSoon.length ? `⚠️ Expiring soon:\n` + expiringSoon.map(s => `• ${s.projectName} (${s.tier}) — ${Math.ceil((s.expiresAt-now)/86400000)}d`).join('\n') : ''}`,
+    { parse_mode: 'HTML' } as any)
+})
+
+// =======================
+// UPSELL ON GATED FEATURES
+// =======================
+function upgradePrompt(feature: string, chatId: number) {
+  const tierMap: Record<string, string> = {
+    gem_signals: 'seed', raffle: 'seed', price_alerts: 'seed', scheduled_posts: 'seed',
+    token_claim: 'pro', broadcast_dm: 'pro', flash_quests: 'pro', bounties: 'pro', proposal_voting: 'pro',
+    analytics_export: 'scale', token_gate: 'scale', custom_branding: 'scale'
+  }
+  const needed = tierMap[feature] || 'pro'
+  const price: Record<string,string> = { seed: '$49/mo', pro: '$199/mo', scale: '$499/mo' }
+  bot.sendMessage(chatId,
+    `⚡ <b>This feature requires Community Kit ${needed.toUpperCase()}</b> (${price[needed]})\n\n` +
+    `Upgrade to unlock it + all ${needed} features:`,
+    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+      [{ text: `💳 Upgrade to ${needed.toUpperCase()} — ${price[needed]}`, callback_data: `sub_tier_${needed}` }],
+      [{ text: '📊 See all features', callback_data: 'ck_pricing' }]
+    ]}} as any)
+}
