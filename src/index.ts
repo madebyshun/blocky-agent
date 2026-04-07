@@ -2749,7 +2749,7 @@ bot.on('callback_query', async (query) => {
         [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
         [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
         [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
-        [{ text: '❌ Close', callback_data: 'menu_close' }]
+        [{ text: '← Back', callback_data: 'menu_community_kit' }, { text: '❌ Close', callback_data: 'menu_close' }]
       ]}
     )
     return
@@ -2777,7 +2777,7 @@ bot.on('callback_query', async (query) => {
         [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
         [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
         [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
-        [{ text: '❌ Close', callback_data: 'menu_close' }]
+        [{ text: '← Back', callback_data: 'menu_community_kit' }, { text: '❌ Close', callback_data: 'menu_close' }]
       ]}
     )
     return
