@@ -5857,9 +5857,12 @@ interface Subscription {
   userId?: number
   projectName: string
   tier: string
+  months?: number
   address: string      // buyer's wallet
   amount: number       // USDC amount
   txHash?: string
+  licenseKey?: string
+  reminderSent?: boolean
   startAt: number
   expiresAt: number
   active: boolean
