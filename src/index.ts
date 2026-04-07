@@ -5738,7 +5738,7 @@ bot.onText(/\/pricing/, async (msg) => {
 })
 
 // /subscribe — self-service payment flow
-bot.onText(/\/subscribe/, async (msg) => {
+bot.onText(/^\/subscribe(@\w+)?$/, async (msg) => {
   const chatId = msg.chat.id
   const userId = msg.from?.id || chatId
   if (msg.chat.type !== 'private') {
