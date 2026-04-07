@@ -2653,7 +2653,7 @@ bot.on('callback_query', async (query) => {
       { inline_keyboard: [
         [{ text: '💳 Subscribe', callback_data: 'ck_subscribe' }, { text: '📊 Pricing', callback_data: 'ck_pricing' }],
         [{ text: '📖 Docs & Quick Start', callback_data: 'ck_docs' }],
-        [{ text: '⭐ GitHub', url: 'https://github.com/madebyshun/community-kit' }, { text: '💬 DM @blocky_agent', url: 'https://t.me/blocky_agent' }],
+        [{ text: '⭐ GitHub', url: 'https://github.com/madebyshun/community-kit' }, { text: '💬 DM @blockyagent_bot', url: 'https://t.me/blockyagent_bot' }],
         NAV_ROW
       ]}
     )
@@ -5902,7 +5902,7 @@ bot.on('message', async (msg) => {
       const sub: Subscription = { userId, projectName: `User ${userId}`, tier: session.tier, address: '', txHash: text, amount, startAt: Date.now(), expiresAt: Date.now() + session.months*30*24*60*60*1000, active: true }
       const subs = loadSubs(); subs.push(sub); saveSubs(subs)
       subSessions.delete(userId)
-      await bot.sendMessage(chatId, `✅ <b>Payment verified!</b>\n\n🏷️ <b>${session.tier.toUpperCase()}</b> · ${session.months}mo\n💰 $${amount} ${session.currency.toUpperCase()}\n⏰ Expires: ${new Date(sub.expiresAt).toLocaleDateString()}\n\n📩 Tier will be activated within 24h. Contact @blocky_agent if needed.`, { parse_mode: 'HTML' } as any)
+      await bot.sendMessage(chatId, `✅ <b>Payment verified!</b>\n\n🏷️ <b>${session.tier.toUpperCase()}</b> · ${session.months}mo\n💰 $${amount} ${session.currency.toUpperCase()}\n⏰ Expires: ${new Date(sub.expiresAt).toLocaleDateString()}\n\n📩 Tier will be activated within 24h. Contact @blockyagent_bot if needed.`, { parse_mode: 'HTML' } as any)
       await bot.sendMessage(OWNER_ID, `💰 <b>New Sub!</b>\nUser: @${msg.from?.username||userId}\nTier: ${session.tier} · ${session.months}mo | $${amount} ${session.currency}\nTX: <code>${text}</code>`, { parse_mode: 'HTML' } as any)
     } else if (status === '0') {
       await bot.sendMessage(chatId, '❌ Transaction failed on-chain. Please try again.')
@@ -5910,6 +5910,6 @@ bot.on('message', async (msg) => {
       await bot.sendMessage(chatId, '⚠️ Cannot verify yet — may be pending. Wait 1 min and paste again.')
     }
   } catch {
-    await bot.sendMessage(chatId, '⚠️ Verification error. Contact @blocky_agent with your TX hash.')
+    await bot.sendMessage(chatId, '⚠️ Verification error. Contact @blockyagent_bot with your TX hash.')
   }
 })
