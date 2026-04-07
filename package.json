@@ -1,6 +1,6 @@
 {
   "name": "blocky-builder-bot",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Blocky Studio Telegram bot - search builders on Base blockchain",
   "main": "dist/index.js",
   "scripts": {
