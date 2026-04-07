@@ -1751,7 +1751,7 @@ const MENU_KEYBOARD = {
     [{ text: '📰 News', callback_data: 'menu_news' }, { text: '🔍 Score', callback_data: 'menu_score' }, { text: '🚀 Launch', callback_data: 'menu_launch' }],
     [{ text: '🎯 Quests', callback_data: 'menu_quests' }, { text: '🎁 Rewards', callback_data: 'menu_rewards' }, { text: '🔗 Refer', callback_data: 'menu_refer' }],
     [{ text: '🏆 Top', callback_data: 'menu_leaderboard' }, { text: '💰 Wallet', callback_data: 'menu_wallet' }, { text: '📝 Submit', callback_data: 'menu_submit' }],
-    [{ text: '📁 Projects', callback_data: 'menu_projects' }, { text: '📖 Docs', url: DOCS_URL }],
+    [{ text: '📁 Projects', callback_data: 'menu_projects' }, { text: '💳 Pricing', callback_data: 'menu_pricing' }, { text: '📖 Docs', url: DOCS_URL }],
     [{ text: '👤 Profile', callback_data: 'menu_profile' }, { text: '❓ Help', callback_data: 'menu_help' }, { text: '❌ Close', callback_data: 'menu_close' }],
   ]
 }
@@ -2638,6 +2638,23 @@ bot.on('callback_query', async (query) => {
     finally { clearInterval(typingInterval2) }
     return
   }
+  if (data === 'menu_pricing') {
+    await editMenu(query,
+      `💳 <b>Community Kit — Pricing</b>\n\n` +
+      `🆓 <b>Free</b> — $0\nPoints, Leaderboard, Referrals, Onboarding, Projects\n\n` +
+      `🌱 <b>Seed</b> — $49/mo\n+ Price Alerts, Gem Signals, Raffle, Scheduled Posts\n\n` +
+      `⚡ <b>Pro</b> — $199/mo\n+ Token Claim, Broadcast DM, Flash Quests, Bounties, Proposals\n\n` +
+      `🚀 <b>Scale</b> — $499/mo\n+ Analytics Export, Token Gate, Custom Branding\n\n` +
+      `💰 Pay USDC or $BLUEAGENT (-20%) on Base\n📊 Multi-month: 3mo -10% | 6mo -15% | 12mo -20%`,
+      { inline_keyboard: [
+        [{ text: '💳 Subscribe Now', callback_data: 'start_subscribe' }],
+        [{ text: '🌐 blueagent.xyz/community-kit', url: 'https://blueagent.xyz/community-kit' }],
+        NAV_ROW
+      ]}
+    )
+    return
+  }
+
   if (data === 'menu_help') {
     await editMenu(query,
       `<b>Blue Agent 🟦 — What I can do</b>\n\n` +
