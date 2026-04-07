@@ -2740,6 +2740,85 @@ bot.on('callback_query', async (query) => {
     return
   }
 
+  // ── Subscribe flow (inline in main handler) ──
+  if (data === 'start_subscribe') {
+    subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
+    await bot.sendMessage(chatId,
+      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
+        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
+        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
+        [{ text: '❌ Close', callback_data: 'menu_close' }]
+      ]}} as any)
+    return
+  }
+
+  if (data.startsWith('sub_tier_')) {
+    const tier = data.replace('sub_tier_', '')
+    subSessions.set(userId, { tier, months: 1, currency: 'usdc', step: 'months' })
+    const p1=calcPrice(tier,1), p3=calcPrice(tier,3), p6=calcPrice(tier,6), p12=calcPrice(tier,12)
+    await editMenu(query,
+      `📅 <b>Choose duration</b> (${tier.toUpperCase()})\n\n1 month — <b>$${p1}</b>\n3 months — <b>$${p3}</b> <i>(-10%)</i>\n6 months — <b>$${p6}</b> <i>(-15%)</i>\n12 months — <b>$${p12}</b> <i>(-20%)</i>`,
+      { inline_keyboard: [
+        [{ text: `1 month — $${p1}`, callback_data: `sub_months_${tier}_1` }, { text: `3 months — $${p3}`, callback_data: `sub_months_${tier}_3` }],
+        [{ text: `6 months — $${p6}`, callback_data: `sub_months_${tier}_6` }, { text: `12 months — $${p12}`, callback_data: `sub_months_${tier}_12` }],
+        [{ text: '← Back', callback_data: 'sub_back_tier' }, { text: '❌ Close', callback_data: 'menu_close' }]
+      ]}
+    )
+    return
+  }
+
+  if (data === 'sub_back_tier') {
+    await editMenu(query,
+      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
+      { inline_keyboard: [
+        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
+        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
+        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
+        [{ text: '❌ Close', callback_data: 'menu_close' }]
+      ]}
+    )
+    return
+  }
+
+  if (data.startsWith('sub_months_')) {
+    const parts = data.replace('sub_months_', '').split('_')
+    const tier = parts.slice(0, -1).join('_')
+    const months = parseInt(parts[parts.length - 1])
+    const session = subSessions.get(userId) || { tier, months, currency: 'usdc' as const, step: 'currency' }
+    session.tier = tier; session.months = months; session.step = 'currency'
+    subSessions.set(userId, session)
+    const uAmt=calcPrice(tier,months,'usdc'), bAmt=calcPrice(tier,months,'blueagent')
+    await editMenu(query,
+      `💰 <b>Choose payment</b>\n\nPlan: <b>${tier.toUpperCase()}</b> · ${months} month${months>1?'s':''}\n\n💵 USDC — <b>$${uAmt}</b>\n🟦 $BLUEAGENT — <b>$${bAmt}</b> <i>(-20%)</i>`,
+      { inline_keyboard: [
+        [{ text: `💵 Pay $${uAmt} USDC`, callback_data: 'sub_pay_usdc' }],
+        [{ text: `🟦 Pay $${bAmt} $BLUEAGENT (-20%)`, callback_data: 'sub_pay_blueagent' }],
+        [{ text: '← Back', callback_data: `sub_tier_${tier}` }, { text: '❌ Close', callback_data: 'menu_close' }]
+      ]}
+    )
+    return
+  }
+
+  if (data.startsWith('sub_pay_')) {
+    const currency = data.replace('sub_pay_', '') as 'usdc' | 'blueagent'
+    const session = subSessions.get(userId) || { tier: '', months: 1, currency, step: 'awaiting_tx' }
+    session.currency = currency; session.step = 'awaiting_tx'
+    subSessions.set(userId, session)
+    const amount = calcPrice(session.tier, session.months, currency)
+    const isBA = currency === 'blueagent'
+    const tokenAddr = isBA ? TOKEN_CONTRACT : '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+    const tokenName = isBA ? '$BLUEAGENT' : 'USDC'
+    await editMenu(query,
+      `💳 <b>Payment Instructions</b>\n\nPlan: <b>${session.tier.toUpperCase()}</b> · ${session.months} month${session.months>1?'s':''}\nAmount: <b>$${amount} ${tokenName}</b>\n\nSend to treasury on <b>Base</b>:\n<code>${PAYMENT_ADDRESS}</code>\n\nToken: <code>${tokenAddr}</code>\n\n⚠️ After sending, paste your <b>tx hash</b> (0x...) here.`,
+      { inline_keyboard: [
+        [{ text: '← Back', callback_data: `sub_tier_${session.tier}` }, { text: '❌ Close', callback_data: 'menu_close' }]
+      ]}
+    )
+    return
+  }
+
   if (data === 'menu_help') {
     await editMenu(query,
       `<b>Blue Agent 🟦 — What I can do</b>\n\n` +
