@@ -5622,20 +5622,19 @@ bot.onText(/\/pricing/, async (msg) => {
   const chatId = msg.chat.id
   await bot.sendMessage(chatId,
     `💳 <b>Community Kit — Pricing</b>\n\n` +
-    `🆓 <b>Free</b> — $0\nCore community features, self-host\n\n` +
-    `🌱 <b>Seed</b> — $49/month\nTrade tracker, alerts, mini-games, raffle\n\n` +
-    `⚡ <b>Growth</b> — $99/month\nBuilder score, bounties, proposals, X quests\n\n` +
-    `🔥 <b>Pro</b> — $199/month\nToken claim, broadcast DM, analytics\n\n` +
-    `🏆 <b>Scale</b> — $499/month\nEverything + white label + managed hosting\n\n` +
+    `🆓 <b>Free</b> — $0\nPoints, Leaderboard, Referrals, Onboarding, Projects\n\n` +
+    `🌱 <b>Seed</b> — $49/month\n+ Price Alerts, Gem Signals, Raffle, Scheduled Posts\n\n` +
+    `⚡ <b>Pro</b> — $199/month\n+ Token Claim, Broadcast DM, Flash Quests, Bounties, Proposals\n\n` +
+    `🚀 <b>Scale</b> — $499/month\n+ Analytics Export, Token Gate, Custom Branding\n\n` +
     `──────────────\n` +
-    `💰 Pay with <b>USDC on Base</b>\n` +
-    `📩 DM @madebyshun to subscribe\n\n` +
-    `<i>Annual plans: 20% discount</i>`,
+    `💰 Pay <b>USDC</b> or <b>$BLUEAGENT</b> (-20%) on Base\n` +
+    `📊 Multi-month: 3mo -10% | 6mo -15% | 12mo -20%\n\n` +
+    `<i>Use /subscribe to get started</i>`,
     {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [
-        [{ text: '📩 Subscribe Now', url: 'https://t.me/madebyshun' }],
-        [{ text: '🌐 See full features', url: 'https://blueagent.xyz/community-kit' }]
+        [{ text: '💳 Subscribe Now', callback_data: 'start_subscribe' }],
+        [{ text: '🌐 blueagent.xyz/community-kit', url: 'https://blueagent.xyz/community-kit' }]
       ]}
     } as any
   )
@@ -5721,6 +5720,18 @@ bot.on('callback_query', async (query) => {
   if (!chatId) return
   await bot.answerCallbackQuery(query.id)
   const session = subSessions.get(userId) || { tier: '', months: 1, currency: 'usdc' as const, step: 'tier' }
+
+  if (data === 'start_subscribe') {
+    subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
+    await bot.sendMessage(chatId,
+      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
+        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
+        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }]
+      ]}} as any)
+    return
+  }
 
   if (data.startsWith('sub_tier_')) {
     const tier = data.replace('sub_tier_', '')
