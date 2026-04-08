@@ -754,7 +754,31 @@ const X402_SERVICES: Record<string, {
   }
 }
 
+// Quantum sub-service map
+const QUANTUM_SUBS: Record<string, { endpoint: string; price: number; inputKey: string }> = {
+  quantum_lite:     { endpoint: 'quantum-lite',     price: 0.10, inputKey: 'address' },
+  quantum_premium:  { endpoint: 'quantum-premium',  price: 1.50, inputKey: 'address' },
+  quantum_batch:    { endpoint: 'quantum-batch',    price: 2.50, inputKey: 'addresses' },
+  quantum_shield:   { endpoint: 'quantum-shield',   price: 0.25, inputKey: 'address' },
+  quantum_timeline: { endpoint: 'quantum-timeline', price: 2.00, inputKey: 'address' },
+  quantum_contract: { endpoint: 'quantum-contract', price: 5.00, inputKey: 'contract' },
+}
+
 async function callX402Service(service: string, inputValue: string): Promise<any> {
+  // Handle quantum sub-services
+  if (service.startsWith('quantum_')) {
+    const qsvc = QUANTUM_SUBS[service]
+    if (!qsvc) throw new Error('Unknown quantum service')
+    const url = `${X402_BASE_URL}/${qsvc.endpoint}`
+    const bodyStr = JSON.stringify({ [qsvc.inputKey]: inputValue })
+    const cmd = `/usr/local/bin/bankr x402 call "${url}" -X POST -d '${bodyStr}' -y --max-payment ${Math.ceil(qsvc.price * 2)} --raw`
+    return new Promise((resolve, reject) => {
+      require('child_process').exec(cmd, { timeout: 30000 }, (err: any, stdout: any) => {
+        try { resolve(JSON.parse(stdout)) } catch { reject(new Error('Invalid response from quantum service')) }
+      })
+    })
+  }
+
   const svc = X402_SERVICES[service]
   if (!svc) throw new Error('Unknown service')
   const url = `${X402_BASE_URL}/${svc.endpoint}`
@@ -2183,7 +2207,7 @@ function x402MenuKeyboard() {
       ],
       [
         { text: '🛡️ Risk Check $0.05', callback_data: 'x402_start_riskcheck' },
-        { text: '⚛️ Quantum $1.50', callback_data: 'x402_start_quantum' },
+        { text: '⚛️ Quantum Security', callback_data: 'x402_quantum_menu' },
       ],
       [{ text: '🏠 Menu', callback_data: 'menu_main' }]
     ]
@@ -2610,6 +2634,48 @@ bot.on('callback_query', async (query) => {
     return
   }
   // ── x402 Callbacks ──
+  // Quantum Security submenu
+  if (data === 'x402_quantum_menu') {
+    await editMenu(query,
+      `⛛️ <b>Quantum Security</b>\n\nProtect your wallet from quantum computing threats.\n\n` +
+      `🔬 <b>Lite</b> $0.10 — Quick exposure check, instant\n` +
+      `⛛️ <b>Premium</b> $1.50 — Full report + migration steps\n` +
+      `📦 <b>Batch</b> $2.50 — Scan 2-10 wallets at once\n` +
+      `🛡️ <b>Shield</b> $0.25 — Pre-tx safety check for agents\n` +
+      `🗓️ <b>Timeline</b> $2.00 — Year-by-year threat forecast\n` +
+      `📄 <b>Contract</b> $5.00 — Smart contract audit\n\n` +
+      `<i>Pay USDC on Base · No signup · Results in 30s</i>`,
+      { inline_keyboard: [
+        [{ text: '🔬 Lite $0.10', callback_data: 'x402_start_quantum_lite' }, { text: '⛛️ Premium $1.50', callback_data: 'x402_start_quantum_premium' }],
+        [{ text: '📦 Batch $2.50', callback_data: 'x402_start_quantum_batch' }, { text: '🛡️ Shield $0.25', callback_data: 'x402_start_quantum_shield' }],
+        [{ text: '🗓️ Timeline $2.00', callback_data: 'x402_start_quantum_timeline' }, { text: '📄 Contract $5.00', callback_data: 'x402_start_quantum_contract' }],
+        [{ text: '◄️ Back', callback_data: 'menu_x402' }]
+      ]}
+    )
+    return
+  }
+
+  // Quantum sub-service start
+  if (data.startsWith('x402_start_quantum_')) {
+    const sub = data.replace('x402_start_quantum_', '')
+    const subMap: Record<string, { name: string; price: string; prompt: string }> = {
+      lite:     { name: 'Quantum Lite',     price: '$0.10', prompt: 'Enter wallet address to scan (0x...):' },
+      premium:  { name: 'Quantum Premium',  price: '$1.50', prompt: 'Enter wallet address for full quantum report (0x...):' },
+      batch:    { name: 'Quantum Batch',    price: '$2.50', prompt: 'Enter 2-10 wallet addresses, one per line:' },
+      shield:   { name: 'Quantum Shield',   price: '$0.25', prompt: 'Enter wallet address + contract address to check (format: wallet,contract):' },
+      timeline: { name: 'Quantum Timeline', price: '$2.00', prompt: 'Enter wallet address for timeline threat forecast (0x...):' },
+      contract: { name: 'Quantum Contract', price: '$5.00', prompt: 'Enter smart contract address to audit (0x...):' },
+    }
+    const svc2 = subMap[sub]
+    if (!svc2) return
+    x402Sessions.set(userId, { service: `quantum_${sub}`, step: 'input' })
+    await editMenu(query,
+      `⛛️ <b>${svc2.name}</b>\n\nCost: <b>${svc2.price} USDC</b>\n\n${svc2.prompt}`,
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'x402_cancel' }, { text: '← Back', callback_data: 'x402_quantum_menu' }]] }
+    )
+    return
+  }
+
   if (data.startsWith('x402_start_')) {
     const service = data.replace('x402_start_', '')
     const svc = X402_SERVICES[service]
