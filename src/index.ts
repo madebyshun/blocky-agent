@@ -2751,6 +2751,69 @@ bot.on('callback_query', async (query) => {
     return
   }
 
+  // Community Kit menu
+  if (data === 'menu_community_kit') {
+    await editMenu(query,
+      `🤖 <b>Blue Agent Community Kit</b>\n\n<i>Launch your own AI-powered Telegram community in 5 minutes.</i>\n\n` +
+      `✅ Points & Leaderboard\n✅ Referrals & Auto-onboarding\n✅ Token Rewards\n✅ Gem Signals & Raffle\n✅ AI Chat powered by Bankr LLM\n✅ Quests, Bounties, Proposals\n\n` +
+      `<code>npx blueagent init</code> — live in 5 min`,
+      { inline_keyboard: [
+        [{ text: '💳 Subscribe', callback_data: 'ck_subscribe' }, { text: '📊 Pricing', callback_data: 'ck_pricing' }],
+        [{ text: '📖 Docs & Quick Start', callback_data: 'ck_docs' }],
+        [{ text: '⭐ GitHub', url: 'https://github.com/madebyshun/community-kit' }, { text: '💬 DM @blockyagent_bot', url: 'https://t.me/blockyagent_bot' }],
+        NAV_ROW
+      ]}
+    )
+    return
+  }
+
+  if (data === 'ck_pricing') {
+    await editMenu(query,
+      `📊 <b>Community Kit — Pricing</b>\n\n` +
+      `🆓 <b>Free</b> — $0\nPoints, Leaderboard, Referrals, Onboarding, Projects\n\n` +
+      `🌱 <b>Seed</b> — $49/mo\n+ Price Alerts, Gem Signals, Raffle, Scheduled Posts\n\n` +
+      `⚡ <b>Pro</b> — $199/mo\n+ Token Claim, Broadcast DM, Flash Quests, Bounties, Proposals\n\n` +
+      `🚀 <b>Scale</b> — $499/mo\n+ Analytics Export, Token Gate, Custom Branding\n\n` +
+      `💰 Pay USDC or $BLUEAGENT (-20%) on Base\n📊 Multi-month: 3mo -10% | 6mo -15% | 12mo -20%`,
+      { inline_keyboard: [
+        [{ text: '💳 Subscribe Now', callback_data: 'start_subscribe' }],
+        [{ text: '← Back', callback_data: 'menu_community_kit' }]
+      ]}
+    )
+    return
+  }
+
+  if (data === 'ck_subscribe') {
+    subSessions.set(userId, { tier: '', months: 1, currency: 'usdc', step: 'tier' })
+    await editMenu(query,
+      `💳 <b>Community Kit — Subscribe</b>\n\nChoose your plan:`,
+      { inline_keyboard: [
+        [{ text: '🌱 Seed — $49/mo', callback_data: 'sub_tier_seed' }],
+        [{ text: '⚡ Pro — $199/mo', callback_data: 'sub_tier_pro' }],
+        [{ text: '🚀 Scale — $499/mo', callback_data: 'sub_tier_scale' }],
+        [{ text: '← Back', callback_data: 'menu_community_kit' }, { text: '❌ Close', callback_data: 'menu_close' }]
+      ]}
+    )
+    return
+  }
+
+  if (data === 'ck_docs') {
+    await editMenu(query,
+      `📖 <b>Quick Start</b>\n\n` +
+      `<b>1.</b> Create bot via @BotFather\n` +
+      `<b>2.</b> Run setup wizard:\n<code>npx blueagent init</code>\n\n` +
+      `<b>3.</b> Choose template:\n�ꪙ Token Community\n🎮 Gaming Guild\n🏗️ Builder DAO\n🤖 AI Agent\n\n` +
+      `<b>4.</b> Paste bot token → bot goes live 🎉\n\n` +
+      `📘 Full docs on GitHub`,
+      { inline_keyboard: [
+        [{ text: '📘 Full README', url: 'https://github.com/madebyshun/community-kit#readme' }],
+        [{ text: '💳 Subscribe', callback_data: 'ck_subscribe' }],
+        [{ text: '← Back', callback_data: 'menu_community_kit' }]
+      ]}
+    )
+    return
+  }
+
   if (data === 'menu_x402') {
     await editMenu(query,
       `<b>⚛️ Blue Agent x402 Services</b>\n\nPay-per-use AI services · USDC on Base · No signup\n\n` +
