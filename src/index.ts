@@ -2707,6 +2707,19 @@ bot.on('callback_query', async (query) => {
     }
     x402Sessions.delete(userId)
     await bot.answerCallbackQuery(query.id)
+    // Handle quantum sub-services
+    if (session.service.startsWith("quantum_")) {
+      const qsub = QUANTUM_SUBS[session.service]
+      const qNames: Record<string,string> = { quantum_lite:"Quantum Lite", quantum_premium:"Quantum Premium", quantum_batch:"Quantum Batch", quantum_shield:"Quantum Shield", quantum_timeline:"Quantum Timeline", quantum_contract:"Quantum Contract" }
+      const qname = qNames[session.service] || "Quantum"
+      const qMsg = await bot.sendMessage(chatId, `⚛️ <b>${qname}</b>\n\n⏳ Analyzing...`, { parse_mode: "HTML" } as any)
+      try {
+        const qr = await callX402Service(session.service, session.input)
+        const qt = typeof qr==="string"?qr:qr?.report||qr?.summary||qr?.result||JSON.stringify(qr,null,2).slice(0,2000)
+        await bot.editMessageText(`⚛️ <b>${qname} Report</b>\n\n${qt}`, { chat_id: chatId, message_id: qMsg.message_id, parse_mode: "HTML", reply_markup: { inline_keyboard: [[{text:"⚛️ Quantum Menu",callback_data:"x402_quantum_menu"},{text:"🏠 Menu",callback_data:"menu_main"}]] } } as any)
+      } catch(e:any) { await bot.editMessageText(`❌ Error: ${e?.message?.slice(0,100)}`, { chat_id: chatId, message_id: qMsg.message_id, parse_mode: "HTML" } as any) }
+      return
+    }
     const svc = X402_SERVICES[session.service]
     const loadingMsg = await bot.sendMessage(chatId,
       `${svc.emoji} <b>${svc.name}</b>\n\n⏳ Analyzing... (may take 15-30 seconds)`,
