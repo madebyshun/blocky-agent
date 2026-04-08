@@ -742,11 +742,11 @@ const X402_SERVICES: Record<string, {
     endpoint: 'quantum-premium',
     formatResult: (d) => {
       const riskIconMap: Record<string, string> = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🟢', MINIMAL: '🟢' }
-      const riskIcon = riskIconMap[d.quantumRiskLevel] || '⚪'
+      const riskIcon = riskIconMap[d.riskLevel || d.quantumRiskLevel] || '⚪'
       return `⚛️ <b>Quantum Risk Report</b>\n\n` +
-        `${riskIcon} Risk Level: <b>${d.quantumRiskLevel}</b> (${d.riskScore}/100)\n` +
-        `🔑 Public Key Exposed: <b>${d.publicKeyExposed ? '⚠️ Yes' : '✅ No'}</b>\n` +
-        `⏱ Threat Timeline: <b>${d.threatTimeline || 'N/A'}</b>\n` +
+        `${riskIcon} Risk Level: <b>${d.riskLevel || d.quantumRiskLevel || 'UNKNOWN'}</b> (${d.riskScore}/100)\n` +
+        `🔑 Public Key Exposed: <b>${d.publicKeyExposure?.isExposed || d.publicKeyExposed ? '⚠️ Yes' : '✅ No'}</b>\n` +
+        `⏱ Threat Timeline: <b>${d.estimatedSafeUntil || d.threatTimeline || 'N/A'}</b>\n` +
         `🎯 Recommendation: <b>${d.recommendation}</b>\n\n` +
         `📝 ${d.executiveSummary || ''}\n\n` +
         (d.migrationSteps?.length ? `<b>Migration Steps:</b>\n${d.migrationSteps.slice(0, 3).map((s: any) => `${s.step}. ${s.action}`).join('\n')}` : '')
