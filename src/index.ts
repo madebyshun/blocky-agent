@@ -756,12 +756,12 @@ const X402_SERVICES: Record<string, {
 
 // Quantum sub-service map
 const QUANTUM_SUBS: Record<string, { endpoint: string; price: number; inputKey: string }> = {
-  quantum_lite:     { endpoint: 'quantum-lite',     price: 0.10, inputKey: 'address' },
-  quantum_premium:  { endpoint: 'quantum-premium',  price: 1.50, inputKey: 'address' },
-  quantum_batch:    { endpoint: 'quantum-batch',    price: 2.50, inputKey: 'addresses' },
-  quantum_shield:   { endpoint: 'quantum-shield',   price: 0.25, inputKey: 'address' },
-  quantum_timeline: { endpoint: 'quantum-timeline', price: 2.00, inputKey: 'address' },
-  quantum_contract: { endpoint: 'quantum-contract', price: 5.00, inputKey: 'contract' },
+  quantum_lite:     { endpoint: 'quantum-premium', price: 0.10, inputKey: 'address' },
+  quantum_premium:  { endpoint: 'quantum-premium', price: 1.50, inputKey: 'address' },
+  quantum_batch:    { endpoint: 'quantum-premium', price: 2.50, inputKey: 'address' },
+  quantum_shield:   { endpoint: 'quantum-premium', price: 0.25, inputKey: 'address' },
+  quantum_timeline: { endpoint: 'quantum-premium', price: 2.00, inputKey: 'address' },
+  quantum_contract: { endpoint: 'quantum-premium', price: 5.00, inputKey: 'address' },
 }
 
 async function callX402Service(service: string, inputValue: string): Promise<any> {
