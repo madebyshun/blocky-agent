@@ -2982,6 +2982,16 @@ bot.on('callback_query', async (query) => {
     return
   }
 
+  if (data === 'show_wallet_address') {
+    const users = loadUsers()
+    const addr = users[userId]?.evmAddress
+    if (!addr) { await bot.answerCallbackQuery(query.id, { text: 'No wallet. Use /start.' }); return }
+    await bot.sendMessage(chatId,
+      `💳 <b>Your Bot Wallet</b>\n\n<code>${addr}</code>\n\nSend $BLUEAGENT here, then buy credits again.\n\n<i>Contract: <code>${TOKEN_CONTRACT}</code></i>`,
+      { parse_mode: 'HTML' } as any)
+    return
+  }
+
   if (data === 'credits_buy') {
     await editMenu(query,
       `💰 <b>Buy Credits</b>\n\n` +
@@ -3016,21 +3026,50 @@ bot.on('callback_query', async (query) => {
     if (!selected) return
     const users = loadUsers()
     if (!users[userId]) { await bot.answerCallbackQuery(query.id, { text: 'Please /start first' }); return }
-    // Check user has wallet
-    if (!users[userId].privateKey) {
+    if (!users[userId].privateKey || !users[userId].evmAddress) {
       await editMenu(query,
-        `⚠️ <b>No wallet found</b>\n\nYou need a wallet to buy credits.\nUse /start to create one.`,
+        `⚠️ <b>No wallet found</b>\n\nUse /start to create one.`,
         { inline_keyboard: [[{ text: '← Back', callback_data: 'credits_buy' }]] })
       return
     }
-    // Show confirm screen
+
+    // Check $BLUEAGENT balance
+    let currentBalance = 0
+    try {
+      const provider2 = new ethers.JsonRpcProvider(BASE_RPC)
+      const token2 = new ethers.Contract(TOKEN_CONTRACT, ERC20_ABI, provider2)
+      const decimals2 = await token2.decimals()
+      const bal = await token2.balanceOf(users[userId].evmAddress!)
+      currentBalance = parseInt(ethers.formatUnits(bal, decimals2))
+    } catch {}
+
+    if (currentBalance < selected.blueagent) {
+      // Not enough $BLUEAGENT — show options
+      await editMenu(query,
+        `🟦 <b>Buy ${selected.credits} Credits</b>\n\n` +
+        `Cost: <b>${selected.blueagentStr} $BLUEAGENT</b>\n` +
+        `Your balance: <b>${currentBalance.toLocaleString()} $BLUEAGENT</b>\n\n` +
+        `⚠️ You don't have enough $BLUEAGENT.\n\n` +
+        `<b>Options:</b>\n` +
+        `1️⃣ Swap USDC → $BLUEAGENT in bot\n` +
+        `2️⃣ Send $BLUEAGENT to your wallet, then come back`,
+        { inline_keyboard: [
+          [{ text: '🔄 Swap USDC → $BLUEAGENT', callback_data: 'trade_buy_blueagent' }],
+          [{ text: '💳 My wallet address', callback_data: 'show_wallet_address' }],
+          [{ text: '← Back', callback_data: 'credits_buy' }]
+        ]}
+      )
+      return
+    }
+
+    // Enough balance — show confirm
     await editMenu(query,
       `🟦 <b>Confirm Purchase</b>\n\n` +
       `Pack: <b>${selected.credits} Credits</b>\n` +
-      `Cost: <b>${selected.blueagentStr} $BLUEAGENT</b>\n\n` +
-      `💳 Payment from your bot wallet\n` +
-      `⏳ Transfer is instant and automatic\n\n` +
-      `<i>Make sure you have enough $BLUEAGENT in your wallet</i>`,
+      `Cost: <b>${selected.blueagentStr} $BLUEAGENT</b>\n` +
+      `Your balance: <b>${currentBalance.toLocaleString()} $BLUEAGENT</b>\n\n` +
+      `💳 Auto-transfer from your bot wallet\n` +
+      `⏳ Instant, no manual steps needed`,
       { inline_keyboard: [
         [{ text: `✅ Confirm — Pay ${selected.blueagentStr} $BLUEAGENT`, callback_data: `credits_confirm_${pack}` }],
         [{ text: '← Back', callback_data: 'credits_buy' }, { text: '❌ Cancel', callback_data: 'menu_close' }]
