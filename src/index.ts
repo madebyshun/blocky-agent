@@ -96,6 +96,30 @@ const TREASURY_ADDRESS = process.env.TREASURY_ADDRESS || '0xf31f59e7b8b58555f787
 const AGENT_REWARDS_CONTRACT = process.env.AGENT_REWARDS_CONTRACT || '' // deploy later
 const FEE_PERCENT = 5 // 5% to treasury/contract
 
+// Transfer $BLUEAGENT FROM user wallet TO treasury (for credits purchase)
+async function transferFromUser(userId: number, amountTokens: number): Promise<{ success: boolean; txHash?: string; error?: string }> {
+  const users = loadUsers()
+  const user = users[userId]
+  if (!user?.privateKey) return { success: false, error: 'No wallet found. Use /start to create one.' }
+  try {
+    const provider = new ethers.JsonRpcProvider(BASE_RPC)
+    const wallet = new ethers.Wallet(user.privateKey, provider)
+    const token = new ethers.Contract(TOKEN_CONTRACT, ERC20_ABI, wallet)
+    const decimals = await token.decimals()
+    const amountWei = ethers.parseUnits(amountTokens.toString(), decimals)
+    const balance = await token.balanceOf(wallet.address)
+    if (balance < amountWei) {
+      const balFormatted = ethers.formatUnits(balance, decimals)
+      return { success: false, error: `Insufficient balance. You have ${parseInt(balFormatted).toLocaleString()} $BLUEAGENT, need ${amountTokens.toLocaleString()}` }
+    }
+    const tx = await token.transfer(TREASURY_ADDRESS, amountWei)
+    await tx.wait(1)
+    return { success: true, txHash: tx.hash }
+  } catch (e: any) {
+    return { success: false, error: e?.message?.slice(0, 100) || 'Transfer failed' }
+  }
+}
+
 async function sendTokenReward(toAddress: string, amount: number, tokenContract: string): Promise<{ success: boolean; txHash?: string; txHashFee?: string; error?: string }> {
   if (!REWARD_WALLET_PRIVATE_KEY) return { success: false, error: 'No reward wallet configured' }
   try {
@@ -2958,7 +2982,6 @@ bot.on('callback_query', async (query) => {
     return
   }
 
-  // Buy Credits flow
   if (data === 'credits_buy') {
     await editMenu(query,
       `💰 <b>Buy Credits</b>\n\n` +
@@ -2984,29 +3007,70 @@ bot.on('callback_query', async (query) => {
 
   if (data.startsWith('credits_pack_')) {
     const pack = parseInt(data.replace('credits_pack_', ''))
-    const packMap: Record<number, { blueagent: string; credits: number }> = {
-      1:  { blueagent: '1,000,000',  credits: 20 },
-      5:  { blueagent: '5,000,000',  credits: 100 },
-      20: { blueagent: '20,000,000', credits: 400 },
+    const packMap: Record<number, { blueagent: number; blueagentStr: string; credits: number }> = {
+      1:  { blueagent: 1000000,  blueagentStr: '1,000,000',  credits: 20 },
+      5:  { blueagent: 5000000,  blueagentStr: '5,000,000',  credits: 100 },
+      20: { blueagent: 20000000, blueagentStr: '20,000,000', credits: 400 },
     }
     const selected = packMap[pack]
     if (!selected) return
-    // Store pending credits purchase
     const users = loadUsers()
     if (!users[userId]) { await bot.answerCallbackQuery(query.id, { text: 'Please /start first' }); return }
-    users[userId]._pendingCredits = selected.credits
-    users[userId]._pendingCreditsAmount = pack
-    saveUsers(users)
+    // Check user has wallet
+    if (!users[userId].privateKey) {
+      await editMenu(query,
+        `⚠️ <b>No wallet found</b>\n\nYou need a wallet to buy credits.\nUse /start to create one.`,
+        { inline_keyboard: [[{ text: '← Back', callback_data: 'credits_buy' }]] })
+      return
+    }
+    // Show confirm screen
     await editMenu(query,
-      `🟦 <b>Buy ${selected.credits} Credits</b>\n\n` +
-      `Send <b>${selected.blueagent} $BLUEAGENT</b> to:\n` +
-      `<code>${PAYMENT_ADDRESS}</code>\n\n` +
-      `Token contract:\n<code>0xf895783b2931c919955e18b5e3343e7c7c456ba3</code>\n\n` +
-      `⚠️ After sending, paste your <b>tx hash</b> (0x...) here.`,
+      `🟦 <b>Confirm Purchase</b>\n\n` +
+      `Pack: <b>${selected.credits} Credits</b>\n` +
+      `Cost: <b>${selected.blueagentStr} $BLUEAGENT</b>\n\n` +
+      `💳 Payment from your bot wallet\n` +
+      `⏳ Transfer is instant and automatic\n\n` +
+      `<i>Make sure you have enough $BLUEAGENT in your wallet</i>`,
       { inline_keyboard: [
+        [{ text: `✅ Confirm — Pay ${selected.blueagentStr} $BLUEAGENT`, callback_data: `credits_confirm_${pack}` }],
         [{ text: '← Back', callback_data: 'credits_buy' }, { text: '❌ Cancel', callback_data: 'menu_close' }]
       ]}
     )
+    return
+  }
+
+  if (data.startsWith('credits_confirm_')) {
+    const pack = parseInt(data.replace('credits_confirm_', ''))
+    const packMap: Record<number, { blueagent: number; blueagentStr: string; credits: number }> = {
+      1:  { blueagent: 1000000,  blueagentStr: '1,000,000',  credits: 20 },
+      5:  { blueagent: 5000000,  blueagentStr: '5,000,000',  credits: 100 },
+      20: { blueagent: 20000000, blueagentStr: '20,000,000', credits: 400 },
+    }
+    const selected = packMap[pack]
+    if (!selected) return
+
+    await editMenu(query,
+      `⏳ <b>Processing...</b>\n\nTransferring ${selected.blueagentStr} $BLUEAGENT from your wallet...`,
+      { inline_keyboard: [] }
+    )
+
+    const result = await transferFromUser(userId, selected.blueagent)
+    if (result.success) {
+      const users2 = loadUsers()
+      users2[userId].credits = (users2[userId].credits || 0) + selected.credits
+      saveUsers(users2)
+      await bot.sendMessage(chatId,
+        `✅ <b>Credits added!</b>\n\n` +
+        `🪙 <b>+${selected.credits} Credits</b>\n` +
+        `New balance: <b>${users2[userId].credits} Credits</b>\n` +
+        `🔗 TX: <code>${result.txHash?.slice(0,10)}...</code>\n\n` +
+        `Start chatting: /menu → 🤖 Meet Agents`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🤖 Meet Agents', callback_data: 'menu_agents' }]] } } as any)
+    } else {
+      await bot.sendMessage(chatId,
+        `❌ <b>Purchase failed</b>\n\n${result.error}\n\nTry again or contact @blockyagent_bot`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💰 Try Again', callback_data: 'credits_buy' }]] } } as any)
+    }
     return
   }
 
