@@ -3043,35 +3043,19 @@ bot.on('callback_query', async (query) => {
       currentBalance = parseInt(ethers.formatUnits(bal, decimals2))
     } catch {}
 
-    if (currentBalance < selected.blueagent) {
-      // Not enough $BLUEAGENT — show options
-      await editMenu(query,
-        `🟦 <b>Buy ${selected.credits} Credits</b>\n\n` +
-        `Cost: <b>${selected.blueagentStr} $BLUEAGENT</b>\n` +
-        `Your balance: <b>${currentBalance.toLocaleString()} $BLUEAGENT</b>\n\n` +
-        `⚠️ You don't have enough $BLUEAGENT.\n\n` +
-        `<b>Options:</b>\n` +
-        `1️⃣ Swap USDC → $BLUEAGENT in bot\n` +
-        `2️⃣ Send $BLUEAGENT to your wallet, then come back`,
-        { inline_keyboard: [
-          [{ text: '🔄 Swap USDC → $BLUEAGENT', callback_data: 'trade_buy_blueagent' }],
-          [{ text: '💳 My wallet address', callback_data: 'show_wallet_address' }],
-          [{ text: '← Back', callback_data: 'credits_buy' }]
-        ]}
-      )
-      return
-    }
-
-    // Enough balance — show confirm
+    // Show confirm — bot will auto-buy $BLUEAGENT if needed
+    const hasEnough = currentBalance >= selected.blueagent
     await editMenu(query,
       `🟦 <b>Confirm Purchase</b>\n\n` +
       `Pack: <b>${selected.credits} Credits</b>\n` +
       `Cost: <b>${selected.blueagentStr} $BLUEAGENT</b>\n` +
-      `Your balance: <b>${currentBalance.toLocaleString()} $BLUEAGENT</b>\n\n` +
-      `💳 Auto-transfer from your bot wallet\n` +
-      `⏳ Instant, no manual steps needed`,
+      `Your $BLUEAGENT: <b>${currentBalance.toLocaleString()}</b>\n\n` +
+      `${hasEnough
+        ? '✅ Sufficient balance — instant transfer'
+        : '🔄 Not enough $BLUEAGENT — bot will auto-buy with USDC'
+      }`,
       { inline_keyboard: [
-        [{ text: `✅ Confirm — Pay ${selected.blueagentStr} $BLUEAGENT`, callback_data: `credits_confirm_${pack}` }],
+        [{ text: `✅ Confirm — Buy ${selected.credits} Credits`, callback_data: `credits_confirm_${pack}` }],
         [{ text: '← Back', callback_data: 'credits_buy' }, { text: '❌ Cancel', callback_data: 'menu_close' }]
       ]}
     )
@@ -3089,10 +3073,39 @@ bot.on('callback_query', async (query) => {
     if (!selected) return
 
     await editMenu(query,
-      `⏳ <b>Processing...</b>\n\nTransferring ${selected.blueagentStr} $BLUEAGENT from your wallet...`,
+      `⏳ <b>Processing...</b>\n\nBuying ${selected.credits} Credits...`,
       { inline_keyboard: [] }
     )
 
+    // Check current $BLUEAGENT balance
+    const usersC = loadUsers()
+    const userC = usersC[userId]
+    let balC = 0
+    try {
+      const provC = new ethers.JsonRpcProvider(BASE_RPC)
+      const tokC = new ethers.Contract(TOKEN_CONTRACT, ERC20_ABI, provC)
+      const decC = await tokC.decimals()
+      const rawBal = await tokC.balanceOf(userC.evmAddress!)
+      balC = parseInt(ethers.formatUnits(rawBal, decC))
+    } catch {}
+
+    // If not enough $BLUEAGENT, auto-swap USDC first via Bankr Agent
+    if (balC < selected.blueagent) {
+      await bot.sendMessage(chatId, '🔄 Auto-buying $BLUEAGENT with USDC...', { parse_mode: 'HTML' } as any)
+      try {
+        const swapPrompt = `Buy exactly ${selected.blueagentStr} $BLUEAGENT (contract: ${TOKEN_CONTRACT}) using USDC from wallet ${userC.evmAddress} on Base. Execute the swap now.`
+        await askBankrAgent(swapPrompt, 20)
+        // Wait for tx to settle
+        await new Promise(r => setTimeout(r, 5000))
+      } catch (e: any) {
+        await bot.sendMessage(chatId,
+          `❌ <b>Auto-buy failed</b>\n\nCould not buy $BLUEAGENT automatically.\nPlease swap manually: /wallet → Swap USDC → $BLUEAGENT\n\nThen try buying credits again.`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💰 Try Again', callback_data: 'credits_buy' }]] } } as any)
+        return
+      }
+    }
+
+    // Transfer $BLUEAGENT to treasury
     const result = await transferFromUser(userId, selected.blueagent)
     if (result.success) {
       const users2 = loadUsers()
@@ -3107,7 +3120,7 @@ bot.on('callback_query', async (query) => {
         { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🤖 Meet Agents', callback_data: 'menu_agents' }]] } } as any)
     } else {
       await bot.sendMessage(chatId,
-        `❌ <b>Purchase failed</b>\n\n${result.error}\n\nTry again or contact @blockyagent_bot`,
+        `❌ <b>Transfer failed</b>\n\n${result.error}\n\nContact @blockyagent_bot`,
         { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💰 Try Again', callback_data: 'credits_buy' }]] } } as any)
     }
     return
