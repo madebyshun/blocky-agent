@@ -2065,9 +2065,9 @@ const MENU_KEYBOARD = {
     [{ text: '💰 Wallet', callback_data: 'menu_wallet' }, { text: '🤖 Meet Agents', callback_data: 'menu_agents' }],
     [{ text: '⚛️ x402 Services', callback_data: 'menu_x402' }, { text: '⭐ Rewards', callback_data: 'menu_rewards' }],
     [{ text: '📊 Builder Score', callback_data: 'menu_score' }, { text: '🏆 Leaderboard', callback_data: 'menu_leaderboard' }],
-    [{ text: '📰 News', callback_data: 'menu_news' }, { text: '📝 Submit', callback_data: 'menu_submit' }],
-    [{ text: '👤 Profile', callback_data: 'menu_profile' }, { text: '❓ Help', callback_data: 'menu_help' }],
-    [{ text: '🤖 Community Kit — Launch your own bot', callback_data: 'menu_community_kit' }],
+    [{ text: '🚀 Launch Token', callback_data: 'menu_launch' }, { text: '📝 Submit', callback_data: 'menu_submit' }],
+    [{ text: '📰 News', callback_data: 'menu_news' }, { text: '👤 Profile', callback_data: 'menu_profile' }],
+    [{ text: '❓ Help', callback_data: 'menu_help' }, { text: '🤖 Community Kit', callback_data: 'menu_community_kit' }],
   ]
 }
 

@@ -10,6 +10,17 @@
     "evmAddress": "0x7ab0EE58C2A87dbe010456bBf63429746ef95DCd",
     "privateKey": "0x49b0db829cc34867eb0ebd4e89efafcb638c5c142521b9cf8992d49d2164e411"
   },
+  "762998324": {
+    "id": 762998324,
+    "telegramUsername": "Imansajo",
+    "telegramName": "Imans",
+    "score": 0,
+    "points": 0,
+    "joinedAt": 1775876462582,
+    "walletConnected": true,
+    "evmAddress": "0x2201874eAf8Beb002812eA37081c9A6176B7461C",
+    "privateKey": "0xfae6b4ef7ae33b3287264268cf063d0d20b983df61ea0921282e9099b12ac16c"
+  },
   "834996602": {
     "id": 834996602,
     "telegramUsername": "voidcider",
@@ -48,14 +59,14 @@
     "telegramUsername": "madebyshun",
     "telegramName": "Shun",
     "score": 0,
-    "points": 50,
+    "points": 60,
     "joinedAt": 1774879978150,
     "walletConnected": true,
     "evmAddress": "0xEE01b8acD1Fe7D5D24F0E11A32F08c9E8EFf524A",
     "privateKey": "0xf9a5b91a60255985d89d199ff4fdd74714f4f613272e3169ee98f96163bae574",
     "lastClaim": 1774880906191,
-    "lastCheckin": 1775791955392,
-    "checkinStreak": 4,
+    "lastCheckin": 1775976883184,
+    "checkinStreak": 6,
     "claimedPoints": 710000,
     "_pendingCredits": 20,
     "_pendingCreditsAmount": 1
@@ -153,5 +164,16 @@
     "walletConnected": true,
     "evmAddress": "0xe0E3c53e959d3555910d645B3A05e0c8B3cE2B33",
     "privateKey": "0x5de9c3e02a8d90b286e34a8d64e169bb994f7a18e273ade539a4fc11a9f8f107"
+  },
+  "7119324991": {
+    "id": 7119324991,
+    "telegramUsername": "winossss",
+    "telegramName": "winoss",
+    "score": 0,
+    "points": 0,
+    "joinedAt": 1775829001267,
+    "walletConnected": true,
+    "evmAddress": "0xe0d0379dE209fac4F4b725FdBdFc182304811A27",
+    "privateKey": "0x91b2d1f19fd29da666d347587551ccf1cfbc9886b69531f6e48e48b194134dcf"
   }
 }
