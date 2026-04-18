@@ -1,0 +1,30 @@
+{
+  "name": "@blueagent/skill",
+  "version": "1.0.0",
+  "description": "BlueAgent Skill Package — x402 Pay-per-Use AI services for Data, Security, Research, and Earn on Base",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "blueagent-skill": "dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node --esm src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "keywords": ["blueagent", "x402", "mcp", "base", "bankr", "skill", "pay-per-use"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/madebyshun/blue-agent"
+  }
+}

@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "blueagent-skill",
+  "version": "1.0.0",
+  "description": "BlueAgent x402 Pay-per-Use AI tools — Data, Security, Research, Earn on Base",
+  "payment": {
+    "protocol": "x402",
+    "network": "base",
+    "token": "USDC",
+    "treasury": "0xf31f59e7b8b58555f7871f71973a394c8f1bffe5",
+    "baseUrl": "https://x402.bankr.bot/0xf31f59e7b8b58555f7871f71973a394c8f1bffe5"
+  },
+  "tools": [
+    {
+      "name": "pnl",
+      "category": "data",
+      "description": "Trading PnL report for any wallet — win rate, trading style, smart money score",
+      "priceUSD": 1.00,
+      "endpoint": "wallet-pnl",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string", "description": "EVM wallet address (0x...)" }
+        },
+        "required": ["address"]
+      }
+    },
+    {
+      "name": "whale-tracker",
+      "category": "data",
+      "description": "Track smart money and whale wallet flows in real-time on Base",
+      "priceUSD": 0.10,
+      "endpoint": "whale-tracker",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string", "description": "Wallet or token address to monitor" }
+        },
+        "required": ["address"]
+      }
+    },
+    {
+      "name": "dex-flow",
+      "category": "data",
+      "description": "DEX volume, liquidity flow, and buy/sell pressure for any token on Base",
+      "priceUSD": 0.15,
+      "endpoint": "dex-flow",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "Token contract address or ticker symbol" }
+        },
+        "required": ["token"]
+      }
+    },
+    {
+      "name": "unlock-alert",
+      "category": "data",
+      "description": "Token unlock schedule and vesting cliff analysis",
+      "priceUSD": 0.20,
+      "endpoint": "unlock-alert",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "Token name, contract address, or ticker" }
+        },
+        "required": ["token"]
+      }
+    },
+    {
+      "name": "riskcheck",
+      "category": "security",
+      "description": "Pre-transaction safety check — APPROVE / WARN / BLOCK decision with risk score",
+      "priceUSD": 0.05,
+      "endpoint": "risk-gate",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "description": "Describe the onchain action to check" }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "quantum",
+      "category": "security",
+      "description": "Quantum-resistant security analysis for any wallet — vulnerability score, threat timeline, migration steps",
+      "priceUSD": 1.50,
+      "endpoint": "quantum-premium",
+      "tiers": [
+        { "name": "lite",     "priceUSD": 0.10 },
+        { "name": "standard", "priceUSD": 1.50 },
+        { "name": "batch",    "priceUSD": 2.50 },
+        { "name": "shield",   "priceUSD": 0.25 },
+        { "name": "timeline", "priceUSD": 2.00 },
+        { "name": "contract", "priceUSD": 5.00 }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string", "description": "Wallet address to analyze" },
+          "tier": { "type": "string", "description": "Analysis tier: lite | standard | premium | batch | shield | timeline | contract" }
+        },
+        "required": ["address"]
+      }
+    },
+    {
+      "name": "honeypot-check",
+      "category": "security",
+      "description": "Detect honeypot, rug pull, or malicious token contract before buying",
+      "priceUSD": 0.05,
+      "endpoint": "honeypot-check",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "Token contract address to check" }
+        },
+        "required": ["token"]
+      }
+    },
+    {
+      "name": "aml-screen",
+      "category": "security",
+      "description": "AML compliance check and sanctions screening for any wallet address",
+      "priceUSD": 0.25,
+      "endpoint": "aml-screen",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string", "description": "Wallet address to screen" }
+        },
+        "required": ["address"]
+      }
+    },
+    {
+      "name": "mev-shield",
+      "category": "security",
+      "description": "MEV risk assessment before large swaps — sandwich attack probability and protection strategies",
+      "priceUSD": 0.30,
+      "endpoint": "mev-shield",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "description": "Describe the swap or transaction" }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "phishing-scan",
+      "category": "security",
+      "description": "Scan URL, contract address, or social handle for phishing and scam indicators",
+      "priceUSD": 0.10,
+      "endpoint": "phishing-scan",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "URL, contract address, or @handle to scan" }
+        },
+        "required": ["target"]
+      }
+    },
+    {
+      "name": "analyze",
+      "category": "research",
+      "description": "Deep token and project due diligence — risk score, strengths, red flags, recommendation",
+      "priceUSD": 0.35,
+      "endpoint": "deep-analysis",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectName": { "type": "string", "description": "Token name, ticker ($SYMBOL), or contract address" }
+        },
+        "required": ["projectName"]
+      }
+    },
+    {
+      "name": "advisor",
+      "category": "research",
+      "description": "Full token launch playbook — strategy, timing, community growth, go-to-market plan",
+      "priceUSD": 3.00,
+      "endpoint": "launch-advisor",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string", "description": "Describe your project and launch goals" },
+          "projectName": { "type": "string", "description": "Project name (optional)" }
+        },
+        "required": ["description"]
+      }
+    },
+    {
+      "name": "grant",
+      "category": "research",
+      "description": "Base ecosystem grant scoring — overall score, suggested grant size, strengths and concerns",
+      "priceUSD": 5.00,
+      "endpoint": "grant-evaluator",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string", "description": "Project description for grant evaluation" },
+          "projectName": { "type": "string", "description": "Project name" }
+        },
+        "required": ["description"]
+      }
+    },
+    {
+      "name": "tokenomics-score",
+      "category": "research",
+      "description": "Tokenomics deep dive — supply structure, inflation rate, unlock cliff, sustainability score",
+      "priceUSD": 0.50,
+      "endpoint": "tokenomics-score",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "Token name, ticker, or contract address" }
+        },
+        "required": ["token"]
+      }
+    },
+    {
+      "name": "narrative-pulse",
+      "category": "research",
+      "description": "Trending narratives in crypto right now — AI, RWA, DeFi, memes, Base ecosystem themes",
+      "priceUSD": 0.40,
+      "endpoint": "narrative-pulse",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Topic or sector to explore" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "vc-tracker",
+      "category": "research",
+      "description": "Track VC investments and thesis — who is backing what in crypto and Base ecosystem",
+      "priceUSD": 1.00,
+      "endpoint": "vc-tracker",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "VC firm name, sector, or investment theme" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "whitepaper-tldr",
+      "category": "research",
+      "description": "Summarize any whitepaper or project docs into 5 key bullets in under 30 seconds",
+      "priceUSD": 0.20,
+      "endpoint": "whitepaper-tldr",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "URL to the whitepaper or project documentation" },
+          "projectName": { "type": "string", "description": "Project name (optional)" }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "yield-optimizer",
+      "category": "earn",
+      "description": "Find best APY opportunities on Base DeFi protocols — lending, LPing, staking",
+      "priceUSD": 0.15,
+      "endpoint": "yield-optimizer",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "Token to optimize yield for (e.g. USDC, ETH)" }
+        },
+        "required": ["token"]
+      }
+    },
+    {
+      "name": "airdrop-check",
+      "category": "earn",
+      "description": "Check wallet eligibility for upcoming airdrops and estimate potential value",
+      "priceUSD": 0.10,
+      "endpoint": "airdrop-check",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string", "description": "Wallet address to check" }
+        },
+        "required": ["address"]
+      }
+    },
+    {
+      "name": "lp-analyzer",
+      "category": "earn",
+      "description": "LP position health check — impermanent loss, fee income earned, rebalance recommendation",
+      "priceUSD": 0.30,
+      "endpoint": "lp-analyzer",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string", "description": "Wallet address holding LP positions" },
+          "pool": { "type": "string", "description": "Pool address or pair name (optional)" }
+        },
+        "required": ["address"]
+      }
+    },
+    {
+      "name": "tax-report",
+      "category": "earn",
+      "description": "Generate on-chain tax report — realized gains/losses, income events, DeFi transactions",
+      "priceUSD": 2.00,
+      "endpoint": "tax-report",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": { "type": "string", "description": "Wallet address for tax report" },
+          "year": { "type": "string", "description": "Tax year (e.g. 2025, defaults to previous year)" }
+        },
+        "required": ["address"]
+      }
+    }
+  ]
+}
