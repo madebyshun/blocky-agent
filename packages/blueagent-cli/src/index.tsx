@@ -12,8 +12,12 @@ const TREASURY = process.env.BLUEAGENT_TREASURY ?? '0xf31f59e7b8b58555f7871f7197
 const BANKR_BIN = process.env.BANKR_BIN ?? '/usr/local/bin/bankr'
 const DEMO_MODE = process.env.DEMO_MODE === 'true'
 
+// ── Terminal tab title ───────────────────────────────────────────────
+process.title = 'blueagent'
+process.stdout.write('\x1b]0;blueagent\x07')
+
 // ── ASCII Title ──────────────────────────────────────────────────────
-const TITLE = figlet.textSync('BLUEAGENT', { font: 'ANSI Shadow' })
+const TITLE = figlet.textSync('BLUEAGENT', { font: 'Banner3' })
 
 // ── Skills Data ──────────────────────────────────────────────────────
 interface Skill {
