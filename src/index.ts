@@ -6,6 +6,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { ethers } from 'ethers'
 import { parseSwapIntent, parseSendIntent, sendToken, swapTokens, needsBankrSwap } from './lib/walletActions'
+import { startApiServer } from './api'
 // import { createCanvas } from 'canvas' // Reserved for Phase 2 card generation
 dotenv.config()
 
@@ -7524,3 +7525,6 @@ bot.on('message', async (msg) => {
     await bot.sendMessage(chatId, '⚠️ Verification error. Contact @blockyagent_bot.')
   }
 })
+
+// ── x402 Terminal API for ESP32 ──
+startApiServer()
