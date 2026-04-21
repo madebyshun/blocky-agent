@@ -11,18 +11,17 @@
 #define API_USE_HTTPS   false                        // set true if server has TLS
 
 // ── Display (ILI9488 3.5" 320x480) ──
-// Wiring (SPI): adjust to your actual pin connections
-#define TFT_CS    15
-#define TFT_DC    2
-#define TFT_RST   4
-#define TFT_MOSI  23
-#define TFT_SCLK  18
-#define TFT_MISO  19
-#define TFT_LED   -1   // -1 = always on, or set to PWM pin
+#define TFT_CS    10
+#define TFT_DC     8
+#define TFT_RST    9
+#define TFT_MOSI  11
+#define TFT_SCLK  12
+#define TFT_MISO  13
+#define TFT_LED   -1   // -1 = 3.3V trực tiếp, hoặc set GPIO để điều chỉnh độ sáng
 
 // ── Touch (XPT2046 resistive) ──
-#define TOUCH_CS    5
-#define TOUCH_IRQ   27
+#define TOUCH_CS   5
+#define TOUCH_IRQ  4
 
 // ── LVGL display buffer size ──
 #define LV_BUF_LINES  10  // lines per LVGL draw buffer (more = faster, more RAM)
