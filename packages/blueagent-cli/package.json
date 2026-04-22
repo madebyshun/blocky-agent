@@ -1,6 +1,6 @@
 {
   "name": "@blueagent/cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "BlueAgent terminal UI — 21 x402 AI services on Base",
   "main": "dist/cli.js",
   "bin": {
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/cli.js dist/index.js",
     "dev": "tsx src/index.tsx",
     "start": "node dist/index.js",
     "demo": "DEMO_MODE=true node dist/index.js",
