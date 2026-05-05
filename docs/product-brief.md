@@ -1,7 +1,7 @@
 # Blue Agent — Product Brief
 
 ## One-liner
-Blue Agent is the Base-native founder console for building, launching, and monetizing agents and apps with Bankr.
+Blue Agent is the Base-native founder console for builders on Bankr.
 
 ## For whom
 - Base builders shipping apps, contracts, or agent products

@@ -1,13 +1,26 @@
 # Blue Agent
 
-Blue Agent is the Base-native founder console for building, launching, and monetizing agents and apps with Bankr.
+Blue Agent is the Base-native founder console for builders on Bankr.
+
+It is not a Telegram bot anymore.
+It is a workflow-first console for thinking, building, auditing, shipping, and launching on Base.
 
 ## Product surfaces
 
-- `/code` — founder console (idea / build / audit / ship / raise)
+- `/code` — founder console for `blue idea`, `blue build`, `blue audit`, `blue ship`, `blue raise`
 - `/chat` — model picker + paid compute
 - `/launch` — launch wizard for agents
 - `/market` — marketplace for agents, prompts, and skills
+- `/rewards` — points, credits, and loyalty
+
+## What it does
+
+- turns rough ideas into fundable briefs
+- turns briefs into build plans
+- reviews plans for risks
+- prepares launch and deployment checklists
+- lets builders pick Bankr models and pay with credits or USDC
+- sets up agent launches and future marketplace monetization
 
 ## Workspace layout
 
@@ -30,7 +43,7 @@ Blue Agent is the Base-native founder console for building, launching, and monet
 
 ## Later layers
 
-- model picker chat
+- chat with model picker
 - credits / USDC payments
 - agent launch + publish
 - marketplace monetization
