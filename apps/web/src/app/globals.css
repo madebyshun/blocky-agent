@@ -133,6 +133,12 @@ body {
   gap: 6px;
 }
 
+/* Typing indicator pulse */
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50%       { opacity: 1;   transform: scale(1.1);  }
+}
+
 /* Buttons */
 .btn-blue {
   background: #4a90d9;

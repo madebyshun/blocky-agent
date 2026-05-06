@@ -9,7 +9,8 @@
   "scripts": {
     "dev:web": "npm --workspace apps/web run dev",
     "build:web": "npm --workspace apps/web run build",
-    "dev:api": "node apps/api/index.js",
-    "lint:web": "npm --workspace apps/web run lint"
+    "dev:api": "npm --workspace apps/api run dev",
+    "lint:web": "npm --workspace apps/web run lint",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:api\""
   }
 }
