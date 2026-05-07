@@ -1,0 +1,17 @@
+{
+  "name": "@blueagent/sdk",
+  "version": "0.1.0",
+  "description": "Blue Agent SDK — unified interface for all builder commands and x402 tools",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": { "build": "tsc", "dev": "tsc --watch" },
+  "dependencies": {
+    "@blueagent/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0"
+  },
+  "engines": { "node": ">=18" }
+}
