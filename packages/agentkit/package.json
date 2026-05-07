@@ -1,0 +1,23 @@
+{
+  "name": "@blueagent/agentkit",
+  "version": "0.1.0",
+  "description": "Coinbase AgentKit plugin for Blue Agent — 32 x402 tools on Base",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "peerDependencies": {
+    "@coinbase/agentkit": ">=0.4.0",
+    "zod": ">=3.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0",
+    "@coinbase/agentkit": "^0.4.0",
+    "zod": "^3.22.0"
+  },
+  "engines": { "node": ">=18" }
+}
