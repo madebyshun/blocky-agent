@@ -11,6 +11,9 @@
     "build:web": "npm --workspace apps/web run build",
     "dev:api": "npm --workspace apps/api run dev",
     "lint:web": "npm --workspace apps/web run lint",
-    "dev": "concurrently \"npm run dev:web\" \"npm run dev:api\""
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:api\"",
+    "build:core": "npm --workspace packages/core run build",
+    "build:builder": "npm --workspace packages/builder run build",
+    "build:packages": "npm run build:core && npm run build:builder"
   }
 }
