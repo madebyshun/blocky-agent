@@ -1,13 +1,13 @@
 export default function Footer() {
   return (
-    <footer className="relative border-t border-white/10 py-8">
+    <footer className="relative border-t border-[#1A1A2E] py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <div className="glow-dot" />
           <span className="font-mono font-semibold text-white tracking-widest text-sm">
-            BLUE<span className="text-[#33C3FF]">AGENT</span>
+            BLUE<span className="text-[#4FC3F7]">AGENT</span>
           </span>
-          <span className="text-[#3D5275] text-xs ml-2 hidden sm:inline">
+          <span className="text-slate-600 font-mono text-xs ml-2 hidden sm:inline">
             Base-native founder console
           </span>
         </div>
@@ -22,7 +22,7 @@ export default function Footer() {
           ].map((l) => (
             <a key={l.label} href={l.href} target={l.href.startsWith("http") ? "_blank" : undefined}
               rel={l.href.startsWith("http") ? "noopener noreferrer" : undefined}
-              className="text-xs text-[#7A8FAE] hover:text-[#4A7AFF] transition-colors">
+              className="font-mono text-xs text-slate-500 hover:text-[#4FC3F7] transition-colors">
               {l.label}
             </a>
           ))}
@@ -30,13 +30,13 @@ export default function Footer() {
 
         <div className="flex items-center gap-4">
           <a href="https://x.com/blocky_agent" target="_blank" rel="noopener noreferrer"
-            className="text-[#7A8FAE] hover:text-[#4A7AFF] transition-colors">
+            className="text-slate-500 hover:text-[#4FC3F7] transition-colors">
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.748l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
             </svg>
           </a>
-          <span className="text-xs text-[#3D5275]">
-            Built on <span className="text-[#4A7AFF]">Base</span> · <span className="text-[#33C3FF]">x402</span>
+          <span className="font-mono text-xs text-slate-600">
+            Built on <span className="text-[#4FC3F7]">Base</span> · <span className="text-[#A78BFA]">x402</span>
           </span>
         </div>
       </div>

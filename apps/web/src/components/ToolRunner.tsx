@@ -129,22 +129,21 @@ export default function ToolRunner({ toolId, price }: { toolId: string; price: s
   };
 
   return (
-    <div className="space-y-4 pt-4 border-t border-white/10 mt-2">
+    <div className="space-y-4 pt-4 border-t border-[#1A1A2E] mt-2">
       {schema.fields.length > 0 && (
         <div className="space-y-3">
           {schema.fields.map((field: Field) => (
             <div key={field.name}>
-              <label className="text-xs text-[#7A8FAE] mb-1 block font-medium">
+              <label className="font-mono text-xs text-slate-500 mb-1 block">
                 {field.label}
-                {field.required && <span className="text-[#4A7AFF] ml-1">*</span>}
+                {field.required && <span className="text-[#4FC3F7] ml-1">*</span>}
               </label>
               <input
                 type={field.type === "number" ? "number" : "text"}
                 placeholder={field.placeholder}
                 value={values[field.name] ?? ""}
                 onChange={(e) => setValues((prev) => ({ ...prev, [field.name]: e.target.value }))}
-                className="input-base w-full px-3 py-2 text-sm placeholder-[#3D5275]"
-                style={{ fontFamily: field.type === "address" ? "'JetBrains Mono', monospace" : undefined, fontSize: field.type === "address" ? "12px" : undefined }}
+                className="w-full bg-[#050508] border border-[#1A1A2E] rounded-lg px-3 py-2 font-mono text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-[#4FC3F7]/40 transition-colors"
               />
             </div>
           ))}
@@ -152,14 +151,14 @@ export default function ToolRunner({ toolId, price }: { toolId: string; price: s
       )}
 
       {!isConnected ? (
-        <div className="text-center py-3 border border-dashed border-white/10 rounded-xl">
-          <p className="text-xs text-[#7A8FAE]">Connect wallet above to run this tool</p>
+        <div className="text-center py-3 border border-dashed border-[#1A1A2E] rounded-xl">
+          <p className="font-mono text-xs text-slate-500">Connect wallet above to run this tool</p>
         </div>
       ) : (
         <button
           onClick={run}
           disabled={!requiredFilled || step === "calling" || step === "signing" || step === "paying"}
-          className="btn-primary w-full disabled:opacity-40 disabled:cursor-not-allowed text-sm py-3 rounded-xl flex items-center justify-center gap-2"
+          className="w-full bg-[#4FC3F7] hover:bg-[#29ABE2] disabled:opacity-40 disabled:cursor-not-allowed text-[#050508] font-mono font-semibold text-sm py-3 rounded-xl transition-all flex items-center justify-center gap-2"
         >
           {step === "calling" && <><Spinner /> Calling service…</>}
           {step === "signing" && <><Spinner /> Sign {payAmount ?? price} in wallet…</>}
@@ -178,9 +177,9 @@ export default function ToolRunner({ toolId, price }: { toolId: string; price: s
         <div>
           <div className="flex items-center gap-2 mb-2">
             <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
-            <span className="text-xs text-emerald-400 font-medium">Result</span>
+            <span className="font-mono text-xs text-emerald-400">Result</span>
           </div>
-          <pre className="bg-[#060C18] border border-white/10 rounded-xl p-4 overflow-auto max-h-52 font-mono text-xs text-[#B8CBE8] leading-relaxed whitespace-pre-wrap break-words">
+          <pre className="bg-[#050508] border border-[#1A1A2E] rounded-xl p-4 overflow-auto max-h-52 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
             {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
           </pre>
         </div>

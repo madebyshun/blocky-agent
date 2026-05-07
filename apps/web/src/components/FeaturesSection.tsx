@@ -11,13 +11,13 @@ export default function FeaturesSection() {
   return (
     <section className="max-w-5xl mx-auto px-6 mb-24">
       <div className="text-center mb-12">
-        <div className="inline-flex items-center gap-2 border border-[#1A52FF]/25 bg-[#1A52FF]/8 rounded-full px-4 py-1.5 mb-6">
-          <span className="font-mono text-xs text-[#33C3FF] tracking-widest">WORKFLOW</span>
+        <div className="inline-flex items-center gap-2 border border-[#4FC3F7]/20 bg-[#4FC3F7]/5 rounded-full px-4 py-1.5 mb-6">
+          <span className="font-mono text-xs text-[#4FC3F7] tracking-widest">WORKFLOW</span>
         </div>
-        <h2 className="font-sans font-bold text-3xl sm:text-4xl text-white mb-3">
+        <h2 className="font-mono font-bold text-3xl sm:text-4xl text-white mb-3">
           One console, many workflows
         </h2>
-        <p className="text-[#B8CBE8] max-w-xl mx-auto">
+        <p className="text-slate-400 max-w-xl mx-auto">
           Blue Agent is built around the founder loop: think, build, audit, ship, and monetize.
         </p>
       </div>
@@ -26,11 +26,11 @@ export default function FeaturesSection() {
         {FEATURES.map((f) => (
           <div key={f.title} className="card-surface card-hover rounded-2xl p-6">
             <div className="text-2xl mb-3">{f.icon}</div>
-            <div className="font-mono text-[10px] text-[#33C3FF] tracking-widest px-2 py-1 bg-[#1A52FF]/8 border border-[#1A52FF]/25 rounded inline-block mb-3">
+            <div className="font-mono text-[10px] text-[#4FC3F7] tracking-widest px-2 py-1 bg-[#4FC3F7]/5 border border-[#4FC3F7]/20 rounded inline-block mb-3">
               {f.cmd}
             </div>
-            <h3 className="font-sans font-semibold text-white mb-2">{f.title}</h3>
-            <p className="text-sm text-[#7A8FAE] leading-relaxed">{f.desc}</p>
+            <h3 className="font-mono font-semibold text-white mb-2">{f.title}</h3>
+            <p className="text-sm text-slate-400 leading-relaxed">{f.desc}</p>
           </div>
         ))}
       </div>

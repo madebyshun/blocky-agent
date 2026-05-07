@@ -80,52 +80,47 @@ export default function HeroSection() {
       <div className="absolute inset-0 bg-hero-glow" />
 
       {/* Animated orbs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full bg-[rgba(26,82,255,0.06)] blur-3xl animate-pulse-slow" />
-      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 rounded-full bg-[rgba(51,195,255,0.05)] blur-3xl animate-pulse-slow" style={{ animationDelay: "2s" }} />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full bg-[rgba(79,195,247,0.04)] blur-3xl animate-pulse-slow" />
+      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 rounded-full bg-[rgba(167,139,250,0.05)] blur-3xl animate-pulse-slow" style={{ animationDelay: "2s" }} />
 
       <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 w-full">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           {/* Left */}
           <div>
-            <div className="inline-flex items-center gap-2 border border-[#1A52FF]/25 bg-[#1A52FF]/8 rounded-full px-4 py-1.5 mb-8">
-              <span className="w-2 h-2 rounded-full bg-[#1A52FF] animate-pulse" />
-              <span className="font-mono text-xs text-[#33C3FF] tracking-widest">BUILT ON BASE · POWERED BY BANKR</span>
+            <div className="inline-flex items-center gap-2 border border-[#4FC3F7]/20 bg-[#4FC3F7]/5 rounded-full px-4 py-1.5 mb-8">
+              <span className="w-2 h-2 rounded-full bg-[#4FC3F7] animate-pulse" />
+              <span className="font-mono text-xs text-[#4FC3F7] tracking-widest">BUILT ON BASE · POWERED BY BANKR</span>
             </div>
 
-            <h1 className="font-sans font-bold tracking-tight mb-4">
+            <h1 className="font-mono font-bold tracking-[0.15em] mb-4">
               <span className="block text-4xl sm:text-5xl lg:text-6xl text-gradient-white">BLUE</span>
               <span className="block text-4xl sm:text-5xl lg:text-6xl text-gradient-blue">AGENT</span>
             </h1>
 
-            <p className="text-[#B8CBE8] text-lg mb-6 leading-relaxed max-w-md">
+            <p className="text-slate-400 text-lg mb-6 leading-relaxed max-w-md">
               The <span className="text-white font-medium">founder console</span> for Base builders.
               Idea, build, audit, ship, and raise — all from one workflow.
             </p>
 
             {/* Token price */}
             <div className="flex items-center gap-3 mb-8 flex-wrap">
-              <div className="flex items-center gap-2 border border-white/10 bg-[#0F1C35] rounded-lg px-3 py-1.5">
+              <div className="flex items-center gap-2 border border-[#1A1A2E] bg-[#0D0D14] rounded-lg px-3 py-1.5">
                 <div className="glow-dot" style={{ width: 6, height: 6 }} />
-                <span className="font-mono text-sm text-[#33C3FF]">{priceStr}</span>
+                <span className="font-mono text-sm text-[#4FC3F7]">{priceStr}</span>
                 {change24h !== 0 && (
                   <span className={`font-mono text-xs ${isUp ? "text-emerald-400" : "text-red-400"}`}>
-                    {isUp ? "↑" : "↓"} {Math.abs(change24h).toFixed(2)}%
+                    {isUp ? "▲" : "▼"} {Math.abs(change24h).toFixed(2)}%
                   </span>
                 )}
               </div>
-              <span className="font-mono text-xs text-[#3D5275]">$BLUEAGENT</span>
+              <span className="font-mono text-xs text-slate-600">$BLUEAGENT</span>
             </div>
 
             <div className="flex gap-3 flex-wrap">
-              <a href="/code" className="btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg">
+              <a href="/code" className="font-mono text-sm font-semibold bg-[#4FC3F7] hover:bg-[#29ABE2] text-[#050508] px-5 py-2.5 rounded-lg transition-all hover:shadow-[0_0_20px_rgba(79,195,247,0.4)]">
                 Open Console →
               </a>
-              <a
-                href="https://github.com/madebyshun/blue-agent"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-[#B8CBE8] hover:text-white border border-white/15 hover:border-[#1A52FF]/40 px-5 py-2.5 rounded-lg transition-all"
-              >
+              <a href="https://github.com/madebyshun/blue-agent" target="_blank" rel="noopener noreferrer" className="font-mono text-sm text-slate-400 hover:text-white border border-[#1A1A2E] hover:border-[#4FC3F7]/30 px-5 py-2.5 rounded-lg transition-all">
                 GitHub
               </a>
             </div>
@@ -133,9 +128,9 @@ export default function HeroSection() {
 
           {/* Right — chat mockup */}
           <div className="flex justify-center">
-            <div className="w-72 bg-[#0F1C35] border border-white/10 rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(26,82,255,0.18)]">
+            <div className="w-72 bg-[#0D0D14] border border-[#1A1A2E] rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(79,195,247,0.12)]">
               {/* Header */}
-              <div className="bg-[#060C18] border-b border-white/10 px-4 py-3 flex items-center gap-2.5">
+              <div className="bg-[#050508] border-b border-[#1A1A2E] px-4 py-3 flex items-center gap-2.5">
                 <div className="glow-dot" />
                 <span className="font-mono text-xs font-semibold text-white tracking-widest">BLUEAGENT</span>
                 <span className="ml-auto font-mono text-[10px] text-emerald-400">● online</span>
@@ -149,11 +144,9 @@ export default function HeroSection() {
                     <div key={`${sceneIdx}-${i}`} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
                       <div className={`max-w-[85%] px-3 py-2 rounded-xl font-mono text-xs leading-relaxed ${
                         isUser
-                          ? "text-white rounded-br-sm"
-                          : "bg-[#162040] text-[#B8CBE8] rounded-bl-sm border border-white/10"
-                      }`}
-                        style={isUser ? { background: "linear-gradient(135deg, #1A52FF, #2E6AFF)" } : {}}
-                      >
+                          ? "bg-[#4FC3F7] text-[#050508] rounded-br-sm"
+                          : "bg-[#1A1A2E] text-slate-300 rounded-bl-sm border border-[#2A2A4E]"
+                      }`}>
                         {msg.text}
                       </div>
                     </div>
@@ -162,14 +155,11 @@ export default function HeroSection() {
               </div>
 
               {/* Input */}
-              <div className="border-t border-white/10 px-3 py-2.5 flex items-center gap-2">
-                <div className="flex-1 bg-[#060C18] border border-white/10 rounded-lg px-3 py-1.5 font-mono text-[11px] text-[#3D5275]">
+              <div className="border-t border-[#1A1A2E] px-3 py-2.5 flex items-center gap-2">
+                <div className="flex-1 bg-[#050508] border border-[#1A1A2E] rounded-lg px-3 py-1.5 font-mono text-[11px] text-slate-600">
                   Message Blue Agent...
                 </div>
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold"
-                  style={{ background: "linear-gradient(135deg, #1A52FF, #2E6AFF)" }}>
-                  ↑
-                </div>
+                <div className="w-7 h-7 bg-[#4FC3F7] rounded-lg flex items-center justify-center text-[#050508] text-xs font-bold">↑</div>
               </div>
             </div>
           </div>
@@ -180,16 +170,16 @@ export default function HeroSection() {
           {STATS.map(({ value, label }) => (
             <div key={label} className="card-surface rounded-xl p-4 text-center">
               <div className="font-mono text-2xl font-bold text-gradient-blue">{value}</div>
-              <div className="text-xs text-[#7A8FAE] mt-1 tracking-wider uppercase">{label}</div>
+              <div className="font-mono text-xs text-slate-500 mt-1 tracking-wider uppercase">{label}</div>
             </div>
           ))}
         </div>
       </div>
 
       {/* Scroll indicator */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-[#3D5275]">
+      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-slate-600">
         <span className="font-mono text-xs tracking-widest">SCROLL</span>
-        <div className="w-px h-8 bg-gradient-to-b from-[#1A52FF]/50 to-transparent" />
+        <div className="w-px h-8 bg-gradient-to-b from-[#4FC3F7]/50 to-transparent" />
       </div>
     </section>
   );

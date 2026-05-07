@@ -17,13 +17,13 @@ export default function HowItWorksSection() {
   return (
     <section className="max-w-5xl mx-auto px-6 mb-24">
       <div className="text-center mb-12">
-        <div className="inline-flex items-center gap-2 border border-[#1A52FF]/25 bg-[#1A52FF]/8 rounded-full px-4 py-1.5 mb-6">
-          <span className="font-mono text-xs text-[#33C3FF] tracking-widest">FOUNDER WORKFLOW</span>
+        <div className="inline-flex items-center gap-2 border border-[#4FC3F7]/20 bg-[#4FC3F7]/5 rounded-full px-4 py-1.5 mb-6">
+          <span className="font-mono text-xs text-[#4FC3F7] tracking-widest">FOUNDER WORKFLOW</span>
         </div>
-        <h2 className="font-sans font-bold text-3xl sm:text-4xl text-white mb-3">
+        <h2 className="font-mono font-bold text-3xl sm:text-4xl text-white mb-3">
           Idea → Build → Ship
         </h2>
-        <p className="text-[#B8CBE8] max-w-xl mx-auto">
+        <p className="text-slate-400 max-w-xl mx-auto">
           Blue Agent turns scattered founder work into a clean command flow. Every step produces an artifact you can use immediately.
         </p>
       </div>
@@ -32,31 +32,31 @@ export default function HowItWorksSection() {
         {STEPS.map((step) => (
           <div key={step.num} className="card-surface rounded-2xl p-6 flex flex-col gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center font-mono font-bold text-sm bg-[#1A52FF]/10 border border-[#1A52FF]/30 text-[#4A7AFF]">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center font-mono font-bold text-sm bg-[#4FC3F7]/10 border border-[#4FC3F7]/30 text-[#4FC3F7]">
                 {step.num}
               </div>
-              <div className="font-mono text-[10px] text-[#33C3FF] tracking-widest px-2 py-1 bg-[#1A52FF]/8 border border-[#1A52FF]/20 rounded">
+              <div className="font-mono text-[10px] text-[#4FC3F7] tracking-widest px-2 py-1 bg-[#4FC3F7]/5 border border-[#4FC3F7]/20 rounded">
                 {step.cmd}
               </div>
             </div>
-            <h3 className="font-sans font-bold text-white">{step.title}</h3>
-            <p className="text-sm text-[#7A8FAE] leading-relaxed">{step.desc}</p>
+            <h3 className="font-mono font-bold text-white">{step.title}</h3>
+            <p className="text-sm text-slate-400 leading-relaxed">{step.desc}</p>
           </div>
         ))}
       </div>
 
       <div className="card-surface rounded-2xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-white/8 bg-[#1A52FF]/4">
-          <div className="font-sans font-bold text-white">What the console produces</div>
-          <div className="text-xs text-[#7A8FAE] mt-0.5">Artifacts first. UI second. Hype last.</div>
+        <div className="px-6 py-4 border-b border-[#1A1A2E] bg-[#4FC3F7]/3">
+          <div className="font-mono font-bold text-white">What the console produces</div>
+          <div className="font-mono text-xs text-slate-500 mt-0.5">Artifacts first. UI second. Hype last.</div>
         </div>
         {ARTIFACTS.map(({ action, note }, i) => (
-          <div key={action} className={`flex items-center justify-between px-6 py-4 ${i < ARTIFACTS.length - 1 ? "border-b border-white/8" : ""}`}>
+          <div key={action} className={`flex items-center justify-between px-6 py-4 ${i < ARTIFACTS.length - 1 ? "border-b border-[#1A1A2E]" : ""}`}>
             <div>
-              <div className="text-sm text-white font-medium">{action}</div>
-              <div className="text-xs text-[#7A8FAE] mt-0.5">{note}</div>
+              <div className="font-mono text-sm text-white">{action}</div>
+              <div className="font-mono text-xs text-slate-500">{note}</div>
             </div>
-            <div className="w-2 h-2 rounded-full bg-[#1A52FF]" />
+            <div className="w-2 h-2 rounded-full bg-[#4FC3F7]" />
           </div>
         ))}
       </div>

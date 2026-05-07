@@ -19,7 +19,7 @@ export default function Navbar() {
   const isActive = (href: string) => pathname.startsWith(href);
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-[#060C18]/90 backdrop-blur-xl">
+    <nav className="fixed top-0 left-0 right-0 z-50 border-b border-[#1A1A2E] bg-[#050508]/90 backdrop-blur-xl">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
 
@@ -27,7 +27,7 @@ export default function Navbar() {
           <Link href="/" className="flex items-center gap-2.5">
             <div className="glow-dot" />
             <span className="font-mono font-semibold text-white tracking-widest text-sm">
-              BLUE<span className="text-[#33C3FF]">AGENT</span>
+              BLUE<span className="text-[#4FC3F7]">AGENT</span>
             </span>
           </Link>
 
@@ -37,10 +37,10 @@ export default function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`text-sm px-3 py-1.5 rounded-lg transition-all ${
+                className={`font-mono text-xs px-3 py-1.5 rounded-lg transition-all ${
                   isActive(item.href)
-                    ? "text-[#4A7AFF] bg-[#1A52FF]/10"
-                    : "text-[#7A8FAE] hover:text-white hover:bg-[#162040]/60"
+                    ? "text-[#4FC3F7] bg-[#4FC3F7]/10"
+                    : "text-slate-400 hover:text-white hover:bg-[#1A1A2E]/50"
                 }`}
               >
                 {item.label}
@@ -54,7 +54,7 @@ export default function Navbar() {
               href={X_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[#7A8FAE] hover:text-white transition-colors"
+              className="text-slate-500 hover:text-white transition-colors"
               aria-label="X / Twitter"
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -65,13 +65,13 @@ export default function Navbar() {
               href="https://github.com/madebyshun/blue-agent"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm text-[#B8CBE8] hover:text-white transition-colors border border-white/15 px-3 py-1.5 rounded-lg hover:border-[#1A52FF]/40"
+              className="font-mono text-xs text-slate-400 hover:text-white transition-colors border border-[#1A1A2E] px-3 py-1.5 rounded hover:border-[#4FC3F7]/30"
             >
               GitHub
             </a>
             <Link
               href="/code"
-              className="btn-primary text-sm px-3 py-1.5 rounded-lg"
+              className="font-mono text-xs font-semibold bg-[#4FC3F7] text-[#050508] px-3 py-1.5 rounded hover:bg-[#29ABE2] transition-colors"
             >
               Open Console
             </Link>
@@ -79,7 +79,7 @@ export default function Navbar() {
 
           {/* Mobile hamburger */}
           <button
-            className="md:hidden text-[#7A8FAE] hover:text-white"
+            className="md:hidden text-slate-400 hover:text-white"
             onClick={() => setOpen(!open)}
             aria-label="Toggle menu"
           >
@@ -96,26 +96,26 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {open && (
-        <div className="md:hidden border-t border-white/10 bg-[#060C18]/95 px-4 py-4 flex flex-col gap-1">
+        <div className="md:hidden border-t border-[#1A1A2E] bg-[#050508]/95 px-4 py-4 flex flex-col gap-1">
           {NAV_LINKS.map((item) => (
             <Link
               key={item.href}
               href={item.href}
               onClick={() => setOpen(false)}
-              className={`text-sm px-3 py-2.5 rounded-lg transition-all ${
+              className={`font-mono text-sm px-3 py-2.5 rounded-lg transition-all ${
                 isActive(item.href)
-                  ? "text-[#4A7AFF] bg-[#1A52FF]/10"
-                  : "text-[#7A8FAE] hover:text-white"
+                  ? "text-[#4FC3F7] bg-[#4FC3F7]/10"
+                  : "text-slate-400 hover:text-white"
               }`}
             >
               {item.label}
             </Link>
           ))}
-          <div className="pt-3 mt-2 border-t border-white/10">
+          <div className="pt-3 mt-2 border-t border-[#1A1A2E]">
             <Link
               href="/code"
               onClick={() => setOpen(false)}
-              className="btn-primary block text-center text-sm px-3 py-2.5 rounded-lg"
+              className="block text-center font-mono text-sm font-semibold bg-[#4FC3F7] text-[#050508] px-3 py-2.5 rounded-lg hover:bg-[#29ABE2] transition-colors"
             >
               Open Console
             </Link>
