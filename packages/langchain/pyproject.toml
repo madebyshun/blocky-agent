@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blueagent-langchain"
+version = "0.1.0"
+description = "LangChain toolkit for Blue Agent — 32 x402 tools on Base"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Blocky Studio", email = "hello@blocky.studio" }]
+keywords = ["langchain", "base", "blockchain", "ai-agents", "x402"]
+dependencies = [
+  "langchain-core>=0.1.0",
+  "httpx>=0.24.0",
+  "pydantic>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://blueagent.xyz"
+Repository = "https://github.com/madebyshun/blue-agent"
