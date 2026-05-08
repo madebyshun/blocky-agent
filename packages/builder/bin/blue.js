@@ -6,17 +6,4 @@
 
 const path = require("path");
 
-// Support both compiled (dist/) and ts-node dev mode
-let cli;
-try {
-  cli = require(path.join(__dirname, "../dist/cli.js"));
-} catch {
-  // ts-node fallback for development
-  try {
-    require("ts-node").register({ transpileOnly: true });
-    cli = require(path.join(__dirname, "../src/cli.ts"));
-  } catch {
-    console.error("Error: run `npm run build` in packages/builder first, or install ts-node for dev mode.");
-    process.exit(1);
-  }
-}
+require(path.join(__dirname, "../dist/cli.js"));
