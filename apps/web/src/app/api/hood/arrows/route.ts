@@ -9,13 +9,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { kvGet } from "@/lib/kv";
 import { KV_ARROW_FEED, kvArrow } from "@/lib/blue-hood/kv-keys";
 import type { Arrow } from "@/lib/blue-hood/types";
+import { computeHitRate } from "@/lib/blue-hood/hit-rate-gate";
 
 export const runtime = "nodejs";
 
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 200;
-const HIT_RATE_MIN_SAMPLE = 10; // spec: "warming up · n/10 arrows graded"
-const HIT_RATE_WINDOW_MS = 7 * 24 * 3_600 * 1000;
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -45,24 +44,11 @@ export async function GET(req: NextRequest) {
     return true;
   });
 
-  // Hit rate — count of graded arrows in the last 7d, split hit/miss.
-  // P0.1 — VOID arrows (graded during closed market, artifact of the
-  // old wall-clock window) are EXCLUDED from the denominator so the
-  // headline number reflects real signal quality, not clock bugs.
-  // `voided` is surfaced separately so a reader can audit the exclusion.
-  const cutoff = Date.now() - HIT_RATE_WINDOW_MS;
-  const graded7d = arrows.filter(
-    (a) => a.status === "graded" && a.graded_at && new Date(a.graded_at).getTime() >= cutoff,
-  );
-  const hits = graded7d.filter((a) => a.outcome === "hit").length;
-  const misses = graded7d.filter((a) => a.outcome === "miss").length;
-  const voided = graded7d.filter((a) => a.outcome === "void").length;
-  const informational = graded7d.filter((a) => a.outcome === "informational").length;
-  const total = hits + misses; // hit rate denominator excludes void + informational
-
-  const hit_rate = total >= HIT_RATE_MIN_SAMPLE
-    ? { ready: true as const, pct: Math.round((hits / total) * 100), sample: total }
-    : { ready: false as const, sample: total, needed: HIT_RATE_MIN_SAMPLE };
+  // P3.2 — aggregate + per-type gate now live in @/lib/blue-hood/hit-rate-gate
+  // so /api/acp/arrows and both UI clients read the same shape. Aggregate
+  // display gate is 30 valid arrows; per-type (arb / drift) gate is 15 own
+  // samples. VOID + informational stay excluded from every denominator.
+  const { hit_rate, per_type, graded_breakdown } = computeHitRate(arrows);
 
   const arrows_today = arrows.filter(
     (a) => new Date(a.fired_at).getTime() >= Date.now() - 24 * 3_600 * 1000,
@@ -74,13 +60,8 @@ export async function GET(req: NextRequest) {
       arrows: arrows.slice(0, limit),
       arrows_today,
       hit_rate,
-      graded_breakdown: {
-        hits,
-        misses,
-        voided,
-        informational,
-        total_graded: graded7d.length,
-      },
+      per_type,
+      graded_breakdown,
       test_arrows_hidden: includeTest ? 0 : all.length - arrows.length,
     },
     { headers: { "Cache-Control": "no-store, max-age=0" } },

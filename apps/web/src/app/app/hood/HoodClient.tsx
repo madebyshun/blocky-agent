@@ -80,6 +80,14 @@ function isFrozenLike(v: TickerSnapshot["verdict"]): boolean {
 }
 
 type SnapshotRes = { ok: true; snapshot: HoodSnapshot } | { ok: false; error: string };
+type PerTypeStat = {
+  ready: boolean;
+  sample: number;
+  hits: number;
+  misses: number;
+  pct?: number;
+  needed: number;
+};
 type ArrowsRes =
   | {
       ok: true;
@@ -88,6 +96,7 @@ type ArrowsRes =
       hit_rate:
         | { ready: true; pct: number; sample: number }
         | { ready: false; sample: number; needed: number };
+      per_type?: Partial<Record<"drift" | "arb" | "flow" | "whale", PerTypeStat>>;
       test_arrows_hidden: number;
     }
   | { ok: false; error: string };
@@ -400,13 +409,29 @@ function MetricStrip({
   snap: HoodSnapshot | null;
   arrows: Extract<ArrowsRes, { ok: true }> | null;
 }) {
+  // P3.2 — aggregate headline unchanged (30-sample gate now enforced in
+  // /lib/blue-hood/hit-rate-gate). Sub-line prefers per-type readout when
+  // arb OR drift has cleared its own 15-sample bar; that's the honest
+  // number a reader can act on. Falls back to the aggregate "N graded · 7d"
+  // otherwise.
   const hitLabel = arrows
     ? arrows.hit_rate.ready ? `${arrows.hit_rate.pct}%` : "n/a"
     : "…";
+  const perTypeSub = (() => {
+    const p = arrows?.per_type;
+    if (!p) return null;
+    const parts: string[] = [];
+    if (p.arb?.ready && typeof p.arb.pct === "number")     parts.push(`arb ${p.arb.pct}% · ${p.arb.sample}`);
+    else if (p.arb)                                        parts.push(`arb warm ${p.arb.sample}/${p.arb.needed}`);
+    if (p.drift?.ready && typeof p.drift.pct === "number") parts.push(`drift ${p.drift.pct}% · ${p.drift.sample}`);
+    else if (p.drift)                                      parts.push(`drift warm ${p.drift.sample}/${p.drift.needed}`);
+    return parts.length ? parts.join(" · ") : null;
+  })();
   const hitSub = arrows
-    ? arrows.hit_rate.ready
-      ? `${arrows.hit_rate.sample} graded · 7d`
-      : `warming up · ${arrows.hit_rate.sample}/${arrows.hit_rate.needed}`
+    ? perTypeSub
+      ?? (arrows.hit_rate.ready
+        ? `${arrows.hit_rate.sample} graded · 7d`
+        : `warming up · ${arrows.hit_rate.sample}/${arrows.hit_rate.needed}`)
     : undefined;
 
   // BLOCKER 2 — honest denominator. Show "watched / registry_total" and

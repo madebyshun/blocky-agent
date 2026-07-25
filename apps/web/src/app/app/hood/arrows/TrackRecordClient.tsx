@@ -32,6 +32,14 @@ type OutcomeFilter = "all" | "hit" | "miss" | "void" | "open";
 type TypeFilter = "all" | "arb" | "drift" | "flow";
 type SortKey = "newest" | "oldest" | "duration";
 
+interface PerTypeStat {
+  ready: boolean;
+  sample: number;
+  hits: number;
+  misses: number;
+  pct?: number;
+  needed: number;
+}
 interface ArrowsRes {
   ok: boolean;
   arrows: Arrow[];
@@ -39,6 +47,7 @@ interface ArrowsRes {
   hit_rate:
     | { ready: true; pct: number; sample: number }
     | { ready: false; sample: number; needed: number };
+  per_type?: Partial<Record<"drift" | "arb" | "flow" | "whale", PerTypeStat>>;
   test_arrows_hidden?: number;
 }
 
@@ -253,10 +262,24 @@ function MetricStrip({ data, filtered }: { data: ArrowsRes | null; filtered: Arr
       ? `${data.hit_rate.pct}%`
       : "n/a"
     : "…";
+  // P3.2 — sub line prefers per-type (arb / drift) when either type has
+  // its own 15-sample bucket; below that it falls back to the aggregate
+  // 7d count. Same source of truth as the drift-board strip.
+  const perTypeSub = (() => {
+    const p = data?.per_type;
+    if (!p) return null;
+    const parts: string[] = [];
+    if (p.arb?.ready && typeof p.arb.pct === "number")     parts.push(`arb ${p.arb.pct}% · ${p.arb.sample}`);
+    else if (p.arb)                                        parts.push(`arb warm ${p.arb.sample}/${p.arb.needed}`);
+    if (p.drift?.ready && typeof p.drift.pct === "number") parts.push(`drift ${p.drift.pct}% · ${p.drift.sample}`);
+    else if (p.drift)                                      parts.push(`drift warm ${p.drift.sample}/${p.drift.needed}`);
+    return parts.length ? parts.join(" · ") : null;
+  })();
   const hitSub = data
-    ? data.hit_rate.ready
-      ? `${data.hit_rate.sample} graded · 7d`
-      : `warming up · ${data.hit_rate.sample}/${data.hit_rate.needed}`
+    ? perTypeSub
+      ?? (data.hit_rate.ready
+        ? `${data.hit_rate.sample} graded · 7d`
+        : `warming up · ${data.hit_rate.sample}/${data.hit_rate.needed}`)
     : undefined;
 
   // Best / worst — only shown when ≥ 10 graded (spec's threshold).

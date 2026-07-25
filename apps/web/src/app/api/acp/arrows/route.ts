@@ -11,11 +11,9 @@ import { kvGet } from "@/lib/kv";
 import { KV_ARROW_FEED, kvArrow } from "@/lib/blue-hood/kv-keys";
 import type { Arrow } from "@/lib/blue-hood/types";
 import { acpEnvelope, clientIp, corsHeaders, preflight, rateLimit } from "@/lib/acp";
+import { computeHitRate } from "@/lib/blue-hood/hit-rate-gate";
 
 export const runtime = "nodejs";
-
-const HIT_RATE_MIN_SAMPLE = 10;
-const HIT_RATE_WINDOW_MS = 7 * 24 * 3_600 * 1000;
 
 export async function OPTIONS() {
   return preflight();
@@ -41,13 +39,11 @@ export async function GET(req: NextRequest) {
   // ACP is public — same filter as /api/hood/arrows (origin=engine + non-test).
   const arrows = all.filter((a) => !a.test && (!a.origin || a.origin === "engine")).slice(0, limit);
 
-  const cutoff = Date.now() - HIT_RATE_WINDOW_MS;
-  const graded7d = arrows.filter((a) => a.status === "graded" && a.graded_at && new Date(a.graded_at).getTime() >= cutoff);
-  const hits = graded7d.filter((a) => a.outcome === "hit").length;
-  const total = graded7d.length;
-  const hit_rate = total >= HIT_RATE_MIN_SAMPLE
-    ? { ready: true as const, pct: Math.round((hits / total) * 100), sample: total }
-    : { ready: false as const, sample: total, needed: HIT_RATE_MIN_SAMPLE };
+  // P3.2 — shared gate with /api/hood/arrows so ACP consumers see the same
+  // headline the UI shows. Aggregate needs 30 valid; per_type (arb / drift)
+  // needs 15 own samples before its `pct` is populated. VOID excluded from
+  // denominators everywhere.
+  const { hit_rate, per_type } = computeHitRate(arrows);
 
   return Response.json(
     acpEnvelope(
@@ -55,6 +51,7 @@ export async function GET(req: NextRequest) {
         arrows,
         arrows_today: arrows.filter((a) => new Date(a.fired_at).getTime() >= Date.now() - 24 * 3_600 * 1000).length,
         hit_rate,
+        per_type,
       },
       "https://blueagent.dev/hood/arrows",
     ),
