@@ -1,5 +1,26 @@
-// Shared Bankr LLM client for Next.js API routes
-// Uses BANKR_API_KEY from Vercel env vars
+// Shared LLM client for Next.js API routes.
+//
+// LLM POLICY (2026-07-25): Virtuals is the ONLY provider used for synthesis
+// across the whole stack. Bankr and Venice HTTP paths were removed from
+// callLLM's fallback chain because a 3-rung chain was producing hard-to-read
+// error traces (venice:error can literally say "Bankr LLM 403…" because Venice
+// had an internal Bankr fallback) and hiding real Virtuals failures behind
+// silent fabrication from the other rungs. Now:
+//
+//   • callLLM → Virtuals only. On failure, throws a typed LLM_UNAVAILABLE
+//     error the caller can degrade around (e.g. blue-hood arrow still fires
+//     with facts intact, brief:null).
+//   • callVeniceLLM stays exported for legacy handlers still importing it —
+//     it now delegates to callVirtualsLLM under the hood so no HTTP call ever
+//     reaches api.venice.ai. Handlers should migrate to callLLM in follow-up
+//     work; the shim is deliberate to keep the chain-strip PR small.
+//   • callBankrLLM stays untouched at the file level so ~46 handlers that
+//     directly import it keep compiling. Those calls are DEAD in prod today
+//     (Bankr account 403 banned) — see the migration task that follows.
+//
+// Env: VIRTUALS_API_KEY (required), VIRTUALS_MODEL (optional). VENICE_INFERENCE_KEY
+// is no longer read anywhere in this file; a follow-up sweeps it out of the
+// rest of the codebase (chat/route.ts, memory/embed, crypto-rpc, status).
 
 import { getAeonOutput, formatAeonForLLM } from "./aeon-kv";
 
@@ -106,33 +127,14 @@ export async function callBankrLLM(opts: {
   return wantsJson ? "{" + text : text;
 }
 
-// ─── Venice LLM (REAL web search) ────────────────────────────────────────────
+// ─── Fabrication guard ─────────────────────────────────────────────────────
 //
-// The Bankr gateway ignores `enable_web_search` (verified: the model replies it
-// "can't search the web"). Venice's `venice_parameters.enable_web_search` DOES
-// run a live search. Use this for any synthesis that must ground specific
-// numbers (TAM, APY, valuations, GitHub stars, revenue) in real data instead of
-// guessing. Drop-in: accepts the same {system, messages|user, temperature,
-// maxTokens} shape as callBankrLLM, and auto-prepends WEB_SEARCH_RULE.
+// Virtuals has no web-search capability, so no rule promises one. Prompts must
+// still block the model from inventing specific numbers — that's what
+// NO_FABRICATION_RULE below does. The old WEB_SEARCH_RULE (which claimed the
+// model *had* search) was Venice-only and was removed with the chain strip.
 
-// TODO (Blue Hood backlog, T-A.1 #4): callVeniceLLM below has an internal
-// fallback to callBankrLLM (line ~319). When Venice itself fails, that
-// fallback fires — so a Bankr error surfaces on the "venice" attempt entry
-// in `callLLM`'s trace, then a SECOND Bankr call happens as the outer
-// chain's own Bankr step. Two side effects:
-//   (a) attempts[venice].error can literally say "Bankr LLM 403 …"
-//       which reads misleadingly.
-//   (b) Bankr may get double-hit per call.
-// Flatten: strip Venice's internal Bankr fallback and let the outer
-// `callLLM` chain be the only place fallback lives. Not urgent (attempts
-// trace is still accurate about "did any provider give us text?"), but
-// worth doing before we harden the health endpoint for public metrics.
-
-/** Prepended to every Venice (web-search) tool. Tells the model to search, not invent. */
-export const WEB_SEARCH_RULE =
-  "You have web search available. For any specific numbers (market size, TAM, revenue, user counts, APY, GitHub stars, valuations, projections) ALWAYS search for real data first and cite the source. If search returns no result, write \"[data unavailable]\" — NEVER generate numbers without a verified source.";
-
-/** For Bankr tools (no web search): forbid inventing numbers, but don't claim a search ability. */
+/** For any synthesis: forbid inventing numbers when the caller hasn't supplied them. */
 export const NO_FABRICATION_RULE =
   "Do NOT invent specific numbers (market size, TAM, revenue, user counts, valuations, GitHub stars). If you do not have a verified source for a figure, write \"[data unavailable]\" instead of guessing.";
 
@@ -366,19 +368,25 @@ export async function callVirtualsLLM(opts: {
 }
 
 /**
- * Synthesis with fallback chain: **Virtuals → Venice → Bankr**, always.
+ * Synthesis via **Virtuals only**. On failure, throws `LLM_UNAVAILABLE` with
+ * the upstream error text preserved on `.attempts[0].error`. Callers should
+ * degrade cleanly (arrow still fires with facts; brief:null; log the error)
+ * rather than fabricate.
  *
- * Virtuals is PRIMARY on every call regardless of `webSearch` — sponsored
- * quota + Kimi/DeepSeek quality wins over Venice web-search reliability.
- * When `webSearch: true` is requested and Virtuals succeeds, the response
- * still resolves without external search; the returned `web_search_used`
- * flag lets the caller decide whether to trust "no fresh news" answers.
+ * The chain used to be Virtuals → Venice → Bankr. That was removed because:
+ *   - The 3-rung retry mixed provider errors (Venice's own Bankr fallback
+ *     could surface a "Bankr LLM 403…" string in the venice attempt slot).
+ *   - It hid real Virtuals failures behind silent fabrication from the other
+ *     rungs, defeating the whole point of a "primary provider" model.
+ *   - Every rung was a separate log line to parse.
  *
- * Every attempt logs a structured line:
- *   [llm] provider=<p> status=<s> duration_ms=<ms> web_search=<bool> reason=<...>
- * — grep-friendly for Vercel log tail during incident response.
+ * `LlmResult` retains its shape (attempts array, web_search_used flag) for
+ * API compatibility with callers that render "which provider answered" —
+ * they just always see `virtuals`. `web_search_used` is always false; Virtuals
+ * has no web-search capability, and the fabrication guard sits in the system
+ * prompt now.
  */
-export type LlmProvider = "virtuals" | "venice" | "bankr";
+export type LlmProvider = "virtuals";
 export interface LlmResult {
   text: string;
   provider: LlmProvider;
@@ -417,125 +425,67 @@ export async function callLLM(opts: {
   model?: string;
   temperature?: number;
   maxTokens?: number;
-  /** Hint that the caller wants fresh web-search grounding. Only Venice
-   *  can search; Virtuals + Bankr return without. Flagged in web_search_used. */
+  /** Ignored — retained for API compatibility with old callers. Virtuals has
+   *  no web-search capability; every response is `web_search_used: false`. */
   webSearch?: boolean;
 }): Promise<LlmResult> {
   const chainStart = Date.now();
   const attempts: LlmResult["attempts"] = [];
 
-  // 1) Virtuals — primary, always.
-  {
-    const t0 = Date.now();
-    try {
-      const text = await callVirtualsLLM(opts);
-      const dur = Date.now() - t0;
-      llmLog({ provider: "virtuals", status: "success", duration_ms: dur, web_search: false });
-      attempts.push({ provider: "virtuals", status: "success", duration_ms: dur });
-      return { text, provider: "virtuals", web_search_used: false, duration_ms: Date.now() - chainStart, attempts };
-    } catch (e) {
-      const dur = Date.now() - t0;
-      const msg = (e as Error).message;
-      llmLog({ provider: "virtuals", status: "error", duration_ms: dur, reason: msg });
-      attempts.push({ provider: "virtuals", status: "error", duration_ms: dur, error: msg });
-    }
-  }
-
-  // 2) Venice — fallback. Honors the caller's webSearch hint here.
-  {
-    const t0 = Date.now();
-    try {
-      const text = await callVeniceLLM({ ...opts, webSearch: opts.webSearch });
-      const dur = Date.now() - t0;
-      const searched = opts.webSearch !== false;
-      llmLog({ provider: "venice", status: "success", duration_ms: dur, web_search: searched });
-      attempts.push({ provider: "venice", status: "success", duration_ms: dur });
-      return { text, provider: "venice", web_search_used: searched, duration_ms: Date.now() - chainStart, attempts };
-    } catch (e) {
-      const dur = Date.now() - t0;
-      const msg = (e as Error).message;
-      llmLog({ provider: "venice", status: "error", duration_ms: dur, reason: msg });
-      attempts.push({ provider: "venice", status: "error", duration_ms: dur, error: msg });
-    }
-  }
-
-  // 3) Bankr — last resort.
-  {
-    const t0 = Date.now();
-    try {
-      const text = await callBankrLLM({
-        system: opts.system,
-        messages: opts.messages ?? (opts.user != null ? [{ role: "user", content: opts.user }] : [{ role: "user", content: "" }]),
-        temperature: opts.temperature,
-        maxTokens: opts.maxTokens,
-        _skipEnhance: true,
-      });
-      const dur = Date.now() - t0;
-      llmLog({ provider: "bankr", status: "success", duration_ms: dur, web_search: false });
-      attempts.push({ provider: "bankr", status: "success", duration_ms: dur });
-      return { text, provider: "bankr", web_search_used: false, duration_ms: Date.now() - chainStart, attempts };
-    } catch (e) {
-      const dur = Date.now() - t0;
-      const msg = (e as Error).message;
-      llmLog({ provider: "bankr", status: "error", duration_ms: dur, reason: msg });
-      attempts.push({ provider: "bankr", status: "error", duration_ms: dur, error: msg });
-      // Every provider failed → surface the chain state to the caller.
-      const chainErr = new Error(`all_llm_providers_failed: ${attempts.map((a) => `${a.provider}=${a.error}`).join(" | ")}`);
-      (chainErr as Error & { attempts?: unknown }).attempts = attempts;
-      throw chainErr;
-    }
+  const t0 = Date.now();
+  try {
+    const text = await callVirtualsLLM(opts);
+    const dur = Date.now() - t0;
+    llmLog({ provider: "virtuals", status: "success", duration_ms: dur, web_search: false });
+    attempts.push({ provider: "virtuals", status: "success", duration_ms: dur });
+    return { text, provider: "virtuals", web_search_used: false, duration_ms: Date.now() - chainStart, attempts };
+  } catch (e) {
+    const dur = Date.now() - t0;
+    const msg = (e as Error).message;
+    llmLog({ provider: "virtuals", status: "error", duration_ms: dur, reason: msg });
+    attempts.push({ provider: "virtuals", status: "error", duration_ms: dur, error: msg });
+    // Clean degradation contract: throw a typed error so callers can decide
+    // to degrade (e.g. blue-hood brief.ts catches this and persists
+    // arrow.brief=null, keeping the arrow's numbers intact — no fabrication).
+    const err = new Error(`LLM_UNAVAILABLE: virtuals=${msg}`);
+    (err as Error & { code?: string; attempts?: unknown }).code = "LLM_UNAVAILABLE";
+    (err as Error & { attempts?: unknown }).attempts = attempts;
+    throw err;
   }
 }
 
+/**
+ * @deprecated LEGACY SHIM. Venice HTTP was removed 2026-07-25 (Virtuals-only
+ * policy). This export stays so ~15 x402 handlers that import `callVeniceLLM`
+ * keep compiling — internally it now delegates to Virtuals. `webSearch` is
+ * ignored (Virtuals can't search). Migrate to `callLLM(opts)` when touching
+ * a handler; that path throws a typed `LLM_UNAVAILABLE` on failure instead
+ * of returning a bare string, which is what most callers actually want.
+ */
+let _veniceDeprecationLogged = false;
 export async function callVeniceLLM(opts: {
   system: string;
-  /** Either a single user string… */
   user?: string;
-  /** …or full messages (drop-in for callBankrLLM callers). */
   messages?: BankrMessage[];
   model?: string;
   temperature?: number;
   maxTokens?: number;
-  /** Web search on by default; pass false to disable. */
   webSearch?: boolean;
 }): Promise<string> {
-  const apiKey = process.env.VENICE_INFERENCE_KEY ?? process.env.VENICE_API_KEY ?? "";
-  const msgs = opts.messages ?? (opts.user != null ? [{ role: "user", content: opts.user }] : []);
-  const system = `${WEB_SEARCH_RULE}\n\n${opts.system}`;
-  try {
-    const res = await fetch("https://api.venice.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: opts.model ?? "llama-3.3-70b",
-        messages: [{ role: "system", content: system }, ...msgs],
-        max_tokens: Math.max(MIN_MAX_TOKENS, opts.maxTokens ?? 1000),
-        temperature: opts.temperature ?? 0.3,
-        venice_parameters: {
-          include_venice_system_prompt: false,
-          ...(opts.webSearch === false ? {} : { enable_web_search: "on" }),
-        },
-      }),
-      signal: AbortSignal.timeout(90_000), // web search adds latency; route maxDuration is 120s
-    });
-    if (!res.ok) throw new Error(`Venice ${res.status} model=${opts.model ?? "llama-3.3-70b"}: ${(await res.text()).slice(0, 400)}`);
-    const d = await res.json() as { choices?: { message?: { content?: string } }[] };
-    const text = d.choices?.[0]?.message?.content ?? "";
-    if (!text) throw new Error("Venice empty response");
-    return text;
-  } catch (e) {
-    // Resilience: if Venice (web search) is unavailable, fall back to Bankr so the
-    // paid tool still returns a result. The WEB_SEARCH_RULE is kept — with no search
-    // the model writes "[data unavailable]" rather than inventing numbers.
-    console.error("[venice] falling back to Bankr:", (e as Error).message);
-    return callBankrLLM({
-      system,
-      messages: msgs.length ? msgs : [{ role: "user", content: "" }],
-      temperature: opts.temperature,
-      maxTokens: opts.maxTokens,
-      _skipEnhance: true,
-    });
+  if (!_veniceDeprecationLogged) {
+    console.warn("[llm] callVeniceLLM is a deprecated shim → Virtuals. Migrate to callLLM().");
+    _veniceDeprecationLogged = true;
   }
+  return callVirtualsLLM({
+    system: opts.system,
+    user: opts.user,
+    messages: opts.messages,
+    // opts.model was previously a Venice model id (llama-3.3-70b, etc.);
+    // dropping it here lets Virtuals pick from its own catalog. If a caller
+    // needs a specific Virtuals model, migrate to callLLM/callVirtualsLLM.
+    temperature: opts.temperature,
+    maxTokens: opts.maxTokens,
+  });
 }
 
 export function extractJsonObject(text: string): Record<string, unknown> | null {
