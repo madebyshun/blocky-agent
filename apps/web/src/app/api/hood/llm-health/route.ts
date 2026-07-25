@@ -1,14 +1,16 @@
 /**
- * Blue Hood — LLM chain health probe.
+ * Blue Hood — LLM health probe.
  *
- * T-A.1 #3. One cheap `callLLM` call, returns the attempts trace + the
- * first provider that succeeded (or null if all failed). Blue Hood smoke
- * asserts `first_success_provider !== null` so a broken chain (e.g.
- * banned Bankr / stale Venice key) doesn't ship silently. Local surfacing
- * of this failure is the whole point — reviewer's ask.
+ * One cheap `callLLM` call, returns success/failure + the model that was
+ * tried. Since the chain strip (2026-07-25) there is exactly one provider
+ * (Virtuals) — the endpoint's contract preserves the `attempts` array shape
+ * for API compatibility, but it always has zero or one entry.
+ *
+ * Blue Hood smoke still asserts `first_success_provider !== null` so a
+ * broken Virtuals path doesn't ship silently.
  *
  * Auth: `X-Blue-Internal` bypass (same header the poller uses), so a
- * public caller can never poll our LLM providers on our dime.
+ * public caller can never poll Virtuals on our dime.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { callLLM, VIRTUALS_DEFAULT_MODEL } from "@/app/api/_lib/llm";
@@ -39,13 +41,10 @@ export async function GET(req: NextRequest) {
     // No web-search — cheapest and fastest across providers.
     webSearch: false,
   };
-  // Which models the chain will try. Surfaced so a probe response is
-  // self-diagnosing — removes the "which model was that?" guesswork
-  // that let the Virtuals model-string bug survive 4 CI runs.
+  // Single provider since 2026-07-25. Kept as an object so the response
+  // shape doesn't churn for any dashboard that already parses `models.<x>`.
   const models = {
     virtuals: process.env.VIRTUALS_MODEL ?? VIRTUALS_DEFAULT_MODEL,
-    venice:   process.env.VENICE_MODEL   ?? "llama-3.3-70b",
-    bankr:    "(bankr default)",
   };
   try {
     const r = await callLLM(opts);
@@ -53,11 +52,7 @@ export async function GET(req: NextRequest) {
       {
         ok: true,
         first_success_provider: r.provider,
-        first_success_model:
-          r.provider === "virtuals" ? models.virtuals :
-          r.provider === "venice"   ? models.venice :
-          r.provider === "bankr"    ? models.bankr :
-          null,
+        first_success_model: models.virtuals,
         attempts: r.attempts,
         models,
         chain_duration_ms: Date.now() - started,
@@ -65,13 +60,14 @@ export async function GET(req: NextRequest) {
       { headers: { "Cache-Control": "no-store, max-age=0" } },
     );
   } catch (e) {
-    const err = e as Error & { attempts?: unknown };
+    const err = e as Error & { attempts?: unknown; code?: string };
     return NextResponse.json(
       {
         ok: false,
         first_success_provider: null,
         attempts: Array.isArray(err.attempts) ? err.attempts : [],
         models,
+        code:  err.code ?? "LLM_UNAVAILABLE",
         error: err.message,
         chain_duration_ms: Date.now() - started,
       },
