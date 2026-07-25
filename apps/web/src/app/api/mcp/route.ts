@@ -22,6 +22,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
 import { kv } from "@/lib/kv";
+import { internalX402Headers, hasInternalKey } from "@/lib/x402-internal";
 import {
   buildB20Calldata,
   encodeMint,
@@ -731,23 +732,81 @@ const ARG_REMAP: Record<string, (a: Record<string, unknown>) => Record<string, u
   "base-pulse":              (a) => a,
 };
 
+/**
+ * Typed error thrown from callHubTool → caught by tools/call → surfaced with
+ * `isError: true`. Existed as a plain text stub before; a naive MCP client
+ * would hand the stub back to the LLM as if it were tool output, so the LLM
+ * "answered" with instructions to set env vars. isError kills that path.
+ *
+ * `code` categories:
+ *   WALLET_REQUIRED       — bypass headers correct, but no user connected +
+ *                           tool costs credits. Real fix is server-side
+ *                           (this is what MCP tripped on Jul → now).
+ *   INSUFFICIENT_CREDITS  — user connected via chat has empty ledger.
+ *   MISSING_KEY           — INTERNAL_SERVICE_KEY unset in this deploy; free
+ *                           bypass impossible; user should pay via /hub.
+ *   PAYMENT_REQUIRED      — generic 402 fallback.
+ *   UPSTREAM              — non-402 non-2xx from x402 route.
+ */
+class HubToolError extends Error {
+  code: "WALLET_REQUIRED" | "INSUFFICIENT_CREDITS" | "MISSING_KEY" | "PAYMENT_REQUIRED" | "UPSTREAM";
+  constructor(code: HubToolError["code"], message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 async function callHubTool(toolId: string, rawArgs: Record<string, unknown>): Promise<string> {
   const args = ARG_REMAP[toolId] ? ARG_REMAP[toolId](rawArgs) : rawArgs;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  // Server-to-server: bypass x402 payment for MCP free-tier calls
-  if (INTERNAL_KEY) headers["X-Blue-Internal"] = INTERNAL_KEY;
 
+  // Single source of truth for server-to-server x402 bypass headers. Ships
+  // BOTH X-Blue-Internal AND X-Blue-Service:internal — the x402 route's
+  // WALLET_REQUIRED guard needs the second header even when the first is
+  // correct. See apps/web/src/lib/x402-internal.ts.
   const res = await fetch(`${BASE}/api/x402/${toolId}`, {
     method: "POST",
-    headers,
+    headers: internalX402Headers(),
     body: JSON.stringify(args),
     signal: AbortSignal.timeout(90_000),
   });
   const text = await res.text();
+
   if (res.status === 402) {
-    return `Tool "${toolId}" requires payment but MCP free-tier bypass is not configured. Set INTERNAL_SERVICE_KEY env var, or pay via https://blueagent.dev/hub.`;
+    // Parse the x402 route's structured error so a specific message reaches
+    // the LLM instead of the misleading "set INTERNAL_SERVICE_KEY" stub the
+    // old code returned for every 402.
+    let parsed: { code?: string; error?: string } = {};
+    try { parsed = JSON.parse(text) as typeof parsed; } catch {}
+    const code = parsed.code ?? "";
+    if (code === "WALLET_REQUIRED") {
+      throw new HubToolError(
+        "WALLET_REQUIRED",
+        `Tool "${toolId}" is a paid tool. Server-side config gap: MCP call reached the internal bypass but was blocked by the wallet guard. If you're an operator, verify both X-Blue-Internal and X-Blue-Service:internal are attached (see @/lib/x402-internal). If you're an agent, pay via https://blueagent.dev/hub.`,
+      );
+    }
+    if (code === "INSUFFICIENT_CREDITS") {
+      throw new HubToolError(
+        "INSUFFICIENT_CREDITS",
+        `Insufficient credits to call "${toolId}". Top up at https://blueagent.dev/chat or stake more BLUE for a bigger daily accrual.`,
+      );
+    }
+    if (!hasInternalKey()) {
+      throw new HubToolError(
+        "MISSING_KEY",
+        `Tool "${toolId}" requires payment (x402). Free MCP bypass is unavailable in this deployment (INTERNAL_SERVICE_KEY unset). Pay via https://blueagent.dev/hub.`,
+      );
+    }
+    throw new HubToolError(
+      "PAYMENT_REQUIRED",
+      `Tool "${toolId}" returned 402 Payment Required. ${parsed.error ?? "Pay via https://blueagent.dev/hub."}`,
+    );
   }
-  if (!res.ok) throw new Error(`${toolId} returned ${res.status}`);
+  if (res.status === 429) {
+    throw new HubToolError("UPSTREAM", `Tool "${toolId}" rate-limited (429). Back off and retry.`);
+  }
+  if (!res.ok) {
+    throw new HubToolError("UPSTREAM", `Tool "${toolId}" returned ${res.status}.`);
+  }
   // Track MCP usage (paid path tracks via x402 route; internal path doesn't, so track here)
   try { await kv.incr(`usage:${toolId}`); } catch {}
   try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
@@ -1066,8 +1125,12 @@ export async function POST(req: NextRequest) {
       return err(id, -32601, `Unknown tool: ${name}`, useSse);
 
     } catch (e) {
-      const msg = (e as Error).message;
-      return ok(id, { content: [{ type: "text", text: `Error: ${msg}` }], isError: true }, useSse);
+      const err = e as Error & { code?: string };
+      // HubToolError carries a machine-readable code (WALLET_REQUIRED,
+      // INSUFFICIENT_CREDITS, MISSING_KEY, PAYMENT_REQUIRED, UPSTREAM); prefix
+      // it so agents can dispatch on the code without regex-scraping the msg.
+      const prefix = err.code ? `[${err.code}] ` : "Error: ";
+      return ok(id, { content: [{ type: "text", text: `${prefix}${err.message}` }], isError: true }, useSse);
     }
   }
 

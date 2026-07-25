@@ -15,8 +15,9 @@
  * no gain. Http mode is there for out-of-band debugging.
  */
 
+import { internalX402Headers, hasInternalKey } from "@/lib/x402-internal";
+
 const TARGET = process.env.BH_TOOL_TARGET ?? "";
-const INTERNAL_KEY = process.env.INTERNAL_SERVICE_KEY ?? "";
 export const TOOL_CALLER_MODE: "http" | "local" = TARGET ? "http" : "local";
 
 type ToolResult<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
@@ -40,16 +41,12 @@ export async function callTool<T = Record<string, unknown>>(
 ): Promise<ToolResult<T>> {
   try {
     if (TOOL_CALLER_MODE === "http") {
-      if (!INTERNAL_KEY) return { ok: false, status: 500, error: "INTERNAL_SERVICE_KEY not set for http mode" };
+      if (!hasInternalKey()) return { ok: false, status: 500, error: "INTERNAL_SERVICE_KEY not set for http mode" };
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), timeoutMs);
       const r = await fetch(`${TARGET}/api/x402/${tool}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Blue-Internal": INTERNAL_KEY,
-          "X-Blue-Service": "internal",
-        },
+        headers: internalX402Headers(),
         body: JSON.stringify(body),
         signal: ctl.signal,
       });

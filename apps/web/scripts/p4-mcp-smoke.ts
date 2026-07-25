@@ -37,6 +37,12 @@ const CONCURRENCY = Number(process.env.CONCURRENCY ?? "3");
 const ONLY        = (process.env.ONLY ?? "").split(",").map(s => s.trim()).filter(Boolean);
 const OUT_DIR     = process.env.OUT_DIR ?? path.join(process.cwd(), "out", "p4-mcp-smoke");
 const TIMEOUT_MS  = Number(process.env.TIMEOUT_MS ?? "100000");
+// The MCP endpoint rate-limits per client identifier. When smoke fires
+// tools/call faster than the limit, honest tools show up as 429 → the
+// previous smoke report blamed 16 tools as dead-rpc that were really just
+// self-throttled. Retry on 429 with capped exponential backoff instead.
+const MAX_RETRIES_429 = Number(process.env.MAX_RETRIES_429 ?? "3");
+const BACKOFF_BASE_MS = Number(process.env.BACKOFF_BASE_MS ?? "2000");
 
 const MCP_URL = `${TARGET}/api/mcp`;
 
@@ -136,7 +142,9 @@ type Result = {
 // reflects real tool availability, not just "the surface responded".
 const PAYMENT_STUB_MARKER = "requires payment but MCP free-tier bypass";
 
-async function callTool(tool: ToolDef): Promise<Result> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function callTool(tool: ToolDef, attempt = 0): Promise<Result> {
   const args = buildArgs(tool);
   const t0 = Date.now();
   try {
@@ -161,6 +169,16 @@ async function callTool(tool: ToolDef): Promise<Result> {
     let ok = res.ok;
     let error = "";
     let preview = text.slice(0, 300).replace(/\s+/g, " ");
+
+    if (res.status === 429 && attempt < MAX_RETRIES_429) {
+      // Exponential backoff: 2s, 4s, 8s. Prevents self-inflicted 429s from
+      // showing up as "dead" tools — the earlier smoke report attributed 16
+      // tools to dead-rpc that were just this rate limit.
+      const wait = BACKOFF_BASE_MS * Math.pow(2, attempt);
+      process.stderr.write(`  429 on ${tool.name} — backing off ${wait}ms (attempt ${attempt + 1}/${MAX_RETRIES_429})\n`);
+      await sleep(wait);
+      return callTool(tool, attempt + 1);
+    }
 
     if (!res.ok) {
       bucket = "dead-rpc";
