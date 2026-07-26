@@ -12,7 +12,7 @@
  * KV key: feed:narratives
  *   Record<name, { first_seen, last_seen, scan_count, tokens }>
  */
-import { callVeniceLLM, extractJsonObject } from "@/app/api/_lib/llm";
+import { callLLM, extractJsonObject } from "@/app/api/_lib/llm";
 import { getBaseTrending }                   from "@/lib/market-data";
 import { filterScamPools }                   from "./_scam-filter";
 import { kvGet, kvSet }                      from "@/lib/kv";
@@ -79,13 +79,13 @@ export default async function handler(_req: Request): Promise<Response> {
       })
       .join("\n");
 
-    const resp = await callVeniceLLM({
+    const resp = await callLLM({
       system:      SYSTEM,
       user:        `Real trending tokens on Base right now:\n${tokenList}`,
       temperature: 0,
       maxTokens:   600,
       webSearch:   false, // token data already live; don't need extra web calls
-    }).catch(() => null);
+    }).then((r) => r.text).catch(() => null);
 
     const parsed = resp ? extractJsonObject(resp) : null;
     const rawNarratives: Array<{ name: string; tokens: string[]; rationale: string }> =
@@ -153,7 +153,7 @@ export default async function handler(_req: Request): Promise<Response> {
       fading:       fadingNarratives.length,
       top:          narratives[0]?.name ?? null,
       scanned_pools: pools.length,
-      dataSource:   "GeckoTerminal + Venice LLM (narrative labelling)",
+      dataSource:   "GeckoTerminal + Virtuals LLM (narrative labelling)",
       timestamp:    new Date().toISOString(),
     });
   } catch (e) {

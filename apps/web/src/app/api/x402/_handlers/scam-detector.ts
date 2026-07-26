@@ -1,7 +1,7 @@
 // x402/scam-detector — scam/rug/honeypot risk for a Base token contract
 // Price: $0.25 — Grounds the LLM in real DexScreener liquidity/age + Basescan verification
 
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM } from "@/app/api/_lib/llm";
 import { getBasescanSource } from "@/lib/moralis";
 
 function extractJsonObject(text: string): Record<string, unknown> | null {
@@ -104,7 +104,7 @@ export default async function handler(req: Request): Promise<Response> {
       contract_name: typeof source?.ContractName === "string" ? source.ContractName : null,
     };
 
-    const llmResponse = await callVeniceLLM({
+    const llmResponse = (await callLLM({
       system: SYSTEM,
       webSearch: false,
       messages: [{
@@ -113,7 +113,7 @@ export default async function handler(req: Request): Promise<Response> {
       }],
       temperature: 0,
       maxTokens: 800,
-    });
+    })).text;
 
     let result = extractJsonObject(llmResponse);
     if (!result) result = { degraded: true, note: "Synthesis briefly unavailable - please retry." };
