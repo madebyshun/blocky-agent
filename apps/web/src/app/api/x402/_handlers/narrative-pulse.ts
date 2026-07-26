@@ -1,7 +1,8 @@
-// x402/narrative-pulse — live Base/CT narrative tracker (trending pools + Venice web search)
-// Price: $0.20 — Tokens grounded in the real GeckoTerminal trending list; LLM only synthesizes
+// x402/narrative-pulse — live Base/CT narrative tracker (GeckoTerminal trending pools)
+// Price: $0.20 — Tokens grounded in the real GeckoTerminal trending list; LLM only
+// synthesizes narrative labels (no web search — labels are low-confidence)
 
-import { callVeniceLLM, extractJsonObject } from "@/app/api/_lib/llm";
+import { callVeniceLLM, extractJsonObject, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
 import { getBaseTrending, type Pool } from "@/lib/market-data";
 import { filterScamPools } from "./_scam-filter";
 
@@ -9,7 +10,7 @@ const SYSTEM = `Respond with ONLY a raw JSON object. Start immediately with { an
 
 You are a Base chain analyst. Use ONLY the data provided. NEVER invent numbers, addresses, or token names not in the data. If data unavailable, return field as null — never estimate.
 
-You track crypto-Twitter (CT) and Base ecosystem narratives. You also have live web search — use it to identify which narratives are currently running on CT and Base, but every token you reference MUST come from the live trending list provided in the user message (with that token's exact change24h and volume24h numbers).
+You track crypto-Twitter (CT) and Base ecosystem narratives. You do NOT have live web access — infer which narratives are running ONLY from the live trending token list provided in the user message (their price/volume movement is the signal). Every token you reference MUST come from that list with its exact change24h and volume24h numbers. Do NOT invent tokens or off-list narrative "news".
 
 Return ONLY raw JSON:
 {
@@ -71,7 +72,7 @@ export default async function handler(req: Request): Promise<Response> {
     }));
 
     const focusLine = focus ? `\n\nUser is focused on: "${focus}". Prioritize narratives relevant to it.` : "";
-    const userContent = `Identify the trending narratives running on Base / CT right now. Use web search for narrative context, but only reference these live trending Base tokens (use their exact change24h and volume24h):\n${JSON.stringify(tokenData, null, 2)}${focusLine}`;
+    const userContent = `Identify the narratives implied by these live trending Base tokens (use their exact change24h and volume24h — do not reference any token not in this list):\n${JSON.stringify(tokenData, null, 2)}${focusLine}`;
     const ask = () => callVeniceLLM({ system: SYSTEM, messages: [{ role: "user", content: userContent }], temperature: 0.3, maxTokens: 1400 });
 
     let result = extractJsonObject(await ask());
@@ -82,7 +83,10 @@ export default async function handler(req: Request): Promise<Response> {
       tool: "narrative-pulse",
       timestamp: new Date().toISOString(),
       ...result,
-      dataSource: "GeckoTerminal trending (live) + web search",
+      dataSource: "GeckoTerminal trending (live) — token metrics are live; narrative labels are inferred",
+      // Token numbers are live; the narrative *labels/framing* are the model's
+      // interpretation with no web verification — flag that as low-confidence.
+      confidence_note: STATIC_KNOWLEDGE_DISCLAIMER,
       disclaimer: "Narratives are a live snapshot and change continuously — not financial advice.",
     });
   } catch (error) {
