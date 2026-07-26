@@ -1,7 +1,7 @@
 // x402/grant-evaluator — Base ecosystem grant scoring
 // Price: $5.00 — Fully self-contained, no external workspace imports
 
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callVeniceLLM, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
 
 type BankrMessage = { role: string; content: string };
 
@@ -80,7 +80,7 @@ Website: ${body.websiteUrl || "Not provided"}`;
 
     let result = extractJsonObject(llmResponse);
     if (!result) result = { degraded: true, note: "Synthesis briefly unavailable - please retry." };
-    return Response.json({ ...result, disclaimer: "Grant fit/scoring is an AI assessment from model knowledge, not an official evaluation — verify current program criteria and apply through official channels." }, { status: 200 });
+    return Response.json({ ...result, confidence_note: STATIC_KNOWLEDGE_DISCLAIMER, disclaimer: "Grant fit/scoring is an AI assessment from model knowledge, not an official evaluation — verify current program criteria and apply through official channels." }, { status: 200 });
   } catch (error) {
     console.error("[GrantEvaluator] Error:", error);
     return Response.json({ error: "Failed to evaluate grant application", message: (error as Error).message }, { status: 500 });

@@ -138,6 +138,22 @@ export async function callBankrLLM(opts: {
 export const NO_FABRICATION_RULE =
   "Do NOT invent specific numbers (market size, TAM, revenue, user counts, valuations, GitHub stars). If you do not have a verified source for a figure, write \"[data unavailable]\" instead of guessing.";
 
+// ─── Degraded-confidence marker ────────────────────────────────────────────
+//
+// After the Virtuals-only strip there is NO live web search. Most handlers are
+// grounded in live code-fetched data (DexScreener, Moralis, DefiLlama,
+// GitHub, Aeon-KV) and the LLM only interprets those real numbers — those are
+// NOT degraded and must NOT carry this marker (it would be false labeling).
+//
+// This marker is for the narrow set where the answer genuinely comes from the
+// model's static training knowledge with no live grounding — i.e. tools that
+// depend on FRESH facts (community sentiment, competitor web presence, grant
+// programs). For those, silently returning a confident answer is more
+// dangerous than saying "I can't verify this". Attach it as a `confidence_note`
+// field in the JSON output so the caller/end-user sees the degradation.
+export const STATIC_KNOWLEDGE_DISCLAIMER =
+  "web verification unavailable, assessment from static knowledge only, treat as low-confidence";
+
 // ─── Virtuals Compute (partner-sponsored, OpenAI-compatible) ────────────────
 // Base URL: https://compute.virtuals.io/v1
 //

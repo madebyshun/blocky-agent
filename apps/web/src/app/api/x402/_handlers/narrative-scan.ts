@@ -1,9 +1,10 @@
 /**
- * narrative-scan — Venice LLM narrative detection + KV lifecycle tracking.
+ * narrative-scan — LLM narrative detection + KV lifecycle tracking.
  *
  * Pipeline:
  *  1. Fetch real trending pools from GeckoTerminal (grounding data)
- *  2. Ask Venice (web search enabled) to identify 2-3 narratives running on Base
+ *  2. Ask the LLM (no web search — grounded ONLY in the trending list) to
+ *     identify 2-3 narratives running on Base
  *  3. Hard-filter: every returned narrative must have ≥1 token in the real list
  *  4. Load/update KV history → derive Emerging / Rising / Peak / Fading phases
  *  5. Return _noCard:true when 0 grounded narratives are detected
