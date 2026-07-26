@@ -1,7 +1,7 @@
 // x402/token-alpha — single-token trade signal with whale confirmation for Base
 // Price: $0.25 — Real price/liquidity (DexScreener) + whale flow (Moralis); LLM synthesis.
 
-import { callVeniceLLM, extractJsonObject } from "@/app/api/_lib/llm";
+import { callLLM, extractJsonObject } from "@/app/api/_lib/llm";
 import { getTokenMarket } from "@/lib/market-data";
 import { getMoralisERC20Transfers } from "@/lib/moralis";
 import { isLikelyScam } from "./_scam-filter";
@@ -159,7 +159,7 @@ export default async function handler(req: Request): Promise<Response> {
 
     const content = `Live data for ${symbol ?? token} on Base — use ONLY these numbers. Anchor entry_price to the current price above.\n\n${dataLines}`;
 
-    const ask = () => callVeniceLLM({ system: SYSTEM, messages: [{ role: "user", content }], temperature: 0.3, maxTokens: 900 });
+    const ask = async () => (await callLLM({ system: SYSTEM, messages: [{ role: "user", content }], temperature: 0.3, maxTokens: 900 })).text;
 
     let result = extractJsonObject(await ask());
     if (!result) result = extractJsonObject(await ask()); // retry once on parse failure

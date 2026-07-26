@@ -1,7 +1,7 @@
 // x402/protocol-health — TVL trend, anomaly & health verdict for a Base protocol
 // Price: $0.25 — Real TVL/change/category from DefiLlama; LLM synthesis only.
 
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM } from "@/app/api/_lib/llm";
 import { findBaseProtocol, protocolToPrompt } from "@/lib/market-data";
 
 function extractJsonObject(text: string): Record<string, unknown> | null {
@@ -75,12 +75,12 @@ export default async function handler(req: Request): Promise<Response> {
 
     const content = `Live DefiLlama data for the Base protocol — use ONLY these numbers.\n\n${protocolToPrompt(p, p.name)}\nTVL (USD): ${p.tvlUsd ?? "unknown"}\n1d change: ${p.change1dPct ?? "?"}%\n7d change: ${c7 ?? "?"}%\nCategory: ${p.category ?? "unknown"}\nFees 24h: unavailable\nRevenue 24h: unavailable\n\nAssess health (score 0-100), flag anomalies, and give a verdict.`;
 
-    const llmResponse = await callVeniceLLM({
+    const llmResponse = (await callLLM({
       system: SYSTEM,
       messages: [{ role: "user", content }],
       temperature: 0.3,
       maxTokens: 800,
-    });
+    })).text;
 
     const result = extractJsonObject(llmResponse) ?? { degraded: true, note: "Synthesis briefly unavailable - please retry." };
 
