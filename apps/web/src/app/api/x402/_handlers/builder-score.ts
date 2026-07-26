@@ -12,7 +12,7 @@
 
 import { fetchRepo, slugifyRepo, scoreRepoActivity, repoFactsPrompt, type RepoData } from "@/lib/github";
 import { getWalletSnapshot, snapshotToPrompt, normalizeAddress } from "@/lib/onchain";
-import { callVeniceLLM, extractJsonObject } from "@/app/api/_lib/llm";
+import { callLLM, extractJsonObject } from "@/app/api/_lib/llm";
 
 // ─── GitHub profile + repos by handle (public API, no key) ───────────────────
 type GhUser = { login: string; name?: string | null; public_repos: number; followers: number; created_at: string };
@@ -105,7 +105,7 @@ Schema: {
 
     let blue: Record<string, unknown> | null = null;
     for (let attempt = 0; attempt < 2 && !blue; attempt++) {
-      try { blue = parseJson(await callVeniceLLM({ system, user: realCtx, temperature: 0.3, maxTokens: 900 })); } catch { /* retry */ }
+      try { blue = parseJson((await callLLM({ system, user: realCtx, temperature: 0.3, maxTokens: 900 })).text); } catch { /* retry */ }
     }
     if (!blue) blue = { score: null, tier: "unknown", onchain_activity: "unknown", shipping_history: "unknown", technical_credibility: "unknown", base_ecosystem_score: null, known_projects: [], community: { score: null, ct_presence: "unknown", verdict: "Estimate unavailable this run." }, blue_assessment: "Synthesis briefly unavailable — see github/onchain data below, or re-run.", degraded: true };
 

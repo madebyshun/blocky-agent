@@ -2,7 +2,7 @@
 // Price: $0.20 — Tokens grounded in the real GeckoTerminal trending list; LLM only
 // synthesizes narrative labels (no web search — labels are low-confidence)
 
-import { callVeniceLLM, extractJsonObject, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
+import { callLLM, extractJsonObject, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
 import { getBaseTrending, type Pool } from "@/lib/market-data";
 import { filterScamPools } from "./_scam-filter";
 
@@ -73,7 +73,7 @@ export default async function handler(req: Request): Promise<Response> {
 
     const focusLine = focus ? `\n\nUser is focused on: "${focus}". Prioritize narratives relevant to it.` : "";
     const userContent = `Identify the narratives implied by these live trending Base tokens (use their exact change24h and volume24h — do not reference any token not in this list):\n${JSON.stringify(tokenData, null, 2)}${focusLine}`;
-    const ask = () => callVeniceLLM({ system: SYSTEM, messages: [{ role: "user", content: userContent }], temperature: 0.3, maxTokens: 1400 });
+    const ask = async () => (await callLLM({ system: SYSTEM, messages: [{ role: "user", content: userContent }], temperature: 0.3, maxTokens: 1400 })).text;
 
     let result = extractJsonObject(await ask());
     if (!result) result = extractJsonObject(await ask()); // retry once on parse failure

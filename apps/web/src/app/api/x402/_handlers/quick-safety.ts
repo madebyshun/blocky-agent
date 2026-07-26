@@ -1,6 +1,6 @@
 // x402/quick-safety — fast contract safety check (DexScreener liquidity +
 // Basescan verification + LLM read). Price: $0.05
-import { callVeniceLLM, extractJsonObject } from "@/app/api/_lib/llm";
+import { callLLM, extractJsonObject } from "@/app/api/_lib/llm";
 import { getBasescanSource } from "@/lib/moralis";
 
 const DS = "https://api.dexscreener.com/latest/dex";
@@ -30,7 +30,7 @@ Assess a token contract's safety from the real DexScreener liquidity + Basescan 
 Schema: {"safe":boolean,"buy_tax_pct":number|null,"sell_tax_pct":number|null,"risk_score":<0-100>,"verdict":"SAFE|CAUTION|DANGER","flags":string[],"confidence":<0-100>}`;
 
     let r: Record<string, unknown> = {};
-    try { r = extractJsonObject(await callVeniceLLM({ system, user: JSON.stringify(data, null, 2), temperature: 0.2, maxTokens: 500 })) ?? {}; }
+    try { r = extractJsonObject((await callLLM({ system, user: JSON.stringify(data, null, 2), temperature: 0.2, maxTokens: 500 })).text) ?? {}; }
     catch { /* degrade below */ }
 
     const rs = typeof r.risk_score === "number" ? r.risk_score : null;
