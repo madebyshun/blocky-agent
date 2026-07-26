@@ -6,12 +6,12 @@
 // Price: $0.25
 
 import { getAeonOutput, formatAeonForLLM } from "@/app/api/_lib/aeon-kv";
-import { callVeniceLLM, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
+import { callLLM, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
 
 // No live web search (Virtuals-only). Sentiment is an estimate from Aeon
 // narrative context (when present) + model knowledge — never real posts.
 async function llm(system: string, user: string, temp = 0, tokens = 1000): Promise<string> {
-  return callVeniceLLM({ system, user, temperature: temp, maxTokens: tokens });
+  return (await callLLM({ system, user, temperature: temp, maxTokens: tokens })).text;
 }
 const DISCLAIMER = "AI estimate of likely community sentiment generated from model knowledge — NOT measured from live social posts. Treat scores as directional, not data.";
 function parseJson(t: string): Record<string, unknown> | null {
