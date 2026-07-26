@@ -7,10 +7,10 @@
 // Price: $0.75
 
 import { findBaseProtocol, protocolToPrompt, type BaseProtocol } from "@/lib/market-data";
-import { callVeniceLLM, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
+import { callLLM, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
 
 async function llm(system: string, user: string, temp = 0.3, tokens = 1300): Promise<string> {
-  return callVeniceLLM({ system, user, temperature: temp, maxTokens: tokens });
+  return (await callLLM({ system, user, temperature: temp, maxTokens: tokens })).text;
 }
 function parseJson(t: string): Record<string, unknown> | null {
   let s = t.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");

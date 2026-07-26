@@ -3,7 +3,7 @@
 // Moralis tx data. Verdict is hard-mapped from the score, never LLM-chosen.
 
 import { getMoralisNativeTx, getMoralisERC20Transfers } from "@/lib/moralis";
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM } from "@/app/api/_lib/llm";
 
 type BankrMessage = { role: string; content: string };
 
@@ -11,7 +11,7 @@ async function callBankrLLM(opts: {
   model?: string; system: string; messages: BankrMessage[];
   temperature?: number; maxTokens?: number;
 }): Promise<string> {
-  return callVeniceLLM({ system: opts.system, messages: opts.messages, temperature: opts.temperature, maxTokens: opts.maxTokens });
+  return (await callLLM({ system: opts.system, messages: opts.messages, temperature: opts.temperature, maxTokens: opts.maxTokens })).text;
 }
 
 function extractJsonObject(text: string): Record<string, unknown> | null {
