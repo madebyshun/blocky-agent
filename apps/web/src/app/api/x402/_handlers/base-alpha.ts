@@ -1,7 +1,7 @@
 // x402/base-alpha — Base-chain alpha digest: narratives, momentum picks, divergence
 // Price: $0.25 — Real trending pools + TVL from market-data; LLM only groups/labels.
 
-import { callVeniceLLM, extractJsonObject } from "@/app/api/_lib/llm";
+import { callLLM, extractJsonObject } from "@/app/api/_lib/llm";
 import { getBaseTrending, getBaseTvl, poolsToPrompt, tvlToPrompt } from "@/lib/market-data";
 import { filterScamPools } from "./_scam-filter";
 
@@ -55,7 +55,7 @@ export default async function handler(req: Request): Promise<Response> {
 
     const content = `Live Base market data — use ONLY these tokens and numbers.\n\n${tvlToPrompt(tvl)}\n\nTrending Base tokens:\n${poolsToPrompt(trending)}\n\nGroup these into narratives, momentum picks (score 0-100), and divergence signals. Only reference symbols from the list above.`;
 
-    const ask = () => callVeniceLLM({ system: SYSTEM, messages: [{ role: "user", content }], temperature: 0.3, maxTokens: 1400 });
+    const ask = async () => (await callLLM({ system: SYSTEM, messages: [{ role: "user", content }], temperature: 0.3, maxTokens: 1400 })).text;
 
     let result = extractJsonObject(await ask());
     if (!result) result = extractJsonObject(await ask()); // retry once on parse failure
