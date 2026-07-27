@@ -33,7 +33,24 @@ const APP_SEGMENTS = new Set([
   "profile",
   "rewards",
   "robinhood-router",
-  "terminal",
+  // `terminal` removed 2026-07 (0.1 route consolidation) — the browser
+  // terminal collapsed into Blue Chat. /terminal[/…] now 301s to /chat via
+  // culledRedirect() below; the src/app/**/terminal files are kept as dead
+  // code (smaller diff, mirrors the /bank precedent).
+  //
+  // Reserved product URLs (0.1) — clean paths that resolve today to an
+  // in-shell "coming soon" panel (src/app/app/<seg>/page.tsx, noindex) so the
+  // canonical URL is stable before its provider ships:
+  //   radar  → WatchlistProvider (drift/arb discovery)
+  //   wallet → WalletProvider (balances, $BLUE tier)
+  //   trade  → ExecutionProvider (guarded swap engine; absorbs robinhood-router)
+  //   bridge → bridge-flow entry (shares Wallet's bridge component)
+  //   tasks  → automation (DCA / TP-SL / recurring via scoped session keys)
+  "radar",
+  "wallet",
+  "trade",
+  "bridge",
+  "tasks",
 ]);
 
 /**
@@ -57,6 +74,30 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
     `https://${APP_HOST}/chat${search}`,
     { status: 301 },
   );
+}
+
+/**
+ * BlueAgent Relaunch route consolidation (0.1). Dead top-level surfaces that
+ * now live inside a canonical product tab. 301 on EITHER host (runs before the
+ * host reshuffle, like archivedRedirect) so the redirect is identical on
+ * blueagent.dev and app.blueagent.dev — and so external / legacy deep links
+ * never 404 (the non-negotiable of 0.1). Files are kept as dead code rather
+ * than deleted (smaller diff, mirrors the /bank precedent); only routing is cut.
+ *   /code[/…]     → marketing /docs   (the code console folded into docs)
+ *   /micro[/…]    → app Hub           (micro-apps were the ancestors of Hub tools)
+ *   /terminal[/…] → Blue Chat         (the browser terminal folded into /chat)
+ */
+function culledRedirect(pathname: string): NextResponse | null {
+  if (pathname === "/code" || pathname.startsWith("/code/")) {
+    return NextResponse.redirect(`https://${MAIN_HOST}/docs`, { status: 301 });
+  }
+  if (pathname === "/micro" || pathname.startsWith("/micro/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/hub`, { status: 301 });
+  }
+  if (pathname === "/terminal" || pathname.startsWith("/terminal/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/chat`, { status: 301 });
+  }
+  return null;
 }
 
 // BlueBank private preview gate. BlueBank and its public /pay payment surface
@@ -108,6 +149,12 @@ export function middleware(request: NextRequest) {
   // follow-up PR.
   const archived = archivedRedirect(pathname, request.nextUrl.search);
   if (archived) return archived;
+
+  // BlueAgent Relaunch 0.1: culled top-level routes (/code, /micro, /terminal)
+  // → their canonical tab, same semantic on both hosts. Runs early so it beats
+  // the host reshuffle and the non-prod passthrough below.
+  const culled = culledRedirect(pathname);
+  if (culled) return culled;
 
   // Redirect docs subdomain → Mintlify
   if (host.startsWith("docs.blueagent.dev")) {
