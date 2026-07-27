@@ -4,16 +4,12 @@
 
 type Msg = { role: string; content: string };
 import { getAeonOutput, formatAeonForLLM } from "@/app/api/_lib/aeon-kv";
+import { callLLM } from "@/app/api/_lib/llm";
 
+// Bankr LLM (llm.bankr.bot) was 403-banned 2026-07-20 → route through callLLM
+// (Virtuals). Signature/temperature defaults preserved so call sites are unchanged.
 async function llm(system: string, user: string, temp = 0.4, tokens = 1000): Promise<string> {
-  const r = await fetch("https://llm.bankr.bot/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": process.env.LLM_API_KEY ?? process.env.BANKR_API_KEY ?? "", "Content-Type": "application/json", "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: "claude-haiku-4-5", system, messages: [{ role: "user", content: user }] as Msg[], temperature: temp, max_tokens: tokens }),
-  });
-  if (!r.ok) throw new Error(`LLM ${r.status}: ${await r.text()}`);
-  const d = await r.json() as { content?: { text: string }[] };
-  return d.content?.[0]?.text ?? "";
+  return (await callLLM({ system, messages: [{ role: "user", content: user }] as Msg[], temperature: temp, maxTokens: tokens })).text;
 }
 function parseJson(t: string): Record<string, unknown> | null {
   let s = t.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
