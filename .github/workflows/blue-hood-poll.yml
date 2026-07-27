@@ -13,10 +13,14 @@ name: Blue Hood — Poll (backup)
 # The route is idempotent — it takes a KV lock on entry (bh:poll:lock,
 # TTL 5 min) so overlapping calls from Vercel Cron + this Action can't
 # double-poll → double-burst GT. Extra ticks safely no-op.
+#
+# CADENCE: Vercel Cron (`apps/web/vercel.json`, */5) is the PRIMARY,
+# native scheduler. This Action is a MANUAL rescue lever — run it from
+# the Actions tab (workflow_dispatch) if Vercel Cron goes silent again.
+# The `schedule:` trigger was removed so the two schedulers don't both
+# fire every 5 min and burn 2× the KV ops on lock-skip no-ops.
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 concurrency:

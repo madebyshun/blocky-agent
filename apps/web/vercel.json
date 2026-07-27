@@ -14,11 +14,11 @@
     },
     {
       "path": "/api/cron/blue-hood/sparkline-refresh",
-      "schedule": "*/15 * * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/cron/blue-hood/brief-worker",
-      "schedule": "* * * * *"
+      "schedule": "*/3 * * * *"
     }
   ]
 }
