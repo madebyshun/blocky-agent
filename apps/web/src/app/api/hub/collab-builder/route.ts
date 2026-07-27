@@ -5,15 +5,13 @@
  * Takes: agents[] + tool description
  * Returns: composite tool proposal — name, pipeline steps, inputs, pricing
  *
- * Uses Bankr LLM (falls back to Anthropic).
+ * Uses the shared callLLM (Virtuals). The old Bankr-first / Anthropic-fallback
+ * path was dead: llm.bankr.bot was 403-banned 2026-07-20 and the Anthropic
+ * direct key is usually out of credit, so this route returned errors.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-
-const BANKR_API_KEY     = process.env.BANKR_API_KEY ?? "";
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
-const BANKR_LLM         = "https://llm.bankr.bot/v1/messages";
-const ANTHROPIC_LLM     = "https://api.anthropic.com/v1/messages";
+import { callLLM } from "@/app/api/_lib/llm";
 
 const AGENT_PROFILES: Record<string, string> = {
   blue:      "Blue Agent — builder intelligence, security, fundraising, Base ecosystem context, x402 payments",
@@ -69,55 +67,25 @@ Return ONLY valid JSON with this exact structure:
 
 No markdown. No explanation. Raw JSON only.`;
 
-  const bodyPayload = JSON.stringify({
-    model:      "claude-haiku-4-5",
-    max_tokens: 1200,
-    messages:   [{ role: "user", content: prompt }],
-  });
-
-  const headers = {
-    "Content-Type":      "application/json",
-    "anthropic-version": "2023-06-01",
-  };
-
-  // Try Bankr first
-  if (BANKR_API_KEY) {
-    const res = await fetch(BANKR_LLM, {
-      method:  "POST",
-      headers: { ...headers, "x-api-key": BANKR_API_KEY },
-      body:    bodyPayload,
-      signal:  AbortSignal.timeout(30000),
-    });
-    if (res.ok) {
-      const data = await res.json() as { content?: { text?: string }[] };
-      const text = data.content?.[0]?.text ?? "{}";
-      try {
-        return NextResponse.json({ ok: true, tool: JSON.parse(text) });
-      } catch { /* fall through */ }
-    }
+  let text: string;
+  try {
+    text = (await callLLM({
+      system:    "You are Blue Agent — AI founder console for Base builders. Return ONLY raw JSON, no markdown, no preamble.",
+      model:     "claude-haiku-4-5",
+      messages:  [{ role: "user", content: prompt }],
+      maxTokens: 1200,
+    })).text;
+  } catch (e) {
+    return NextResponse.json({ error: `LLM unavailable: ${(e as Error).message}` }, { status: 503 });
   }
 
-  // Fallback: Anthropic
-  if (!ANTHROPIC_API_KEY) {
-    return NextResponse.json({ error: "No LLM available" }, { status: 503 });
-  }
-
-  const res = await fetch(ANTHROPIC_LLM, {
-    method:  "POST",
-    headers: { ...headers, "x-api-key": ANTHROPIC_API_KEY },
-    body:    bodyPayload,
-    signal:  AbortSignal.timeout(30000),
-  });
-
-  if (!res.ok) {
-    return NextResponse.json({ error: `LLM error: ${res.status}` }, { status: 500 });
-  }
-
-  const data = await res.json() as { content?: { text?: string }[] };
-  const text = data.content?.[0]?.text ?? "{}";
+  // Lenient parse — LLMs wrap JSON in fences / add preamble.
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  const start = cleaned.indexOf("{"), end = cleaned.lastIndexOf("}");
+  const raw = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
 
   try {
-    return NextResponse.json({ ok: true, tool: JSON.parse(text) });
+    return NextResponse.json({ ok: true, tool: JSON.parse(raw) });
   } catch {
     return NextResponse.json({ error: "Failed to parse LLM response", raw: text }, { status: 500 });
   }
