@@ -93,15 +93,15 @@ export const kv = getKV();
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export async function kvGet<T>(key: string): Promise<T | null> {
-  try { return await kv.get<T>(key); } catch { return null; }
+  try { return await kv.get<T>(key); } catch (e) { console.error(`[kv:get] ${key}: ${(e as Error).message}`); return null; }
 }
 
 export async function kvSet(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
-  try { await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined); } catch {}
+  try { await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined); } catch (e) { console.error(`[kv:set] ${key}: ${(e as Error).message}`); }
 }
 
 export async function kvDel(...keys: string[]): Promise<void> {
-  try { await kv.del(...keys); } catch {}
+  try { await kv.del(...keys); } catch (e) { console.error(`[kv:del] ${keys.join(",")}: ${(e as Error).message}`); }
 }
 
 /**
@@ -126,7 +126,8 @@ export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): 
     if (existing && !expired) return false;
     memStore.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
     return true;
-  } catch {
+  } catch (e) {
+    console.error(`[kv:setNX] ${key}: ${(e as Error).message}`);
     return false;
   }
 }
@@ -161,7 +162,8 @@ export async function kvScan(match: string, max = 10000): Promise<string[]> {
       cursor = next;
     } while (cursor !== "0" && keys.length < max);
     return keys.slice(0, max);
-  } catch {
+  } catch (e) {
+    console.error(`[kv:scan] ${match}: ${(e as Error).message}`);
     return [];
   }
 }
