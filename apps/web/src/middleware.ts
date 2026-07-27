@@ -30,12 +30,12 @@ const APP_SEGMENTS = new Set([
   "hood",
   "hub",
   "launches",
-  "profile",
-  "rewards",
   "robinhood-router",
-  // `terminal` removed 2026-07 (0.1 route consolidation) — the browser
-  // terminal collapsed into Blue Chat. /terminal[/…] now 301s to /chat via
-  // culledRedirect() below; the src/app/**/terminal files are kept as dead
+  // `profile`, `rewards`, `terminal` removed 2026-07 (0.1 route
+  // consolidation) — all three now 301 to their canonical home via
+  // culledRedirect() below (profile → dashboard, rewards → dashboard?tab=stake,
+  // terminal → chat), so they intentionally do NOT rewrite into /app/* here.
+  // Their src/app/**/{profile,rewards,terminal} page stubs are kept as dead
   // code (smaller diff, mirrors the /bank precedent).
   //
   // Reserved product URLs (0.1) — clean paths that resolve today to an
@@ -83,9 +83,16 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
  * blueagent.dev and app.blueagent.dev — and so external / legacy deep links
  * never 404 (the non-negotiable of 0.1). Files are kept as dead code rather
  * than deleted (smaller diff, mirrors the /bank precedent); only routing is cut.
- *   /code[/…]     → marketing /docs   (the code console folded into docs)
- *   /micro[/…]    → app Hub           (micro-apps were the ancestors of Hub tools)
- *   /terminal[/…] → Blue Chat         (the browser terminal folded into /chat)
+ *   /code[/…]     → marketing /docs        (the code console folded into docs)
+ *   /micro[/…]    → app Hub                (micro-apps were the ancestors of Hub tools)
+ *   /terminal[/…] → Blue Chat              (the browser terminal folded into /chat)
+ *   /profile[/…]  → app dashboard          (self-management folded into the dashboard)
+ *   /rewards[/…]  → dashboard?tab=stake    (staking is the dashboard's Stake tab)
+ *
+ * profile + rewards used to 307 from a page-level redirect() (temporary, and a
+ * 2-hop chain through /app/dashboard). Handling them here makes them a single
+ * permanent 301 straight to the app host — the "every cull = 301, collapse the
+ * double-hop" contract of 0.1.
  */
 function culledRedirect(pathname: string): NextResponse | null {
   if (pathname === "/code" || pathname.startsWith("/code/")) {
@@ -96,6 +103,12 @@ function culledRedirect(pathname: string): NextResponse | null {
   }
   if (pathname === "/terminal" || pathname.startsWith("/terminal/")) {
     return NextResponse.redirect(`https://${APP_HOST}/chat`, { status: 301 });
+  }
+  if (pathname === "/profile" || pathname.startsWith("/profile/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/dashboard`, { status: 301 });
+  }
+  if (pathname === "/rewards" || pathname.startsWith("/rewards/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/dashboard?tab=stake`, { status: 301 });
   }
   return null;
 }
