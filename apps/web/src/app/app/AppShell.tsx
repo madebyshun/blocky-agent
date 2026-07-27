@@ -108,20 +108,11 @@ const APP_NAV = [
 ];
 
 const APP_BOTTOM = [
-  // Profile is back as its own page — identity (bio, avatar, social links)
-  // is distinct from the dashboard's wallet snapshot. /app/dashboard is for
-  // "what do I hold + manage", /app/profile is for "who am I".
-  {
-    id: "profile",
-    label: "Profile",
-    href: "/profile",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M17.982 18.725A7.488 7.488 0 0 0 12 15.75a7.488 7.488 0 0 0-5.982 2.975m11.963 0a9 9 0 1 0-11.963 0m11.963 0A8.966 8.966 0 0 1 12 21a8.966 8.966 0 0 1-5.982-2.275M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-      </svg>
-    ),
-  },
+  // Profile was collapsed into the dashboard (0.1 route consolidation, 2026-07):
+  // "me looking at me" (wallet, holdings, stake, alerts) all live in
+  // /app/dashboard now; the public identity card is /agent/[handle] +
+  // /builder/[handle]. Both old /profile routes 301 → /dashboard, so there's no
+  // Profile nav entry anymore.
   {
     id: "docs",
     label: "Docs",
@@ -279,9 +270,10 @@ const NAV_ITEMS = APP_NAV;
 
 const PRODUCTS = [...NAV_ITEMS, ...APP_BOTTOM];
 
-// Mobile drawer products — Profile is surfaced at the very top, Docs lives in
-// Settings (mobile), so both are dropped from the drawer's product list.
-const DRAWER_PRODUCTS = PRODUCTS.filter(i => i.id !== "profile" && i.id !== "docs");
+// Mobile drawer products — Docs lives in Settings (mobile), so it's dropped
+// from the drawer's product list. (Profile was removed entirely in the 0.1
+// route consolidation — it no longer appears in PRODUCTS.)
+const DRAWER_PRODUCTS = PRODUCTS.filter(i => i.id !== "docs");
 
 // Returns the nav id for the current path so the title can be translated via
 // t(`nav.${id}`); falls back to null (→ generic "Blue Agent" brand label).
@@ -374,22 +366,6 @@ function MobileDrawer() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-2">
-          {/* Profile — surfaced at the very top (ChatGPT-style account entry). */}
-          <div className="px-2">
-            <Link
-              href="/profile"
-              onClick={() => setDrawerOpen(false)}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-[#ffffff06]"
-            >
-              <span className="w-7 h-7 rounded-full bg-[#15151f] border border-[#1A1A2E] flex items-center justify-center shrink-0">
-                <svg className="w-4 h-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-              </span>
-              <span className="font-mono text-[13px] text-slate-200">{t("nav.profile")}</span>
-            </Link>
-          </div>
-
           {/* New chat — primary action, prominent + easy to tap. */}
           {contextual?.newChat && (
             <div className="px-2 pt-1 pb-2">

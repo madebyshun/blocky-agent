@@ -584,7 +584,6 @@ export default function OverviewView({ onSwitchTab }: Props) {
             <div className="sm:col-span-3 flex flex-wrap gap-3 text-[10px] text-slate-700 justify-center pt-2">
               <a href={`https://basescan.org/address/${address}`} target="_blank" rel="noopener noreferrer"
                 className="hover:text-slate-500 transition-colors">Basescan ↗</a>
-              <Link href="/profile" className="hover:text-slate-500 transition-colors">Profile →</Link>
             </div>
 
           </div>
