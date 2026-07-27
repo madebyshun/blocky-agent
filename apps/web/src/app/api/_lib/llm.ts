@@ -91,40 +91,21 @@ export async function callBankrLLM(opts: {
     }
   }
 
-  // Auto-enable JSON prefill when system contains "Return ONLY raw JSON"
-  const wantsJson = opts.jsonMode ?? system.includes("Return ONLY raw JSON");
-  const messages: BankrMessage[] = wantsJson
-    ? [...opts.messages, { role: "assistant", content: "{" }]
-    : opts.messages;
-
-  const res = await fetch("https://llm.bankr.bot/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": process.env.BANKR_API_KEY ?? "",
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: opts.model ?? "claude-haiku-4-5",
-      system,
-      messages,
-      temperature: opts.temperature ?? 0.5,
-      // Same floor as Virtuals + Venice — <400 causes JSON truncation.
-      max_tokens: Math.max(400, opts.maxTokens ?? 1000),
-    }),
-    signal: AbortSignal.timeout(55_000),
+  // Bankr LLM (llm.bankr.bot) was 403-banned 2026-07-20 → delegate to
+  // Virtuals so every legacy caller of this shared helper keeps working.
+  // The skill auto-injection above is preserved. The old Anthropic-style
+  // assistant-"{" JSON prefill (opts.jsonMode) is intentionally dropped:
+  // Virtuals' OpenAI-compat endpoint does not continue-generate a prefill,
+  // so seeding "{" would double the opening brace. Every caller already
+  // parses with extractJsonObject (tolerates fences/preamble), so returning
+  // raw model text is safe. opts.model is also dropped — Virtuals selects a
+  // catalog-validated model of its own.
+  return callVirtualsLLM({
+    system,
+    messages: opts.messages,
+    temperature: opts.temperature,
+    maxTokens: opts.maxTokens,
   });
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[llm] Bankr LLM error ${res.status}:`, errText);
-    throw new Error(`Bankr LLM ${res.status}: ${errText.slice(0, 200)}`);
-  }
-  const d = await res.json() as { content?: { text: string }[]; text?: string };
-  let text = "";
-  if (d.content?.length) text = d.content[0].text;
-  else if (d.text) text = d.text;
-  else throw new Error("Invalid Bankr LLM response");
-  return wantsJson ? "{" + text : text;
 }
 
 // ─── Fabrication guard ─────────────────────────────────────────────────────
