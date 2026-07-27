@@ -33,8 +33,8 @@ const APP_SEGMENTS = new Set([
   "profile",
   "rewards",
   "robinhood-router",
-  // `terminal` removed 2026-07 (0.1 route consolidation) — the terminal
-  // cockpit collapsed into Blue Hood. /terminal[/…] now 301s to /hood via
+  // `terminal` removed 2026-07 (0.1 route consolidation) — the browser
+  // terminal collapsed into Blue Chat. /terminal[/…] now 301s to /chat via
   // culledRedirect() below; the src/app/**/terminal files are kept as dead
   // code (smaller diff, mirrors the /bank precedent).
   //
@@ -85,7 +85,7 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
  * than deleted (smaller diff, mirrors the /bank precedent); only routing is cut.
  *   /code[/…]     → marketing /docs   (the code console folded into docs)
  *   /micro[/…]    → app Hub           (micro-apps were the ancestors of Hub tools)
- *   /terminal[/…] → Blue Hood         (the terminal cockpit folded into /hood)
+ *   /terminal[/…] → Blue Chat         (the browser terminal folded into /chat)
  */
 function culledRedirect(pathname: string): NextResponse | null {
   if (pathname === "/code" || pathname.startsWith("/code/")) {
@@ -95,7 +95,7 @@ function culledRedirect(pathname: string): NextResponse | null {
     return NextResponse.redirect(`https://${APP_HOST}/hub`, { status: 301 });
   }
   if (pathname === "/terminal" || pathname.startsWith("/terminal/")) {
-    return NextResponse.redirect(`https://${APP_HOST}/hood`, { status: 301 });
+    return NextResponse.redirect(`https://${APP_HOST}/chat`, { status: 301 });
   }
   return null;
 }
