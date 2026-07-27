@@ -27,6 +27,11 @@ export const runtime = "nodejs";
 // against overlap → GT burst → cascade of fetch_failed.
 export const maxDuration = 300;
 
+// A live cycle can never outlive the 300s function cap, so a lock whose
+// holder is older than this (or has no readable `started_at`) is provably a
+// zombie left by a hard-killed/odd-written cycle — safe to force-reclaim.
+const STALE_LOCK_S = 360;
+
 const CRON_SECRET = process.env.CRON_SECRET ?? "";
 
 function isAuthorized(req: NextRequest): boolean {
@@ -48,19 +53,39 @@ async function handle(req: NextRequest) {
   // runPollCycle still releases the lock in the finally block so a
   // crashed cycle never wedges the schedule.
   const lockStart = Date.now();
-  const gotLock = await kvSetNX(KV_POLL_LOCK, { started_at: new Date().toISOString() }, TTL_POLL_LOCK);
+  let recoveredStaleLock = false;
+  let gotLock = await kvSetNX(KV_POLL_LOCK, { started_at: new Date().toISOString() }, TTL_POLL_LOCK);
   if (!gotLock) {
+    // SETNX failed → a lock key is present. But a *live* cycle ALWAYS stamps
+    // `{started_at}` and can never outlive the 300s function cap, so a holder
+    // with no readable `started_at`, or one older than STALE_LOCK_S, is
+    // provably NOT a running cycle — it's a zombie a hard-killed/odd-written
+    // cycle left behind. When that happens, `finally kvDel` (the normal
+    // reaper) can never fire, because it only runs after the lock is
+    // *acquired* — so a never-acquirable lock deadlocks the whole schedule
+    // forever. Force-clear (Redis `del` is unconditional) and re-acquire so
+    // the engine self-heals on the very next tick, regardless of how the key
+    // got wedged. Confirmed root cause of the 2026-07-27 prod poll outage.
     const held = await kvGet<{ started_at?: string }>(KV_POLL_LOCK);
     const heldStart = held?.started_at ? new Date(held.started_at).getTime() : 0;
     const heldFor = heldStart ? Math.round((Date.now() - heldStart) / 1000) : -1;
-    console.log(`[poller] skipped, previous cycle still running (${heldFor}s)`);
-    return NextResponse.json({
-      ok: true,
-      skipped: true,
-      reason: "cycle_in_progress",
-      previous_cycle_started_at: held?.started_at ?? null,
-      previous_cycle_age_s: heldFor,
-    }, { status: 202 });
+    const isZombie = !heldStart || heldFor >= STALE_LOCK_S;
+    if (isZombie) {
+      console.warn(`[poller] zombie lock detected (started_at=${held?.started_at ?? "null"}, age=${heldFor}s) — force-clearing and reclaiming`);
+      await kvDel(KV_POLL_LOCK);
+      gotLock = await kvSetNX(KV_POLL_LOCK, { started_at: new Date().toISOString() }, TTL_POLL_LOCK);
+      recoveredStaleLock = gotLock;
+    }
+    if (!gotLock) {
+      console.log(`[poller] skipped, previous cycle still running (${heldFor}s)`);
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        reason: "cycle_in_progress",
+        previous_cycle_started_at: held?.started_at ?? null,
+        previous_cycle_age_s: heldFor,
+      }, { status: 202 });
+    }
   }
 
   try {
@@ -85,6 +110,7 @@ async function handle(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      recovered_stale_lock: recoveredStaleLock,
       mode: TOOL_CALLER_MODE,
       cycle_id: snap.cycle_id,
       duration_ms: snap.duration_ms,
