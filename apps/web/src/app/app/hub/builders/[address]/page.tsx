@@ -1,8 +1,9 @@
 /**
- * /hub/builders/[address] — Public builder profile (marketing host).
- * Server component — fetches builder stats + tool list from the registry, then
- * renders the shared BuilderView. The in-app twin lives at
- * /app/hub/builders/[address] (<BuilderView inShell />).
+ * /app/hub/builders/[address] — Public builder profile (app subdomain).
+ * The middleware rewrites /hub/builders/[address] → /app/hub/builders/[address]
+ * on app.blueagent.dev, so this wrapper must exist or the profile gets swallowed
+ * by /app/hub/[tool]. Same server fetch as the marketing route, rendered inside
+ * the AppShell via <BuilderView inShell />.
  */
 
 import { notFound } from "next/navigation";
@@ -12,7 +13,7 @@ import BuilderView from "@/app/hub/_components/BuilderView";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export default async function BuilderProfile({
+export default async function AppBuilderProfile({
   params,
 }: {
   params: Promise<{ address: string }>;
@@ -25,5 +26,5 @@ export default async function BuilderProfile({
     getBuilderStats(address),
   ]);
 
-  return <BuilderView address={address} tools={tools} stats={stats} />;
+  return <BuilderView address={address} tools={tools} stats={stats} inShell />;
 }
