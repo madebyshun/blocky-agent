@@ -36,6 +36,14 @@ export const HIT_RATE_MIN_SAMPLE_AGGREGATE = 30;
 /** A given type's hit-rate is hidden publicly until this many valid arrows of that type. */
 export const HIT_RATE_MIN_SAMPLE_PER_TYPE = 15;
 
+// ── 0.2 track-record API contract ───────────────────────────────────────────
+
+/** Version stamped into the track-record endpoint's `meta` so agents can pin it. */
+export const TRACK_RECORD_API_VERSION = "0.2.0";
+
+/** Human-readable grading rules. `#grading` anchor lives in docs/blue-hood. */
+export const GRADING_RULES_URL = "https://blueagent.dev/docs/blue-hood#grading";
+
 // ── Response shape ──────────────────────────────────────────────────────────
 
 /** Aggregate stats. `ready` flips true only when sample ≥ AGGREGATE threshold. */
@@ -82,6 +90,19 @@ export interface HitRateComputed {
 
 // ── Compute ─────────────────────────────────────────────────────────────────
 
+/**
+ * The one true windowing filter: graded arrows whose `graded_at` falls inside
+ * the last WINDOW_MS. Shared by computeHitRate + computeRecordCurve so the two
+ * can never disagree on which arrows are "in window" (the exact drift this
+ * module was created to kill).
+ */
+function gradedInWindow(arrows: Arrow[], now: number): Arrow[] {
+  const cutoff = now - HIT_RATE_WINDOW_MS;
+  return arrows.filter(
+    (a) => a.status === "graded" && a.graded_at && new Date(a.graded_at).getTime() >= cutoff,
+  );
+}
+
 function statsFor(arrows: Arrow[], threshold: number): HitRatePerTypeStats {
   const hits = arrows.filter((a) => a.outcome === "hit").length;
   const misses = arrows.filter((a) => a.outcome === "miss").length;
@@ -114,10 +135,7 @@ export function computeHitRate(
   arrows: Arrow[],
   now: number = Date.now(),
 ): HitRateComputed {
-  const cutoff = now - HIT_RATE_WINDOW_MS;
-  const graded7d = arrows.filter(
-    (a) => a.status === "graded" && a.graded_at && new Date(a.graded_at).getTime() >= cutoff,
-  );
+  const graded7d = gradedInWindow(arrows, now);
 
   const agg = statsFor(graded7d, HIT_RATE_MIN_SAMPLE_AGGREGATE);
   const hit_rate: HitRateAggregate = agg.ready
@@ -146,5 +164,123 @@ export function computeHitRate(
       informational: agg.informational_count,
       total_graded: graded7d.length,
     },
+  };
+}
+
+// ── Record curve (gated headline) ───────────────────────────────────────────
+
+/**
+ * HONESTY NOTE — why this is NOT an equity/PnL curve:
+ * The `Arrow` type carries no per-arrow return or PnL (grading is
+ * signal-accuracy only — see types.ts). A monetary "equity curve" would
+ * therefore be fabricated, which the data-honesty rules forbid. So the curve
+ * we publish is an explicit W/L walk: each graded HIT steps +1, each MISS −1,
+ * VOID/informational contribute nothing. `basis` names this so no consumer can
+ * mistake it for dollars.
+ */
+export interface RecordCurvePoint {
+  /** graded_at of the arrow that produced this step (ISO 8601). */
+  t: string;
+  /** cumulative HIT−MISS after this arrow. */
+  v: number;
+}
+
+export type RecordCurve =
+  | {
+      basis: "cumulative_hit_minus_miss";
+      ready: true;
+      sample: number;
+      final: number;
+      peak: number;
+      trough: number;
+      points: RecordCurvePoint[];
+    }
+  | {
+      basis: "cumulative_hit_minus_miss";
+      ready: false;
+      sample: number;
+      needed: number;
+    };
+
+/**
+ * Cumulative HIT−MISS curve over the same 7d window as computeHitRate. Gated on
+ * the AGGREGATE threshold — a headline shape, so it shares the aggregate gate.
+ * Below threshold we return only `{ready:false, sample, needed}` (no points),
+ * matching the "don't publish the headline until the sample earns it" rule.
+ */
+export function computeRecordCurve(
+  arrows: Arrow[],
+  now: number = Date.now(),
+): RecordCurve {
+  const graded = gradedInWindow(arrows, now)
+    .filter((a) => a.outcome === "hit" || a.outcome === "miss")
+    .sort(
+      (a, b) => new Date(a.graded_at!).getTime() - new Date(b.graded_at!).getTime(),
+    );
+
+  const sample = graded.length;
+  if (sample < HIT_RATE_MIN_SAMPLE_AGGREGATE) {
+    return {
+      basis: "cumulative_hit_minus_miss",
+      ready: false,
+      sample,
+      needed: HIT_RATE_MIN_SAMPLE_AGGREGATE,
+    };
+  }
+
+  let cum = 0;
+  let peak = 0;
+  let trough = 0;
+  const points: RecordCurvePoint[] = graded.map((a) => {
+    cum += a.outcome === "hit" ? 1 : -1;
+    if (cum > peak) peak = cum;
+    if (cum < trough) trough = cum;
+    return { t: a.graded_at!, v: cum };
+  });
+
+  return {
+    basis: "cumulative_hit_minus_miss",
+    ready: true,
+    sample,
+    final: cum,
+    peak,
+    trough,
+    points,
+  };
+}
+
+// ── Machine-readable grading rules (endpoint `meta`) ─────────────────────────
+
+/**
+ * The grading rules an agent needs to trust (and re-derive) our numbers, in a
+ * form it can read without scraping the docs page. Mirrors grader.ts exactly —
+ * if a grading constant changes, change it here too.
+ */
+export function gradingRulesMeta() {
+  return {
+    version: TRACK_RECORD_API_VERSION,
+    rules_url: GRADING_RULES_URL,
+    window_days: HIT_RATE_WINDOW_MS / (24 * 3_600 * 1000),
+    thresholds: {
+      aggregate: HIT_RATE_MIN_SAMPLE_AGGREGATE,
+      per_type: HIT_RATE_MIN_SAMPLE_PER_TYPE,
+    },
+    // Which wall/session clock each type is graded against. Chainlink oracle
+    // freezes at the NYSE close, so drift/arb count only regular-session hours.
+    clock: {
+      drift: "nyse_regular_session_hours",
+      arb: "nyse_regular_session_hours",
+      flow: "wall_clock_hours",
+    },
+    outcomes: {
+      drift:
+        "HIT if the DEX↔oracle price gap closes ≥50% within grading_window_h NYSE regular-session hours; otherwise MISS.",
+      arb:
+        "HIT if the DEX↔oracle spread narrows below 0.5% within 4 NYSE regular-session hours; otherwise MISS.",
+      flow: "Informational only — never graded HIT/MISS.",
+      void:
+        "Any drift/arb arrow graded before its regular-session window fully elapsed is VOID and excluded from hit-rate.",
+    },
+    excluded_from_hit_rate: ["void", "informational", "test", "seeded"],
   };
 }
