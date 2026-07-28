@@ -106,6 +106,55 @@ export const TTL_POLL_LOCK = 60 * 5; // 5 min — matches the cron cadence
 export const KV_POLL_HEARTBEAT = "bh:poll:heartbeat";
 export const TTL_POLL_HEARTBEAT = 60 * 60 * 24; // 24h — keep last-fired readable long after death
 
+// ── 1.7 per-user alert watchlist ─────────────────────────────────────────────
+//
+// DISTINCT from `HOOD_WATCHLIST` (registry.ts), which is the ENGINE-wide polled
+// set. This namespace is the PER-USER alert watchlist: "wallet X wants a DM when
+// ticker Y drifts". Both the web UI and the Telegram bot (2.2) read these keys —
+// KV is the shared substrate, not React state.
+//
+// Shape:
+//   • bh:watch:{address}        → Watchlist (forward, source of truth; UI edits this)
+//   • bh:watch:ticker:{TICKER}  → Redis SET of addresses (reverse index; the alert
+//                                 engine reads ONE key when an arrow fires instead
+//                                 of scanning every watcher). Kept in sync by a
+//                                 SYMMETRIC dual-write — a remove SREMs the address,
+//                                 so no orphaned subscriber ever keeps getting alerts.
+//   • bh:watch:index            → Redis SET of addresses with a non-empty list
+//                                 (enumeration / rebuild / a cheap watcher-count signal).
+
+/** Forward key: one wallet's alert watchlist. No TTL — a list shouldn't evaporate; bloat is bounded by an entry cap, not by expiry. */
+export const kvWatchlist = (address: string) => `bh:watch:${address.toLowerCase()}`;
+
+/** Reverse index: SET of addresses watching a ticker. The alert engine's hot read. */
+export const kvWatchTicker = (ticker: string) => `bh:watch:ticker:${ticker.toUpperCase()}`;
+
+/** SET of every address that currently has a non-empty watchlist. */
+export const KV_WATCH_INDEX = "bh:watch:index";
+
+// ── 1.7 Telegram wallet-link ─────────────────────────────────────────────────
+//
+// Maps a Telegram user to a wallet so 2.2 can DM the right person when an arrow
+// fires for a ticker they watch. Non-custodial: stores only { address, tgUserId },
+// never a key — the tg id is a routing handle, not an authz token for funds.
+//
+// Handshake (web issues, bot consumes):
+//   1. web (wallet already connected) POSTs → we mint bh:tglink:code:{code} (TTL 10m)
+//   2. user sends `/link {code}` to the bot → bot consumes the code, writes both
+//      link directions, deletes the code. Both sides proven; no signature needed.
+
+/** Forward: tg user id → { address }. */
+export const kvTgLink = (tgUserId: string | number) => `bh:tglink:${tgUserId}`;
+
+/** Reverse: address → { tgUserId } (one wallet ↔ one tg for v1). The alert DM path reads this. */
+export const kvTgLinkByAddr = (address: string) => `bh:tglink:addr:${address.toLowerCase()}`;
+
+/** Short-lived link code minted by web, consumed by the bot. TTL below. */
+export const kvTgLinkCode = (code: string) => `bh:tglink:code:${code.toUpperCase()}`;
+
+/** Link-code lifetime — long enough to switch to Telegram and paste, short enough to not linger. */
+export const TTL_TGLINK_CODE = 60 * 10; // 10 min
+
 /** TTL constants (seconds). */
 export const TTL_SNAPSHOT_HOUR = 60 * 60 * 25; // 25h so we always have a full 24h window
 export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are at most 24h
