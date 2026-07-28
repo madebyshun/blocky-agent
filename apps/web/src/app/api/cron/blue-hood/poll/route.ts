@@ -13,8 +13,13 @@ import { persistSnapshot, runPollCycle } from "@/lib/blue-hood/poller";
 import { runRuleEngine } from "@/lib/blue-hood/rule-engine";
 import { runGrader, backfillVoidGrades } from "@/lib/blue-hood/grader";
 import { TOOL_CALLER_MODE } from "@/lib/blue-hood/tool-caller";
-import { kvDel, kvGet, kvSetNX } from "@/lib/kv";
-import { KV_POLL_LOCK, TTL_POLL_LOCK } from "@/lib/blue-hood/kv-keys";
+import { kvDel, kvGet, kvSet, kvSetNX } from "@/lib/kv";
+import {
+  KV_POLL_LOCK,
+  TTL_POLL_LOCK,
+  KV_POLL_HEARTBEAT,
+  TTL_POLL_HEARTBEAT,
+} from "@/lib/blue-hood/kv-keys";
 
 export const runtime = "nodejs";
 // Prod cycle observation (2026-07-21): with market open + 24 tokens ×
@@ -41,6 +46,14 @@ async function handle(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Route heartbeat — written FIRST, before the lock, so a skipped tick still
+  // records "the scheduler fired". This is the signal health.ts uses to tell
+  // "cron dead" (this key stale) from "cron alive but every cycle failing"
+  // (this fresh while the snapshot goes stale). Fire-and-forget: if KV is
+  // throttled the write silently no-ops, but the read side (kvGetProbe) will
+  // surface that same throttle as `kv_error`, so nothing is masked.
+  await kvSet(KV_POLL_HEARTBEAT, { at: new Date().toISOString() }, TTL_POLL_HEARTBEAT);
 
   // Overlap guard. `kvSetNX(..., TTL_POLL_LOCK)` is atomic: only the first
   // caller in a window takes the lock; later ticks short-circuit with a 202.

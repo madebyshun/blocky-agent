@@ -96,6 +96,37 @@ export async function kvGet<T>(key: string): Promise<T | null> {
   try { return await kv.get<T>(key); } catch (e) { console.error(`[kv:get] ${key}: ${(e as Error).message}`); return null; }
 }
 
+/**
+ * Result of a KV read that DISTINGUISHES the three outcomes `kvGet` collapses:
+ *   • hit   — key present, here's the value
+ *   • miss  — key genuinely absent (client returned null, no error)
+ *   • error — the KV command THREW (throttle / plan-cap / network)
+ *
+ * `kvGet` catches the throw and returns null, so a throttle looks identical to
+ * an empty key — which is exactly how the 2026-07-27 Upstash-cap outage read
+ * as "poller never ran" and went unnoticed. Callers that need to tell those
+ * apart (the engine health probe) MUST use this, not `kvGet`.
+ */
+export type KvProbe<T> =
+  | { status: "hit"; value: T }
+  | { status: "miss" }
+  | { status: "error"; message: string };
+
+/**
+ * Non-swallowing single-key read. The ONE place we deliberately surface a KV
+ * error instead of degrading to null. Never throws — it converts the throw
+ * into `{status:"error"}` so the caller decides what the error MEANS, rather
+ * than the primitive silently pretending the key was empty.
+ */
+export async function kvGetProbe<T>(key: string): Promise<KvProbe<T>> {
+  try {
+    const value = await kv.get<T>(key);
+    return value === null || value === undefined ? { status: "miss" } : { status: "hit", value };
+  } catch (e) {
+    return { status: "error", message: (e as Error).message };
+  }
+}
+
 export async function kvSet(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
   try { await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined); } catch (e) { console.error(`[kv:set] ${key}: ${(e as Error).message}`); }
 }

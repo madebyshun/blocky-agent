@@ -94,6 +94,18 @@ export const KV_BRIEF_QUEUE = "bh:brief:queue";
 export const KV_POLL_LOCK = "bh:poll:lock";
 export const TTL_POLL_LOCK = 60 * 5; // 5 min — matches the cron cadence
 
+/**
+ * Poll ROUTE heartbeat — written at the TOP of the cron handler on every tick
+ * (before the lock, even on the skipped path), proving the scheduler actually
+ * fired. Distinct from `KV_SNAPSHOT_LATEST.started_at`, which only advances on
+ * a cycle that SUCCEEDS end-to-end. Together they separate "cron dead" (this
+ * key stale) from "cron alive but every cycle failing" (this fresh, snapshot
+ * stale). Read via `kvGetProbe` in health.ts. Long TTL so a genuinely dead
+ * cron leaves a readable last-seen timestamp instead of a null.
+ */
+export const KV_POLL_HEARTBEAT = "bh:poll:heartbeat";
+export const TTL_POLL_HEARTBEAT = 60 * 60 * 24; // 24h — keep last-fired readable long after death
+
 /** TTL constants (seconds). */
 export const TTL_SNAPSHOT_HOUR = 60 * 60 * 25; // 25h so we always have a full 24h window
 export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are at most 24h
