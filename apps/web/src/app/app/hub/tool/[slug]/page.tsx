@@ -4,6 +4,20 @@ import { AGENT_TOOLS } from "@/lib/agent-tools";
 import { getPublicHostedTool } from "@/lib/hub-hosted";
 import { getRegisteredTool } from "@/lib/hub-registry";
 
+/**
+ * /app/hub/tool/[slug] — app-subdomain twin of the public /hub/tool/[slug]
+ * share page. The 0.1 Hub unify makes app.blueagent.dev the canonical Hub host,
+ * so the marketing /hub/tool/<slug> permalink now 301s here (middleware, whole
+ * /hub/* sub-tree). This wrapper MUST exist or the shared tool link 404s inside
+ * the app shell — the sibling /app/hub/[tool] only matches a single segment, so
+ * the two-segment /hub/tool/<slug> shape needs its own route.
+ *
+ * Same rich resolveMeta as the marketing page (native → hosted → external) so
+ * community/hosted tools keep their real name/description/logo in OG cards —
+ * unlike /app/hub/[tool] whose generateMetadata is native-catalog only. Renders
+ * inside the AppShell via <HubView inShell />.
+ */
+
 // Community slugs aren't known at build time, so allow dynamic params. Native
 // tools still get a static shell via generateStaticParams (good for crawlers).
 export const dynamicParams = true;
@@ -38,14 +52,12 @@ export async function generateMetadata(
 
   const title = `${meta.name}${meta.price ? ` — ${meta.price}` : ""} · Blue Hub`;
   const description = meta.description;
-  // Canonical is the app host: the 0.1 Hub unify 301s this marketing permalink
-  // to app.blueagent.dev/hub/tool/<slug> (see middleware). This page normally
-  // never renders (middleware intercepts first); the app-host canonical here is
-  // defensive so the signal stays correct if the redirect is ever bypassed.
   const canonical = `https://app.blueagent.dev/hub/tool/${slug}`;
 
   // Shared result (?s=<id>) → dynamic OG image (verdict + confidence). Otherwise
   // fall back to the creator's logo (if they supplied one); else the default card.
+  // The OG image endpoint stays on blueagent.dev (host-agnostic route, matches
+  // the /app/hub/[tool] sibling convention) even though the canonical is app-host.
   const images = s && /^[a-f0-9]{6,32}$/.test(s)
     ? [{ url: `https://blueagent.dev/api/og/hub-result?s=${s}`, width: 1200, height: 630 }]
     : meta.logoUrl
@@ -61,11 +73,9 @@ export async function generateMetadata(
   };
 }
 
-// /hub/tool/<slug> — public, self-contained per-tool page. Non-shell so the
-// marketing Navbar renders (unlike /app/hub/[tool] which runs inside the app
-// shell). Works for native, hosted and external tools; HubView's initialToolId
-// effect resolves community slugs after the async catalog load.
-export default async function HubToolPage({ params }: { params: Promise<{ slug: string }> }) {
+// HubView's initialToolId effect resolves community slugs after the async
+// catalog load; inShell renders it inside the AppShell (no marketing Navbar).
+export default async function AppHubToolSlugPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  return <HubView initialToolId={slug} />;
+  return <HubView inShell initialToolId={slug} />;
 }

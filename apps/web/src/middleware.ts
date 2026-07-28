@@ -186,11 +186,15 @@ export function middleware(request: NextRequest) {
   // app.blueagent.dev (prod) which doesn't have the branch's code and 404s.
   const isProdHost = host === MAIN_HOST || host === APP_HOST;
   if (!isProdHost) {
-    // Exception: Blue Hood's /hood + /hood/arrows share URLs need to work on
-    // localhost + preview so the reviewer can verify the same URL that ships
-    // to prod. Same rewrite rule as `app.blueagent.dev` — see APP_SEGMENTS
-    // block below. Everything else on non-prod hosts still passes through.
-    if (pathname === "/hood" || pathname.startsWith("/hood/")) {
+    // Exception: Blue Hood (/hood…) and Blue Hub (/hub…) share URLs need to
+    // resolve in-shell on localhost + preview so a reviewer can verify the same
+    // URL that ships to prod. Same rewrite rule as `app.blueagent.dev` — see the
+    // APP_SEGMENTS block below. Same-path rewrite, so /hub/tool/<slug> lands on
+    // its /app/hub/tool/[slug] twin. Everything else still passes through.
+    if (
+      pathname === "/hood" || pathname.startsWith("/hood/") ||
+      pathname === "/hub"  || pathname.startsWith("/hub/")
+    ) {
       const url = request.nextUrl.clone();
       url.pathname = `/app${pathname}`;
       return NextResponse.rewrite(url);
@@ -267,10 +271,16 @@ export function middleware(request: NextRequest) {
     );
   }
 
-  // Public /hub → app Hub on the subdomain (preserve query, e.g. ?tool=blue-idea).
-  if (pathname === "/hub" || pathname === "/hub/") {
+  // Public /hub[/…] → app Hub on the subdomain. Whole sub-tree (mirrors /hood
+  // below): the 0.1 Hub unify makes app.blueagent.dev the canonical Hub host, so
+  // every marketing /hub path 301s over (preserves query, e.g. ?tool=blue-idea).
+  // The APP_SEGMENTS rewrite on the app host finishes the job into /app/hub/*.
+  // Same-path hop keeps share permalinks intact — /hub/tool/<slug>,
+  // /hub/builders/<addr>, /hub/registry/<handle> each have an /app/hub/* twin,
+  // so no 404s.
+  if (pathname === "/hub" || pathname.startsWith("/hub/")) {
     return NextResponse.redirect(
-      `https://${APP_HOST}/hub${request.nextUrl.search}`,
+      `https://${APP_HOST}${pathname}${request.nextUrl.search}`,
       { status: 301 }
     );
   }
