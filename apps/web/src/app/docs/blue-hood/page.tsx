@@ -56,6 +56,25 @@ const GATES = [
   { name: "V3 executability", d: "Trade panel refuses Sign if the pool is Uniswap V4-only (router is V3, will revert)." },
 ];
 
+const GRADING = [
+  {
+    name: "drift → HIT / MISS",
+    d: "HIT if the DEX↔oracle price gap closes ≥ 50% within grading_window_h NYSE regular-session hours; otherwise MISS. The clock counts regular-session hours only — Chainlink freezes at the close, so afterhours time doesn't count.",
+  },
+  {
+    name: "arb → HIT / MISS",
+    d: "HIT if the DEX↔oracle spread narrows below 0.5% within 4 NYSE regular-session hours; otherwise MISS. Same regular-session clock as drift.",
+  },
+  {
+    name: "flow → informational",
+    d: "Never graded HIT/MISS. Flow arrows are context, not a scored prediction, so they never enter any hit-rate denominator.",
+  },
+  {
+    name: "VOID",
+    d: "Any drift/arb arrow graded before its regular-session window fully elapsed is VOID — excluded from hit-rate, but shown plainly as VOID in the receipts. Honest evidence, never hidden.",
+  },
+];
+
 export default function BlueHoodDoc() {
   return (
     <article>
@@ -117,6 +136,35 @@ export default function BlueHoodDoc() {
           <Card key={g.name} title={g.name}>{g.d}</Card>
         ))}
       </CardGrid>
+
+      <H2 id="grading">Grading rules</H2>
+      <P>
+        Every fired arrow is later graded against real price data — this is
+        what makes the track record a <em>record</em> and not a feed of
+        opinions. The rules below are the exact ones in{" "}
+        <code>src/lib/blue-hood/grader.ts</code>; the machine-readable version
+        ships in the <code>meta.grading</code> block of the{" "}
+        <code>/api/acp/track-record</code> response so an agent can re-derive
+        any number we publish.
+      </P>
+      <CardGrid cols={2}>
+        {GRADING.map((g) => (
+          <Card key={g.name} title={g.name}>{g.d}</Card>
+        ))}
+      </CardGrid>
+      <Callout title="Receipts are public, the headline is earned">
+        Every graded arrow and its outcome (HIT / MISS / VOID) is returned
+        freely — that&apos;s the evidence, and anyone may compute a hit-rate
+        from it. But the <em>headline</em> number that bears our name (the
+        aggregate %, per-type %, and record curve) stays hidden until the
+        sample earns it: <strong>30 graded</strong> arrows in the trailing 7
+        days for the aggregate, <strong>15</strong> of a type for that
+        type&apos;s own number. Below the bar the API returns{" "}
+        <code>{"{ ready: false, graded: N, needed: M }"}</code> and no
+        percentage. The record curve is a cumulative HIT−MISS walk
+        (<code>basis: &quot;cumulative_hit_minus_miss&quot;</code>), not dollars —
+        grading measures signal accuracy, not PnL.
+      </Callout>
 
       <H2>Product roadmap (4 groups, 9 nav items)</H2>
       <P>Blue Hood is the first pillar of the &quot;Builder OS for Robinhood Chain&quot; relaunch. All new features are surfaces on top of skills that already exist in <Link href="/hub" className="underline">/hub</Link> — no new engines.</P>
