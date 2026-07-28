@@ -44,6 +44,34 @@ const fallback = {
     memStore.set(key, { value: val, expiresAt: entry?.expiresAt });
     return val;
   },
+  // Set ops backed by a string[] stored under the key (acts as a Set). We keep
+  // the array de-duped so `sadd` is idempotent and `srem` never leaves a ghost.
+  async sadd(key: string, ...members: string[]): Promise<number> {
+    memClean(key);
+    const entry = memStore.get(key);
+    const set = new Set<string>((entry?.value as string[]) ?? []);
+    let added = 0;
+    for (const m of members) if (!set.has(m)) { set.add(m); added++; }
+    memStore.set(key, { value: [...set], expiresAt: entry?.expiresAt });
+    return added;
+  },
+  async srem(key: string, ...members: string[]): Promise<number> {
+    if (memClean(key)) return 0;
+    const entry = memStore.get(key);
+    if (!entry) return 0;
+    const set = new Set<string>((entry.value as string[]) ?? []);
+    let removed = 0;
+    for (const m of members) if (set.delete(m)) removed++;
+    // Drop the key entirely when the set empties — mirrors Redis, where an
+    // empty set stops existing, so an emptied reverse index reads as `miss`.
+    if (set.size === 0) memStore.delete(key);
+    else memStore.set(key, { value: [...set], expiresAt: entry.expiresAt });
+    return removed;
+  },
+  async smembers(key: string): Promise<string[]> {
+    if (memClean(key)) return [];
+    return ((memStore.get(key)?.value as string[]) ?? []);
+  },
 };
 
 // ─── Upstash Redis client ─────────────────────────────────────────────────────
@@ -53,6 +81,9 @@ type KVClient = {
   del(...keys: string[]): Promise<void>;
   incr(key: string): Promise<number>;
   incrby(key: string, by: number): Promise<number>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  srem(key: string, ...members: string[]): Promise<number>;
+  smembers(key: string): Promise<string[]>;
 };
 
 // Resolve Upstash REST credentials from either env var convention:
@@ -82,6 +113,15 @@ function getKV(): KVClient {
       del:  (...keys: string[]) => redis.del(...keys),
       incr: (key: string) => redis.incr(key),
       incrby: (key: string, by: number) => redis.incrby(key, by),
+      // Native Redis set ops — atomic + idempotent. SREM is the primitive that
+      // makes the watchlist reverse index (bh:watch:ticker:*) orphan-proof: it
+      // removes a member with no read-modify-write race, and an emptied set
+      // ceases to exist. See lib/blue-hood/watchlist.ts.
+      sadd: (key: string, ...members: string[]) =>
+              redis.sadd(key, ...(members as [string, ...string[]])),
+      srem: (key: string, ...members: string[]) =>
+              redis.srem(key, ...(members as [string, ...string[]])),
+      smembers: (key: string) => redis.smembers(key) as Promise<string[]>,
     };
   }
 
@@ -161,6 +201,26 @@ export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): 
     console.error(`[kv:setNX] ${key}: ${(e as Error).message}`);
     return false;
   }
+}
+
+/**
+ * Set helpers — thin, fault-tolerant wrappers over Redis SADD/SREM/SMEMBERS.
+ * A KV set is the right primitive for a "who's subscribed to X" list: adds are
+ * idempotent, removes never leave orphans, and membership reads are one call —
+ * no whole-array read-modify-write (the race-prone shape Sentinel's global
+ * `sentinel:watches` array has). Never throw: a failed set op logs and no-ops,
+ * so a KV blip degrades one alert route, it doesn't 500 the caller.
+ */
+export async function kvSAdd(key: string, ...members: string[]): Promise<void> {
+  if (members.length === 0) return;
+  try { await kv.sadd(key, ...members); } catch (e) { console.error(`[kv:sadd] ${key}: ${(e as Error).message}`); }
+}
+export async function kvSRem(key: string, ...members: string[]): Promise<void> {
+  if (members.length === 0) return;
+  try { await kv.srem(key, ...members); } catch (e) { console.error(`[kv:srem] ${key}: ${(e as Error).message}`); }
+}
+export async function kvSMembers(key: string): Promise<string[]> {
+  try { return (await kv.smembers(key)) ?? []; } catch (e) { console.error(`[kv:smembers] ${key}: ${(e as Error).message}`); return []; }
 }
 
 export const isKVEnabled = (): boolean => kvCreds() !== null;
