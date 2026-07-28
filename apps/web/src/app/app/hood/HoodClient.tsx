@@ -35,6 +35,7 @@ import ArrowBriefBlock from "./ArrowBriefBlock";
 import ReviewSignPanel from "@/components/blue-hood/ReviewSignPanel";
 import PositionsStrip, { usePositions, positionsHeldMap } from "@/components/blue-hood/PositionsStrip";
 import EnableAlertsButton from "./inbox/EnableAlertsButton";
+import { HealthProvider, HealthBanner } from "./HealthProvider";
 
 const REFRESH_MS = 15_000;
 const RH_GREEN = "#00C805";
@@ -108,7 +109,6 @@ export default function HoodClient() {
   // PositionsStrip and the drift-board rows can see the "held" set.
   const { positions: userPositions } = usePositions(snap?.tickers ?? []);
   const heldTickers = useMemo(() => positionsHeldMap(userPositions), [userPositions]);
-  const [err, setErr] = useState<string | null>(null);
   const [lastFetch, setLastFetch] = useState<number>(0);
   // Inbox last-read bookmark — mirrored from /hood/inbox so we can badge
   // the "Inbox" nav link with an unread count. Same source, same math.
@@ -137,12 +137,16 @@ export default function HoodClient() {
           }
         })(),
       ]);
-      if (s.ok) { setSnap(s.snapshot); setErr(null); } else { setErr(s.error); }
+      // Snapshot: on success, swap it in. On failure we deliberately do NOT
+      // clear the last-good snapshot or set an inline error — the honest,
+      // cause-specific narrative (kv_error vs never_polled vs cron_stalled)
+      // is owned entirely by <HealthBanner>, which reads /api/hood/health.
+      if (s.ok) setSnap(s.snapshot);
       if (a.ok) setArrowsData(a);
       if (lr.ok) setInboxLastRead(lr.last_read_at);
       setLastFetch(Date.now());
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") setErr((e as Error).message);
+    } catch {
+      // Swallow — a failed board fetch is surfaced by HealthBanner, not here.
     }
   }, []);
 
@@ -218,6 +222,7 @@ export default function HoodClient() {
   }, [filter]);
 
   return (
+    <HealthProvider>
     <div className="h-full flex flex-row" style={{ backgroundColor: BG }}>
       <HoodSidebar
         snap={snap}
@@ -236,17 +241,11 @@ export default function HoodClient() {
             /hood/arrows via HoodShellFrame. */}
         <div className="w-full px-4 py-6 md:px-8 md:py-8 xl:px-12">
           <Header snap={snap} lastFetch={lastFetch} marketBadge={marketBadge} inboxUnread={inboxUnread} />
-          <StaleBanner snap={snap} />
-
-          {err && (
-            <div
-              role="alert"
-              className="hood-prose mb-6 rounded border px-3 py-2 text-[13.5px] leading-relaxed"
-              style={{ borderColor: "#3b2a15", backgroundColor: "#1a1408", color: "#f6c88f" }}
-            >
-              Poller warming up: {err}. In dev, POST to <code className="font-mono text-white text-[12.5px]">/api/cron/blue-hood/poll</code> with your <code className="font-mono text-white text-[12.5px]">CRON_SECRET</code>.
-            </div>
-          )}
+          {/* Cause-specific engine banner (task 1.3). Replaces the old blind
+              StaleBanner + "Poller warming up" line: it distinguishes KV-blind
+              from cron-dead from cold-start from cycle-failing, so the board
+              never again reports a monitoring blackout as "the poller". */}
+          <HealthBanner />
 
           <MetricStrip snap={snap} arrows={arrowsData} />
 
@@ -304,6 +303,7 @@ export default function HoodClient() {
         </div>
       </div>
     </div>
+    </HealthProvider>
   );
 }
 
@@ -314,8 +314,9 @@ export default function HoodClient() {
 // browser fetch latency, not data age. With the fix a stale snapshot
 // (e.g. cron black-hole from vercel.json in the wrong monorepo location)
 // surfaces immediately in the header + banner. `lastFetch` prop is kept
-// for compat with any future "refresh in-flight" indicator.
-const STALE_THRESHOLD_S = 15 * 60; // 15 min — amber banner threshold
+// for compat with any future "refresh in-flight" indicator. (The amber
+// staleness threshold now lives server-side in health.ts / LAGGING_MAX_AGE_S,
+// consumed by <HealthBanner> — the header only formats the age it's given.)
 
 function Header({
   snap,
@@ -373,33 +374,11 @@ function Header({
   );
 }
 
-/**
- * Amber banner when snapshot is older than STALE_THRESHOLD_S (15 min).
- * Triggers on:
- *   - Vercel cron black-hole (vercel.json in wrong monorepo location)
- *   - GT rate-limit forcing the poller to skip
- *   - Prod deploy that broke the cron auth (401 Bearer)
- * A user MUST see this. Silent stale data violates "show only numbers
- * you can verify" — the header claimed "updated 0s ago" over 2-day-old snapshots
- * before the fix.
- */
-function StaleBanner({ snap }: { snap: HoodSnapshot | null }) {
-  if (!snap) return null;
-  const ageS = Math.round((Date.now() - new Date(snap.finished_at).getTime()) / 1000);
-  if (ageS < STALE_THRESHOLD_S) return null;
-  return (
-    <div
-      role="alert"
-      className="mb-6 rounded border px-3 py-2 text-[12px] hood-prose leading-relaxed"
-      style={{ borderColor: "#3b2a15", backgroundColor: "#1a1408", color: "#f6c88f" }}
-    >
-      ⚠ data stale · last poll {formatAgeShort(ageS)} ago (expected every 5 min).
-      Engine may be stuck — check{" "}
-      <code className="font-mono text-white text-[11px]">/api/cron/blue-hood/poll</code>{" "}
-      cron / GitHub Actions logs.
-    </div>
-  );
-}
+// NOTE: the old snapshot-age `StaleBanner` (and its STALE_THRESHOLD_S) lived
+// here. Both were replaced by <HealthBanner> (see ./HealthProvider), which
+// supersedes them: staleness is now just one of five discriminated states, and
+// the banner also names KV-blind, cron-dead, cold-start and cycle-failing —
+// causes the age-only banner could never tell apart.
 
 // ── Metric strip ───────────────────────────────────────────────────────────
 function MetricStrip({
