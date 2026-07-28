@@ -155,6 +155,39 @@ export const kvTgLinkCode = (code: string) => `bh:tglink:code:${code.toUpperCase
 /** Link-code lifetime — long enough to switch to Telegram and paste, short enough to not linger. */
 export const TTL_TGLINK_CODE = 60 * 10; // 10 min
 
+// ── 2.1 alert engine (watchlist-targeted, channel-agnostic) ──────────────────
+//
+// When an arrow fires for ticker T, the async brief-worker resolves the watchers
+// of T (kind-filtered, via 1.7's reverse index) and writes ONE alert record per
+// recipient. These records are the CHANNEL-AGNOSTIC substrate: 2.2 (Telegram),
+// web-push, and any future channel all read the SAME record and stamp their own
+// `delivered.<channel>` cursor — a record is never "consumed", only marked.
+//
+// Shape:
+//   • bh:alert:{arrowId}:{addr}  → HoodAlert (one recipient's copy; id is
+//                                  deterministic so re-emit is idempotent — one
+//                                  arrow → one alert/person, never a replay).
+//   • bh:alert:addr:{addr}       → list of alert ids for a wallet (newest-first,
+//                                  capped). Powers GET /api/hood/alerts and is
+//                                  how web-push (later) finds its work via a
+//                                  delivered.webpush cursor — it does NOT drain
+//                                  the pending queue.
+//   • bh:alert:pending           → FIFO list of alert ids awaiting delivery.
+//                                  ⚠️ THIS QUEUE IS TELEGRAM'S (2.2) ALONE. It is
+//                                  a convenience so the bot doesn't scan; other
+//                                  channels must NOT drain it (they'd starve the
+//                                  bot). Web-push reads bh:alert:addr:{addr} +
+//                                  its own delivered.webpush cursor instead.
+
+/** One recipient's copy of an alert. id = `${arrowId}:${addr}` (deterministic → idempotent). */
+export const kvAlert = (id: string) => `bh:alert:${id}`;
+
+/** Per-wallet list of alert ids (newest-first, capped). Read by GET /api/hood/alerts + web-push cursor. */
+export const kvAlertsByAddr = (address: string) => `bh:alert:addr:${address.toLowerCase()}`;
+
+/** FIFO queue of alert ids awaiting Telegram (2.2) delivery. NOT shared with other channels. */
+export const KV_ALERT_PENDING = "bh:alert:pending";
+
 /** TTL constants (seconds). */
 export const TTL_SNAPSHOT_HOUR = 60 * 60 * 25; // 25h so we always have a full 24h window
 export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are at most 24h
@@ -164,6 +197,14 @@ export const TTL_TICKER_COOLDOWN = 60 * 60 * 4; // 4h
 export const TTL_SPARKLINE = 60 * 20; // 20 min — hourly candles don't need to be fresher than that
 export const TTL_PUSH_SUB = 60 * 60 * 24 * 90; // 90d — browser subs expire on their own well before this
 export const TTL_CHAT_CARD = 60 * 60 * 24 * 30; // 30d — matches TTL_ARROW_INDEX so cards don't outlive arrows
+/** 2.1 — an alert record self-expires so KV never accumulates unboundedly, even
+ *  if a channel never drains it. 7d is plenty for a "you missed this" backfill
+ *  read; past that the arrow itself has long since graded. */
+export const TTL_ALERT = 60 * 60 * 24 * 7; // 7d
+/** Anti-bloat caps on the two unbounded lists (mirrors the KV-budget discipline
+ *  that 1.3/1.7 were built around — a list must never grow without a ceiling). */
+export const ALERT_ADDR_MAX = 100;   // per-wallet history depth kept for the read endpoint
+export const ALERT_PENDING_MAX = 500; // Telegram backlog ceiling; oldest trimmed if a consumer stalls
 
 /** Utility: format a Date into `YYYYMMDDHH` for the ring-buffer bucket. */
 export function yyyymmddhh(d: Date): string {

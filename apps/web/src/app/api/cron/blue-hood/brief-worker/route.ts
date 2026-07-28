@@ -27,6 +27,8 @@ import { KV_BRIEF_QUEUE, kvArrow } from "@/lib/blue-hood/kv-keys";
 import { fetchArrowBrief } from "@/lib/blue-hood/brief";
 import { pushArrowToAll } from "@/lib/blue-hood/push";
 import { writeChatCard } from "@/lib/blue-hood/chat-card";
+import { emitAlertsForArrow, type AlertHealthGate } from "@/lib/blue-hood/alerts";
+import { computeEngineHealth } from "@/lib/blue-hood/health";
 import type { Arrow } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -50,9 +52,13 @@ interface WorkerRowResult {
   llm_chain?: string;
   push_delivered?: number;
   push_gone?: number;
+  /** 2.1 — watchlist alert fan-out outcome for this arrow. */
+  alert_emitted?: number;
+  alert_recipients?: number;
+  alert_skipped?: boolean;
 }
 
-async function processOne(id: string): Promise<WorkerRowResult> {
+async function processOne(id: string, health: AlertHealthGate): Promise<WorkerRowResult> {
   const arrow = await kvGet<Arrow>(kvArrow(id));
   if (!arrow) {
     console.warn(`[brief-worker] arrow ${id} vanished from KV — dropping`);
@@ -166,6 +172,22 @@ async function processOne(id: string): Promise<WorkerRowResult> {
     }
   }
 
+  // 2.1 — watchlist-targeted alert fan-out. Rides the SAME async rails as push
+  // (never on the poll cycle) and is FIRE-AND-FORGET: `emitAlertsForArrow` never
+  // throws, and this try/catch is defense in depth so an alert failure can NEVER
+  // break the arrow-fire path. `health` is computed once per invocation and gates
+  // emission — a blind/stale engine logs a traceable skip instead of alerting off
+  // bad data. Guarded on engine origin like push (emit self-checks too).
+  let alertOut: { emitted: number; recipients: number; skipped: boolean } = { emitted: 0, recipients: 0, skipped: false };
+  if (enriched.origin === "engine") {
+    try {
+      const r = await emitAlertsForArrow(enriched, health);
+      alertOut = { emitted: r.emitted, recipients: r.recipients, skipped: r.skipped };
+    } catch (e) {
+      console.warn(`[alert] failed arrow=${enriched.serial} arrow_id=${enriched.id}: ${(e as Error).message}`);
+    }
+  }
+
   return {
     arrow_id: id,
     serial: enriched.serial,
@@ -174,6 +196,9 @@ async function processOne(id: string): Promise<WorkerRowResult> {
     llm_chain: chainStr,
     push_delivered: deliveryStats.delivered,
     push_gone: deliveryStats.gone,
+    alert_emitted: alertOut.emitted,
+    alert_recipients: alertOut.recipients,
+    alert_skipped: alertOut.skipped,
   };
 }
 
@@ -182,6 +207,17 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const started = Date.now();
+
+  // 2.1 health-gate — computed ONCE per invocation (2 KV reads), shared by every
+  // arrow in the batch so we never re-probe per arrow. This is the same
+  // computation behind /api/hood/health (1.3); calling the lib avoids a self-HTTP
+  // hop. `health.ok` is false when the engine is blind (KV throttle) or stale —
+  // `emitAlertsForArrow` then logs a traceable skip instead of alerting off bad
+  // data. Never gates the brief attach or push; only the new alert fan-out.
+  const health = await computeEngineHealth();
+  if (!health.ok) {
+    console.warn(`[alert] gate closed for this batch: health=${health.status} observable=${health.observable} — alerts will be skipped + logged per arrow`);
+  }
 
   // Atomically pop the head of the queue: read → slice → write remainder.
   // Under Vercel serverless we don't have true CAS, but with 1-min
@@ -210,7 +246,7 @@ async function handle(req: NextRequest) {
   const per_arrow: WorkerRowResult[] = [];
   for (const id of batchIds) {
     try {
-      per_arrow.push(await processOne(id));
+      per_arrow.push(await processOne(id, health));
     } catch (e) {
       console.warn(`[brief-worker] processOne crashed for ${id}: ${(e as Error).message}`);
       per_arrow.push({ arrow_id: id, status: "failed" });
@@ -220,10 +256,13 @@ async function handle(req: NextRequest) {
   const attached = per_arrow.filter((r) => r.status === "attached").length;
   const failed = per_arrow.filter((r) => r.status === "failed").length;
   const skipped = per_arrow.filter((r) => r.status.startsWith("skipped")).length;
+  const alerts_emitted = per_arrow.reduce((n, r) => n + (r.alert_emitted ?? 0), 0);
+  const alerts_gated = per_arrow.filter((r) => r.alert_skipped).length;
   console.log(
     `[brief-worker] done duration_ms=${Date.now() - started}` +
       ` attached=${attached} failed=${failed} skipped=${skipped}` +
-      ` queue_after=${remainder.length}`,
+      ` alerts_emitted=${alerts_emitted} alerts_gated=${alerts_gated}` +
+      ` health=${health.status} queue_after=${remainder.length}`,
   );
 
   return NextResponse.json({
@@ -235,6 +274,9 @@ async function handle(req: NextRequest) {
     attached,
     failed,
     skipped,
+    alerts_emitted,
+    alerts_gated,
+    engine_health: { status: health.status, ok: health.ok, observable: health.observable },
     per_arrow,
   });
 }

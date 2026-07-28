@@ -177,6 +177,35 @@ export async function watchersForTicker(ticker: string): Promise<string[]> {
   return kvSMembers(kvWatchTicker(ticker));
 }
 
+/**
+ * 2.1 alert engine — resolve the recipients of an arrow, KIND-FILTERED.
+ *
+ * The reverse index (`bh:watch:ticker:{T}`) is a SET of addresses only — it
+ * carries no per-watcher kind preference, on purpose (that would complicate
+ * 1.7's symmetric dual-write). So kind filtering happens HERE: read the reverse
+ * set (1 SET read), then load each watcher's forward list and keep only those
+ * whose WatchEntry for this ticker opted into `kind`. A watcher on "drift" alone
+ * gets NO alert for an "arb" arrow.
+ *
+ * Cost is 1 + N reads (N = watchers on the ticker), incurred ONLY when a real
+ * arrow fires — there is no poll loop and arrows are dedup+cooldown-capped to a
+ * handful/day, so this is bounded, not a hot read (Req 4). Never throws: every
+ * KV helper it calls swallows and returns a safe empty on failure.
+ */
+export async function recipientsForArrow(ticker: string, kind: AlertKind): Promise<string[]> {
+  const T = ticker.trim().toUpperCase();
+  if (!isValidTicker(T)) return [];
+  const addrs = await watchersForTicker(T);
+  if (addrs.length === 0) return [];
+  const out: string[] = [];
+  for (const a of addrs) {
+    const wl = await getWatchlist(a);
+    const entry = wl.entries.find((e) => e.ticker === T);
+    if (entry && entry.kinds.includes(kind)) out.push(a);
+  }
+  return out;
+}
+
 // ── Write (symmetric dual-write) ─────────────────────────────────────────────
 
 /**
