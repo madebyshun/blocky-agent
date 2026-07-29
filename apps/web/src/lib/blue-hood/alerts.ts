@@ -260,6 +260,21 @@ export async function markAlertDelivered(id: string, channel: AlertChannel): Pro
 }
 
 /**
+ * Stamp a NON-delivery SENTINEL on a channel cursor — e.g. `"skipped_no_tg"`
+ * when a recipient has no Telegram link. Deliberately distinct from
+ * `markAlertDelivered`'s ISO timestamp: a reader can tell "sent" from
+ * "permanently skipped", and the 2.2 drain uses it to drop a never-deliverable
+ * alert from the pending queue instead of retrying it forever. Idempotent.
+ * Never throws.
+ */
+export async function markAlertSkipped(id: string, channel: AlertChannel, reason: string): Promise<void> {
+  const rec = await kvGet<HoodAlert>(kvAlert(id));
+  if (!rec) return;
+  rec.delivered = { ...rec.delivered, [channel]: reason };
+  await kvSet(kvAlert(id), rec, TTL_ALERT);
+}
+
+/**
  * Remove an id from the TELEGRAM pending queue after the bot has sent it. Only
  * the Telegram consumer calls this — other channels track progress via their own
  * `delivered.<channel>` cursor and never touch this queue.
