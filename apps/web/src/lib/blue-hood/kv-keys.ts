@@ -155,6 +155,16 @@ export const kvTgLinkCode = (code: string) => `bh:tglink:code:${code.toUpperCase
 /** Link-code lifetime — long enough to switch to Telegram and paste, short enough to not linger. */
 export const TTL_TGLINK_CODE = 60 * 10; // 10 min
 
+// ── 2.2b Telegram broadcast tier ─────────────────────────────────────────────
+//
+// The tier-1 "firehose": every user who /start's the bot (no deep-link payload)
+// is SADD'd here, opting into EVERY tradable arrow — no wallet, no watchlist.
+// DISTINCT from the 1.7 per-user watchlist (wallet-scoped + kind-filtered). When
+// an arrow fires the alert fan-out UNIONS this set with the ticker's watchers and
+// dedups by tg id, so a user who both /start'd AND linked a wallet gets exactly
+// one DM. `/mute` SREMs here. Non-custodial: stores tg user ids only, never a key.
+export const KV_TG_BROADCAST = "bh:tg:broadcast";
+
 // ── 2.1 alert engine (watchlist-targeted, channel-agnostic) ──────────────────
 //
 // When an arrow fires for ticker T, the async brief-worker resolves the watchers

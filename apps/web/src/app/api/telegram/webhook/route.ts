@@ -25,7 +25,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kvGetProbe } from "@/lib/kv";
 import { sendMessage, esc, shortAddr, type TgUpdate, type TgUser } from "@/lib/telegram/bot";
-import { consumeTgLinkCode, isValidTicker } from "@/lib/blue-hood/watchlist";
+import {
+  consumeTgLinkCode,
+  isValidTicker,
+  addToBroadcast,
+  removeFromBroadcast,
+} from "@/lib/blue-hood/watchlist";
 import { KV_SNAPSHOT_LATEST } from "@/lib/blue-hood/kv-keys";
 import type { HoodSnapshot } from "@/lib/blue-hood/types";
 import { readPublicArrows } from "@/lib/blue-hood/public-feed";
@@ -82,28 +87,57 @@ function nyTime(iso: string | null | undefined): string {
 
 // ── Command handlers (each returns the reply text) ───────────────────────────
 
-function handleStart(): string {
+/**
+ * /start — two entry paths:
+ *   • deep-link  `/start link_<code>`  (from t.me/<bot>?start=link_<code>, minted by
+ *     the app's "Get alerts on Telegram" button) → bind the wallet WITHOUT the user
+ *     typing a code. Same consume path as /link, code-free.
+ *   • plain `/start` → opt into the tier-1 broadcast firehose (every tradable arrow
+ *     DMs here, no wallet needed) + show the intro.
+ */
+async function handleStart(rest: string, from?: TgUser): Promise<string> {
+  const payload = rest.trim();
+  // Deep-link linking (A2). Payload prefix is `link_`; the rest is the code.
+  if (/^link_/i.test(payload)) {
+    return linkReply(payload.slice(payload.indexOf("_") + 1), from);
+  }
+
+  // Plain /start (A1): join the broadcast firehose. Fire-and-forget — a KV hiccup
+  // must not break the greeting.
+  if (from?.id) {
+    try {
+      await addToBroadcast(from.id);
+    } catch (e) {
+      console.warn(`[tg-webhook] broadcast add failed tg=${from.id}: ${(e as Error).message}`);
+    }
+  }
+
   const hood = absoluteUrl("/hood");
   return [
     `🎯 <b>Blue Hood</b>`,
     `Drift & arbitrage signals for tokenized stocks on Robinhood Chain — every signal graded in public, misses included.`,
+    ``,
+    `🔔 You'll now get <b>every tradable signal</b> as it fires. Want only <i>your</i> tickers? Link your wallet in the app — one tap, no code to type.`,
     ``,
     `🔒 <b>Safety</b>`,
     `Blue Hood never asks for your seed phrase or private key, and never signs transactions here. To act on a signal, you sign in your own wallet in the app.`,
     ``,
     `<a href="${hood}">Open Blue Hood →</a>`,
     ``,
-    `Watching tickers in the app? Send <code>/link CODE</code> to get alert DMs here — create your code in Blue Hood.`,
-    ``,
     `<b>Commands</b>`,
     `• <code>/drift TICKER</code> — live oracle vs DEX drift`,
     `• <code>/track</code> — public hit-rate`,
-    `• <code>/link CODE</code> — link your wallet for alerts`,
+    `• <code>/mute</code> — stop broadcasts (your watchlist alerts stay)`,
   ].join("\n");
 }
 
-async function handleLink(rest: string, from?: TgUser): Promise<string> {
-  const code = (rest.trim().split(/\s+/)[0] ?? "").toUpperCase();
+/**
+ * Shared wallet-link reply used by BOTH `/link CODE` (manual fallback) and the
+ * `/start link_<code>` deep link. Never reveals a wallet on failure — a bad or
+ * expired code was never bound to one.
+ */
+async function linkReply(rawCode: string, from?: TgUser): Promise<string> {
+  const code = (rawCode.trim().split(/\s+/)[0] ?? "").toUpperCase();
   if (!code) {
     return `Send the code from the app, e.g. <code>/link ABC123</code>. Create yours in Blue Hood.`;
   }
@@ -112,14 +146,35 @@ async function handleLink(rest: string, from?: TgUser): Promise<string> {
   }
   const res = await consumeTgLinkCode(code, from.id, from.username);
   if (!res.ok) {
-    // Never reveal a wallet on failure — a bad/expired code was never bound to one.
-    return `❌ ${esc(res.reason)}. Open Blue Hood, create a fresh code, then send <code>/link NEWCODE</code>.`;
+    return `❌ ${esc(res.reason)}. Open Blue Hood, tap “Get alerts on Telegram” for a fresh link.`;
   }
   return [
     `✅ Linked to <code>${esc(shortAddr(res.address))}</code>.`,
-    `You'll get alert DMs here for the tickers you watch.`,
+    `You'll get alerts for the tickers you watch.`,
     ``,
     `Manage your watchlist in <a href="${absoluteUrl("/hood")}">Blue Hood</a>.`,
+  ].join("\n");
+}
+
+/** `/link CODE` — manual fallback for the deep-link flow (still fully supported). */
+async function handleLink(rest: string, from?: TgUser): Promise<string> {
+  return linkReply(rest, from);
+}
+
+/** `/mute` — leave the broadcast firehose. Watchlist (wallet-linked) alerts stay. */
+async function handleMute(from?: TgUser): Promise<string> {
+  if (from?.id) {
+    try {
+      await removeFromBroadcast(from.id);
+    } catch (e) {
+      console.warn(`[tg-webhook] broadcast remove failed tg=${from.id}: ${(e as Error).message}`);
+    }
+  }
+  return [
+    `🔕 Muted. You won't get broadcast signals anymore.`,
+    `Send /start any time to turn them back on.`,
+    ``,
+    `<i>Alerts for tickers you linked in the app still come through.</i>`,
   ].join("\n");
 }
 
@@ -244,10 +299,13 @@ export async function POST(req: NextRequest) {
     let reply: string | null = null;
     switch (cmd) {
       case "/start":
-        reply = handleStart();
+        reply = await handleStart(rest, msg.from);
         break;
       case "/link":
         reply = await handleLink(rest, msg.from);
+        break;
+      case "/mute":
+        reply = await handleMute(msg.from);
         break;
       case "/drift":
         reply = await handleDrift(rest);
