@@ -57,23 +57,103 @@ function isAuthorized(req: NextRequest): boolean {
   return authHeader === `Bearer ${CRON_SECRET}` || secretParam === CRON_SECRET;
 }
 
-/** Compose the DM body for one alert. Deep-links into the app — never a trade action. */
+// ── DM formatting helpers ────────────────────────────────────────────────────
+// All tolerate null/undefined and NEVER fabricate a number — a missing fact
+// renders as an omitted line, not a zero.
+
+/** Price in USD. 2 dp for ≥$1, 4 dp sub-dollar, 0 dp for ≥$1k. Null when absent. */
+function usd(n: number | null | undefined): string | null {
+  if (n == null || !Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  const dp = abs >= 1000 ? 0 : abs >= 1 ? 2 : 4;
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp })}`;
+}
+
+/** Compact USD for TVL — $5.3M, $1.2B, $980. Null when absent. */
+function usdCompact(n: number | null | undefined): string | null {
+  if (n == null || !Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
+  return `$${n.toFixed(0)}`;
+}
+
+/** Signed percent, one decimal — "+2.1%" / "-0.8%". Null when absent. */
+function pctSigned(n: number | null | undefined): string | null {
+  if (n == null || !Number.isFinite(n)) return null;
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+/** Direction glyphs from the signal label (fallback: drift sign). */
+function trendGlyphs(a: HoodAlert): { dot: string; arrow: string } {
+  const s = a.signal.toLowerCase();
+  let up: boolean | null = null;
+  if (s.includes("↑") || s.includes("long") || s.includes("buy")) up = true;
+  else if (s.includes("↓") || s.includes("short") || s.includes("sell")) up = false;
+  else if (a.drift_pct != null && Number.isFinite(a.drift_pct)) up = a.drift_pct >= 0;
+  if (up === true) return { dot: "🟢", arrow: "📈" };
+  if (up === false) return { dot: "🔴", arrow: "📉" };
+  return { dot: "🔵", arrow: "" };
+}
+
+/**
+ * Compose the DM body for one alert (Telegram HTML parse mode). Mirrors the
+ * 2.2b spec card:
+ *
+ *   🟢 $NVDA · 📈 DRIFT ↑ +2.1% · DEX
+ *   Oracle $197.78 → DEX $201.90 · TVL $5.3M
+ *
+ *   `0x322f…3b2d`          ← canonical CA in a <code> block (tap-to-copy)
+ *   ✓ verified canonical   ← ONLY when the ticker is a registry token
+ *
+ *   Open in Blue Hood →    ← deep-link into the inbox, NEVER a trade venue
+ *
+ * Every numeric line is omitted (not zeroed) when its fact is null. The
+ * "verified" line is gated on `a.verified` — the CA comes from the hand-curated,
+ * Blockscout-verified RWA registry, so a match legitimately IS canonical; we
+ * NEVER print "verified" without one.
+ */
 function renderAlert(a: HoodAlert): string {
   const url = a.url || absoluteUrl("/hood/inbox");
-  const lines = [
-    `🎯 <b>${esc(a.ticker)}</b> · <b>${esc(a.signal)}</b> <i>(${esc(a.kind)})</i>`,
-    `Serial ${esc(a.serial)}`,
-  ];
-  if (a.brief) lines.push(``, esc(a.brief));
-  lines.push(``, `<a href="${url}">Open in Blue Hood →</a>`);
+  const { dot, arrow } = trendGlyphs(a);
+  const drift = pctSigned(a.drift_pct);
+
+  // Header — 🟢 $NVDA · 📈 DRIFT ↑ +2.1% · DEX
+  const signalBit = `${arrow ? arrow + " " : ""}${esc(a.signal)}${drift ? " " + drift : ""}`;
+  const lines = [[`${dot} <b>$${esc(a.ticker)}</b>`, signalBit, "DEX"].join(" · ")];
+
+  // Body — Oracle … → DEX … · TVL … (only the legs we actually have)
+  const oracle = usd(a.oracle_price_usd);
+  const dex = usd(a.dex_price_usd);
+  const facts: string[] = [];
+  if (oracle && dex) facts.push(`Oracle ${oracle} → DEX ${dex}`);
+  else if (dex) facts.push(`DEX ${dex}`);
+  else if (oracle) facts.push(`Oracle ${oracle}`);
+  const tvl = usdCompact(a.tvl_usd);
+  if (tvl) facts.push(`TVL ${tvl}`);
+  if (facts.length) lines.push(facts.join(" · "));
+
+  // Optional one-line brief (verdict note).
+  if (a.brief) lines.push("", esc(a.brief));
+
+  // Canonical contract — tap-to-copy. Never a DEX-pool / user address.
+  if (a.contract) {
+    lines.push("", `<code>${esc(a.contract)}</code>`);
+    lines.push(a.verified ? "✓ verified canonical" : "· contract from registry (verify pending)");
+  }
+
+  // CTA — Blue Hood is the intelligence layer, not a venue.
+  lines.push("", `<a href="${url}">Open in Blue Hood →</a>`);
   return lines.join("\n");
 }
 
 type RowOutcome = "delivered" | "skipped_no_tg" | "retry_kept" | "error_kept";
 
 async function drainOne(a: HoodAlert): Promise<RowOutcome> {
-  // Resolve the recipient's Telegram id (reverse link written by 1.7).
-  const tgId = await tgUserForAddress(a.address);
+  // Resolve the recipient's Telegram id. A BROADCAST copy carries tg_user_id
+  // directly (address is ""); a WATCHER copy resolves it via the 1.7 reverse link.
+  const tgId = a.tg_user_id ?? (await tgUserForAddress(a.address));
   if (!tgId) {
     // Permanent skip — no Telegram link. Stamp + remove so it can't wedge forever.
     await markAlertSkipped(a.id, "telegram", "skipped_no_tg");
