@@ -2,10 +2,15 @@
  * Blue Hood — Telegram wallet-link: mint a link code.
  *
  * Web side of the handshake defined in `lib/blue-hood/watchlist.ts`. The
- * connected wallet POSTs here; we mint a short-lived code (TTL 10m) that the
- * user then pastes to the bot as `/link {code}`. The bot (2.2) consumes it via
- * `consumeTgLinkCode`, writing both link directions. Non-custodial: the link
- * stores only { address, tgUserId } — never a key. The tg id is a routing
+ * connected wallet POSTs here; we mint a short-lived code (TTL 10m) and return
+ * a `t.me/<bot>?start=link_<code>` DEEP LINK. The user taps it, hits Start, and
+ * the bot's `/start link_<code>` handler (2.2b) consumes it via
+ * `consumeTgLinkCode` — NO code to copy or type. We return the deep link built
+ * server-side (never a bare code the UI has to render) so the /hood button is
+ * one tap: "no wallet paste, no code typed". `link` is null when the bot
+ * username env is unset — the client then shows "unavailable", never the code.
+ * The manual `/link <code>` path still works as a fallback. Non-custodial: the
+ * link stores only { address, tgUserId } — never a key. The tg id is a routing
  * handle for alerts, not an authz token for funds.
  *
  * v1 trust model: the route trusts the `address` in the body (proven by the
@@ -16,13 +21,14 @@
  */
 import { NextResponse } from "next/server";
 import { issueTgLinkCode } from "@/lib/blue-hood/watchlist";
+import { botDeepLink, BOT_USERNAME } from "@/lib/telegram/bot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const NO_STORE = { "Cache-Control": "no-store, max-age=0" };
 
-/** POST /api/hood/tglink { address } → { code, expiresAt } */
+/** POST /api/hood/tglink { address } → { code, link, expiresAt } */
 export async function POST(req: Request) {
   let body: { address?: string };
   try {
@@ -38,5 +44,8 @@ export async function POST(req: Request) {
   if ("error" in res) {
     return NextResponse.json({ ok: false, error: res.error.message, code: res.error.code }, { status: 400, headers: NO_STORE });
   }
-  return NextResponse.json({ ok: true, code: res.code, expiresAt: res.expiresAt }, { headers: NO_STORE });
+  // Build the deep link server-side so the UI never has to render a bare code.
+  // Null when the bot username env is unset → client shows "unavailable".
+  const link = BOT_USERNAME ? botDeepLink(`link_${res.code}`) : null;
+  return NextResponse.json({ ok: true, code: res.code, link, expiresAt: res.expiresAt }, { headers: NO_STORE });
 }

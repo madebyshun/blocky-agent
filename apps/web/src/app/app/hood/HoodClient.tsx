@@ -36,6 +36,8 @@ import ReviewSignPanel from "@/components/blue-hood/ReviewSignPanel";
 import PositionsStrip, { usePositions, positionsHeldMap } from "@/components/blue-hood/PositionsStrip";
 import EnableAlertsButton from "./inbox/EnableAlertsButton";
 import { HealthProvider, HealthBanner } from "./HealthProvider";
+import { WatchlistProvider, useWatchlist } from "./WatchlistProvider";
+import { WATCHLIST_LIMITS } from "@/lib/blue-hood/watchlist-config";
 
 const REFRESH_MS = 15_000;
 const RH_GREEN = "#00C805";
@@ -223,6 +225,7 @@ export default function HoodClient() {
 
   return (
     <HealthProvider>
+    <WatchlistProvider>
     <div className="h-full flex flex-row" style={{ backgroundColor: BG }}>
       <HoodSidebar
         snap={snap}
@@ -303,6 +306,7 @@ export default function HoodClient() {
         </div>
       </div>
     </div>
+    </WatchlistProvider>
     </HealthProvider>
   );
 }
@@ -361,6 +365,7 @@ function Header({
           Track record →
         </Link>
         <EnableAlertsButton />
+        <TelegramLinkButton />
         <span style={{ color: marketBadge.color }}>● {marketBadge.label}</span>
         <span className="flex items-center gap-1.5" style={{ color: MUTED }}>
           {/* T-V2 #1 — LIVE PULSE. Gentle dot signals the page is alive.
@@ -379,6 +384,71 @@ function Header({
 // supersedes them: staleness is now just one of five discriminated states, and
 // the banner also names KV-blind, cron-dead, cold-start and cycle-failing —
 // causes the age-only banner could never tell apart.
+
+// ── Telegram-link button (2.2b · B1) ─────────────────────────────────────────
+// "Get alerts on Telegram" — rendered ONLY when a wallet is connected. One tap:
+// POST the connected address to /api/hood/tglink, get back a server-built
+// t.me/<bot>?start=link_<code> DEEP LINK, and open it. The user taps Start in
+// Telegram and the bot links the wallet — NO code to copy, NO code to type, NO
+// wallet to paste. We NEVER render the bare code; `link:null` (bot username env
+// unset) surfaces as "unavailable", not a leaked code.
+//
+// Popup-blocker–safe: a browser only honours window.open() inside the click
+// gesture, but the deep link isn't known until the fetch resolves. So we open a
+// blank tab synchronously and redirect it once the link is back; if the pre-open
+// was blocked (popup === null) we fall back to a same-tab navigation.
+function TelegramLinkButton() {
+  const { address, isConnected } = useAccount();
+  const [state, setState] = useState<"idle" | "busy" | "opened" | "error">("idle");
+
+  if (!isConnected || !address) return null;
+
+  async function onClick() {
+    if (state === "busy") return;
+    setState("busy");
+    const popup = typeof window !== "undefined" ? window.open("", "_blank") : null;
+    try {
+      const res = await fetch("/api/hood/tglink", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      const body = (await res.json()) as { ok?: boolean; link?: string | null };
+      const link = body?.ok ? body.link ?? null : null;
+      if (!link) {
+        // No deep link (bot username unset, or a mint error). Never show a code.
+        if (popup) popup.close();
+        setState("error");
+        return;
+      }
+      if (popup) popup.location.href = link;
+      else window.location.href = link; // popup blocked → same-tab fallback
+      setState("opened");
+    } catch {
+      if (popup) popup.close();
+      setState("error");
+    }
+  }
+
+  const label =
+    state === "busy" ? "opening…"
+      : state === "opened" ? "check Telegram →"
+        : state === "error" ? "unavailable"
+          : "Get alerts on Telegram →";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={state === "busy"}
+      className="hover:text-white disabled:opacity-60"
+      style={{ color: state === "error" ? MUTED : RH_GREEN }}
+      title="Link your wallet to the Telegram bot — one tap, no code to type"
+    >
+      {label}
+    </button>
+  );
+}
 
 // ── Metric strip ───────────────────────────────────────────────────────────
 function MetricStrip({
@@ -771,6 +841,7 @@ function DriftRow({
               · held
             </span>
           )}
+          <WatchToggle ticker={r.ticker} />
         </td>
         <td className="px-3 py-2 text-right text-[#E7E9EE]">
           <FlashCell value={r.oracle_usd} />
@@ -830,6 +901,78 @@ function DriftRow({
         </tr>
       )}
     </>
+  );
+}
+
+// ── Per-ticker watch toggle (2.2b · B2) ──────────────────────────────────────
+// A compact ★/☆ glyph in the drift-board Ticker cell. Four states:
+//   • disconnected → dimmed ☆, tooltip "connect wallet to watch" (inert)
+//   • watching     → green ★, tooltip "watching · click to remove"
+//   • at free cap  → dimmed ☆, DISABLED, tooltip "free limit N · hold $BLUE for
+//                    more". UI-only: the server does NOT enforce the free cap
+//                    yet (1.7 tier-config default-off), so this is a nudge, not
+//                    a wall — we never fabricate an enforcement that isn't there.
+//   • watchable    → ☆, tooltip "watch for alerts"
+// Lives inside a <tr onClick> that expands the detail panel, so EVERY handler
+// stops propagation — a click here must never toggle the row.
+function WatchToggle({ ticker }: { ticker: string }) {
+  const { isConnected } = useAccount();
+  const { watchlist, isWatching, add, remove } = useWatchlist();
+  const [busy, setBusy] = useState(false);
+  const watching = isWatching(ticker);
+  const count = watchlist?.entries.length ?? 0;
+  const atCap = !watching && count >= WATCHLIST_LIMITS.free.maxEntries;
+
+  // Disconnected — a dimmed star that hints what connecting unlocks. Inert, but
+  // still swallows the click so it can't expand the row.
+  if (!isConnected) {
+    return (
+      <span
+        className="ml-2 cursor-default align-baseline text-[12px]"
+        style={{ color: "#3a3f4b", lineHeight: 1 }}
+        title="connect wallet to watch"
+        onClick={(e) => e.stopPropagation()}
+      >
+        ☆
+      </span>
+    );
+  }
+
+  async function onClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (busy || atCap) return;
+    setBusy(true);
+    try {
+      if (watching) await remove(ticker);
+      else await add(ticker); // no kinds → server defaults to ALL_KINDS
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const title = watching
+    ? "watching · click to remove"
+    : atCap
+      ? `free limit ${WATCHLIST_LIMITS.free.maxEntries} · hold $BLUE for more`
+      : "watch for alerts";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy || atCap}
+      className="ml-2 align-baseline text-[12px] transition-opacity disabled:cursor-not-allowed"
+      style={{
+        color: watching ? RH_GREEN : atCap ? "#3a3f4b" : MUTED,
+        opacity: busy ? 0.5 : 1,
+        lineHeight: 1,
+      }}
+      title={title}
+      aria-pressed={watching}
+      aria-label={watching ? `Unwatch ${ticker}` : `Watch ${ticker}`}
+    >
+      {watching ? "★" : "☆"}
+    </button>
   );
 }
 

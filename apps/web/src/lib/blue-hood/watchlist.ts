@@ -37,6 +37,7 @@ import {
   kvTgLinkByAddr,
   kvTgLinkCode,
   TTL_TGLINK_CODE,
+  KV_TG_BROADCAST,
 } from "@/lib/blue-hood/kv-keys";
 import {
   WATCHLIST_LIMITS,
@@ -361,4 +362,28 @@ export async function tgUserForAddress(address: string): Promise<string | null> 
 export async function addressForTgUser(tgUserId: string | number): Promise<string | null> {
   const link = await kvGet<TgLink>(kvTgLink(String(tgUserId)));
   return link?.address ?? null;
+}
+
+// ── 2.2b Telegram broadcast tier ─────────────────────────────────────────────
+//
+// The tier-1 firehose (KV_TG_BROADCAST): a plain `/start` (no deep-link payload)
+// opts a tg user into EVERY tradable arrow, no wallet required. Distinct from the
+// wallet-scoped, kind-filtered watchlist above. The alert fan-out (2.1) unions
+// both sets and dedups by tg id. Non-custodial: a tg user id is a routing handle,
+// never an authz token. Each helper is idempotent and never throws (the KV layer
+// swallows and returns a safe empty on failure).
+
+/** Opt a Telegram user INTO the broadcast firehose (plain `/start`). Idempotent. */
+export async function addToBroadcast(tgUserId: string | number): Promise<void> {
+  await kvSAdd(KV_TG_BROADCAST, String(tgUserId));
+}
+
+/** Opt a Telegram user OUT of the broadcast firehose (`/mute`). Idempotent. */
+export async function removeFromBroadcast(tgUserId: string | number): Promise<void> {
+  await kvSRem(KV_TG_BROADCAST, String(tgUserId));
+}
+
+/** Every tg user id currently opted into the broadcast firehose. One SET read. */
+export async function broadcastMembers(): Promise<string[]> {
+  return kvSMembers(KV_TG_BROADCAST);
 }
