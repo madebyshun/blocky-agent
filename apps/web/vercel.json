@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/user-tasks",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/acp-poll",
+      "schedule": "*/2 * * * *"
     }
   ]
 }
