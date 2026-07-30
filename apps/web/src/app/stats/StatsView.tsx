@@ -610,6 +610,12 @@ export default function StatsView({ stats, usage: modelUsage }: { stats: PublicS
           <p className="text-center font-mono text-[9px] text-slate-700 mt-4">
             Updated {new Date(stats.updatedAt).toISOString().replace("T", " ").slice(0, 16)} UTC · refreshes every 60s
           </p>
+          <p className="text-center font-mono text-[10px] text-slate-500 mt-6">
+            Want the signal receipts?{" "}
+            <Link href="/track" className="text-[#4FC3F7] hover:underline">
+              Blue Hood public track record →
+            </Link>
+          </p>
         </section>
       </div>
     </div>

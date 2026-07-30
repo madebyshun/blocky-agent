@@ -173,8 +173,27 @@ function FactPair({ k, v }: { k: string; v: string }) {
  */
 function ActionsRow({ arrow, deepLink }: { arrow: Arrow; deepLink?: { inbox: string; board: string; track: string } }) {
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const arrowOpen = arrow.status === "open";
   const traded = (arrow.user_actions ?? []).length > 0;
+
+  // Public, no-wallet permalink — always the canonical main host so a pasted
+  // link unfurls the OG card and is indexable, regardless of which host the app
+  // is served from.
+  const serialParam = arrow.serial.replace(/^#/, "");
+  const shareUrl = `https://blueagent.dev/share/arrow/${serialParam}`;
+  const onShare = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard blocked (permissions / insecure ctx) — open the permalink so
+      // the user can copy it from the address bar.
+      window.open(shareUrl, "_blank", "noopener");
+    }
+  };
+
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
@@ -187,6 +206,15 @@ function ActionsRow({ arrow, deepLink }: { arrow: Arrow; deepLink?: { inbox: str
           title={arrowOpen ? "Open the trade panel" : "Signal closed — read-only"}
         >
           {arrowOpen ? "[Review & Sign]" : "[Signal closed]"}
+        </button>
+        <button
+          type="button"
+          onClick={onShare}
+          className="rounded border px-3 py-1.5 text-[11px] hover:text-white"
+          style={{ borderColor: copied ? RH_GREEN : BORDER, color: copied ? RH_GREEN : MUTED }}
+          title="Copy the public share link for this signal"
+        >
+          {copied ? "✓ link copied" : "Share ↗"}
         </button>
         <Link
           href={deepLink?.inbox ?? `/hood/inbox#${arrow.id}`}
