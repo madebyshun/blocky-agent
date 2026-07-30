@@ -242,7 +242,7 @@ async function handleTrack(): Promise<string> {
       `Every signal is graded in public, misses included.`,
       hit_rate.needed ? `<i>${hit_rate.needed} graded needed before a headline %.</i>` : ``,
       ``,
-      `<a href="${absoluteUrl("/hood")}">Open Blue Hood → see the receipts</a>`,
+      `<a href="${absoluteUrl("/track")}">See the public track record →</a>`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -262,7 +262,7 @@ async function handleTrack(): Promise<string> {
     `<b>${hit_rate.pct}% hit rate</b> (${hit_rate.sample} graded)`,
     byType ? `By type: ${byType}` : ``,
     ``,
-    `<a href="${absoluteUrl("/hood")}">Open Blue Hood → full record</a>`,
+    `<a href="${absoluteUrl("/track")}">See the full public record →</a>`,
   ]
     .filter(Boolean)
     .join("\n");

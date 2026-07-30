@@ -116,6 +116,13 @@ function trendGlyphs(a: HoodAlert): { dot: string; arrow: string } {
  */
 function renderAlert(a: HoodAlert): string {
   const url = a.url || absoluteUrl("/hood/inbox");
+  // Public share permalink (no wallet, no app) — the arrow's own OG receipt.
+  // `serial` is copied onto every alert record at emit time; strip the leading
+  // '#' so `#0067` → `/share/arrow/0067` (serialKey tolerates either, but the
+  // bare number keeps the URL clean and avoids '#' being read as a fragment).
+  // Guarded: an older record without a serial simply omits the line.
+  const serialParam = (a.serial ?? "").replace(/^#/, "").trim();
+  const shareUrl = serialParam ? absoluteUrl(`/share/arrow/${serialParam}`) : null;
   const { dot, arrow } = trendGlyphs(a);
   const drift = pctSigned(a.drift_pct);
 
@@ -143,8 +150,11 @@ function renderAlert(a: HoodAlert): string {
     lines.push(a.verified ? "✓ verified canonical" : "· contract from registry (verify pending)");
   }
 
-  // CTA — Blue Hood is the intelligence layer, not a venue.
+  // CTA — Blue Hood is the intelligence layer, not a venue. The share permalink
+  // is a PUBLIC receipt (no wallet / no app) so a recipient can post the signal
+  // straight to X/Telegram — the OG card renders the real fire-time numbers.
   lines.push("", `<a href="${url}">Open in Blue Hood →</a>`);
+  if (shareUrl) lines.push(`<a href="${shareUrl}">Share this signal ↗</a>`);
   return lines.join("\n");
 }
 
