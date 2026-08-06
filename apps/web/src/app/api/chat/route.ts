@@ -225,13 +225,12 @@ For Base and onchain projects you have live hub tools for prices, security, DeFi
 Be direct, technical, and actionable. When relevant, suggest Base/USDC/onchain integrations — but never refuse a general coding request.
 
 ## Credit system (IMPORTANT — know this)
-Blue Agent uses a credit system based on $BLUEAGENT token balance:
+Blue Chat runs on a simple daily credit allowance — no token to hold, nothing to stake:
 - Guest (no wallet): 100 credits/day free (~10 messages — no signup needed)
-- Starter (hold 500K BLUE): 500 credits/day (~$0.50)
-- Pro (hold 2M BLUE): 2,000 credits/day + 20% discount (~$2)
-- Max (hold 10M BLUE): 10,000 credits/day + 40% discount (~$10)
-Credits refresh automatically every 24h. To get more credits: buy $BLUEAGENT on Uniswap Base, or click "Buy $BLUEAGENT" in the sidebar. No USDC purchase needed — just hold $BLUEAGENT.
-If a user asks about buying credits, getting more credits, or topping up — explain the tier system and tell them to use the "Buy $BLUEAGENT" button in the sidebar.
+- Any connected wallet: 500 credits/day free (connect any Base wallet — no token required)
+- Beyond the daily bucket: top up with a USDC credit pack on Base (pay-per-use, no subscription)
+Credits refresh automatically every 24h. Connecting a wallet is free and instantly raises the daily allowance to 500. Hub tools stay pay-per-call in USDC.
+If a user asks about buying credits, getting more credits, or topping up — tell them to connect any wallet for 500/day free, and that USDC credit packs cover anything beyond the daily bucket. There is no token to buy or hold.
 
 ## Hub tools
 You have access to real-time Hub tools. Use them when the user asks about:
@@ -284,12 +283,10 @@ Keep them short (≤ 8 words), specific, and actionable.`;
 
 // ─── Integration prompt sections (conditionally appended) ─────────────────────
 
-// Bankr agent — always on (Bankr is the default LLM + agent provider).
-const BANKR_AGENT_SECTION = `## Bankr Agent
-Bankr is the LLM + execution provider for Blue Chat.
+// Agent capabilities — always on.
+const AGENT_CAPABILITIES_SECTION = `## Agent capabilities
 - Token prices: use hub_token_price for any chain
 - Onchain actions: use Base MCP tools when available
-- Polymarket: available via Bankr
 For swaps: always show preview, require confirmation.`;
 
 // Base MCP — appended only when the client enables it (body.baseMcp).
@@ -967,7 +964,7 @@ interface ToolCallResult {
 // the real-data tools (live prices, scans, on-chain reads) are the only thing
 // we can actually gate; the model's free-chat knowledge answers aren't.
 const WALLET_REQUIRED_MSG =
-  "🔒 This needs a connected wallet.\n\nConnect your wallet — and hold $BLUEAGENT for a daily credit allowance — to run real-data Hub tools like this. Guests get free chat; live-data tools require a wallet.";
+  "🔒 This needs a connected wallet.\n\nConnect any Base wallet — no token needed — to run real-data Hub tools like this. Guests get free chat; live-data tools require a connected wallet.";
 
 // ─── MCP connectors (user-attached external MCP servers) ─────────────────────
 // Tools from third-party MCP servers the user connected client-side. Their
@@ -1862,17 +1859,16 @@ const COMMAND_PROMPTS: Record<string, string> = {
 Show the user their credit system status. Format it cleanly:
 
 **Credit Tiers**
-| Tier | BLUE Required | Credits/day | Discount |
-|------|--------------|-------------|---------|
-| Guest | 0 | 30 | — |
-| Starter | 500K | 500 | — |
-| Pro | 2M | 2,000 | 20% off Hub |
-| Max | 10M | 10,000 | 40% off Hub |
+| Tier | Wallet | Credits/day |
+|------|--------|-------------|
+| Guest | None | 100 |
+| Member | Any connected wallet | 500 |
+| Packs | USDC top-up on Base | Carries over |
 
-**How to earn more credits:**
-- Hold $BLUEAGENT on Base → credits refresh daily automatically
-- Buy $BLUEAGENT: click "Buy $BLUEAGENT" in the sidebar to get started
-- $BLUEAGENT contract: 0xf895783b2931c919955e18b5e3343e7c7c456ba3 (Base)
+**How to get more credits:**
+- Connect any Base wallet → daily allowance jumps to 500 (free, no token to hold)
+- Beyond the daily bucket → buy a USDC credit pack on Base (pay-per-use, no subscription)
+- Hub tools stay pay-per-call in USDC
 
 Keep it short, practical, and actionable.`,
 
@@ -2266,7 +2262,7 @@ export async function POST(req: NextRequest) {
 
   const system = [
     BASE_SYSTEM,
-    BANKR_AGENT_SECTION,
+    AGENT_CAPABILITIES_SECTION,
     B20_SECTION,
     baseMcp  ? BASE_MCP_SECTION : "",
     coinbase ? COINBASE_SECTION : "",

@@ -1,8 +1,8 @@
 // Agent Skills — the raw capabilities Blue Agent has access to.
-// Skills = prompt-grounded abilities backed by Bankr LLM + Base MCP.
+// Skills = prompt-grounded abilities backed by Virtuals LLM + Base MCP.
 // These are NOT hub tools (those are productized Tools with pricing).
 
-export type SkillProvider = "Blue Agent" | "Bankr" | "Base MCP" | "Bundled";
+export type SkillProvider = "Blue Agent" | "Base MCP" | "Bundled";
 export type SkillStatus   = "active" | "available" | "soon";
 
 export interface AgentSkill {
@@ -12,7 +12,7 @@ export interface AgentSkill {
   provider:    SkillProvider;
   status:      SkillStatus;
   trigger?:    string;    // example prompt to invoke
-  badge?:      string;    // e.g. "free", "x402", "Bankr API"
+  badge?:      string;    // e.g. "free", "x402", "Base MCP"
   tools?:      string[];  // Hub tool IDs bundled by this skill
 }
 
@@ -189,18 +189,16 @@ export const AGENT_SKILLS: AgentSkill[] = [
   },
 ];
 
-export const SKILL_PROVIDERS: SkillProvider[] = ["Blue Agent", "Bankr", "Base MCP", "Bundled"];
+export const SKILL_PROVIDERS: SkillProvider[] = ["Blue Agent", "Base MCP", "Bundled"];
 
 export const PROVIDER_COLORS: Record<SkillProvider, string> = {
   "Blue Agent": "#4FC3F7",
-  "Bankr":      "#A78BFA",
   "Base MCP":   "#34D399",
   "Bundled":    "#F59E0B",
 };
 
 export const PROVIDER_ICONS: Record<SkillProvider, string> = {
   "Blue Agent": "⚡",
-  "Bankr":      "🔮",
   "Base MCP":   "🔵",
   "Bundled":    "📦",
 };

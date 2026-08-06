@@ -11,7 +11,6 @@ import { useIntegrations, setSkillEnabled, removeSkill, runSkillCommand } from "
 // ── Provider pill colors ───────────────────────────────────────────────────────
 const PROVIDER_BG: Record<SkillProvider, string> = {
   "Blue Agent": "#4FC3F7",
-  "Bankr":      "#A78BFA",
   "Base MCP":   "#34D399",
   "Bundled":    "#F59E0B",
 };

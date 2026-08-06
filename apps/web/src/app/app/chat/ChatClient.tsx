@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import BuyBlueModal  from "@/components/BuyBlueModal";
 import WalletBar     from "@/components/WalletBar";
 import { ChatProvider, useChat } from "@/app/chat/ChatContext";
 import { useAppChrome, type DrawerNavItem, type DrawerRecent } from "@/app/app/AppChrome";
@@ -29,7 +28,7 @@ const TAB_META: Record<Exclude<ActiveTab, "chat" | "settings">, { title: string;
 // ── Shell ──────────────────────────────────────────────────────────────────────
 function ChatShell() {
   const {
-    buyOpen, setBuyOpen, triggerWalletRefresh, artifactsPanelOpen,
+    artifactsPanelOpen,
     onWalletChange, walletRefresh,
     createNewTask, tasks, selectTask, activeTaskId,
     setInput,
@@ -95,13 +94,6 @@ function ChatShell() {
       <div className="hidden">
         <WalletBar onWalletChange={onWalletChange} refreshTrigger={walletRefresh} />
       </div>
-
-      {buyOpen && (
-        <BuyBlueModal
-          onClose={() => setBuyOpen(false)}
-          onSuccess={triggerWalletRefresh}
-        />
-      )}
 
       {/* No <Navbar /> — /app/layout.tsx provides the side navigation */}
 
