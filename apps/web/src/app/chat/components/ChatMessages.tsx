@@ -6,6 +6,7 @@ import { ToolResultCard } from "./ToolCards";
 import ArtifactCard from "./ArtifactCard";
 import { isArtifactCardLang } from "../artifacts";
 import { useLang } from "@/lib/i18n/context";
+import TopUpModal from "@/components/TopUpModal";
 
 // B20 education starters — shown ONLY in the empty state when the UI language is
 // Chinese (zh). These send a plain question that the chat's B20 Education Mode
@@ -481,7 +482,13 @@ const PERSONA_EMPTY: Record<string, EmptyState> = {
 export default function ChatMessages() {
   const {
     activeTask, streaming, outOfCredits, send, setInput, chatTier, personaId,
+    triggerWalletRefresh,
   } = useChat();
+
+  // Top-up modal — a single instance lifted to the component root so the inline
+  // "credits low" notice (rendered per-message in the map below) can open it
+  // without spawning one modal per message.
+  const [topUpOpen, setTopUpOpen] = useState(false);
 
   const bottomRef  = useRef<HTMLDivElement>(null);
   const messages   = activeTask?.messages ?? [];
@@ -597,7 +604,7 @@ export default function ChatMessages() {
           )}
 
           {outOfCredits && (
-            <p className="font-mono text-[10px] text-red-400 mt-2">Out of credits — stake $BLUEAGENT to refill</p>
+            <p className="font-mono text-[10px] text-red-400 mt-2">Out of credits — resets daily · connect a wallet for 500/day</p>
           )}
         </div>
       ) : (
@@ -810,10 +817,11 @@ export default function ChatMessages() {
                       )}
 
                       {/* Insufficient-credits notice — rendered inline when the
-                          chat or tool ledger debit hit an empty balance. The
-                          actual top-up modal lands in Week 3; for now this is
-                          a deep-link prompt to the dashboard's stake/top-up
-                          surface so users still have a path forward. */}
+                          chat or tool ledger debit hit an empty balance. Credits
+                          reset daily and connecting any wallet raises the daily
+                          allowance; the USDC credit-pack top-up lands next. The
+                          link points at the credits doc so users have a path
+                          forward. */}
                       {msg.insufficientCredits && (
                         <div className="mt-2 rounded-xl border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] px-3 py-2.5">
                           <div className="flex items-start gap-2.5">
@@ -827,13 +835,18 @@ export default function ChatMessages() {
                                   <>Need <span className="text-white font-medium">{msg.insufficientCredits.needed}</span> cr · have <span className="text-white font-medium">{msg.insufficientCredits.balance}</span></>
                                 )}
                               </p>
-                              <div className="flex gap-2 mt-2 flex-wrap">
-                                <Link href="/dashboard?tab=stake"
+                              <div className="flex gap-2 mt-2 flex-wrap items-center">
+                                <button onClick={() => setTopUpOpen(true)}
+                                  className="inline-flex items-center gap-1 font-mono text-[10px] font-bold px-2.5 py-1 rounded-md border transition-opacity hover:opacity-90"
+                                  style={{ background: "#4FC3F7", color: "#050508", borderColor: "#4FC3F7" }}>
+                                  Top up with USDC
+                                </button>
+                                <Link href="/docs/credits"
                                   className="inline-flex items-center gap-1 font-mono text-[10px] font-bold px-2.5 py-1 rounded-md bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/40 hover:bg-[#F59E0B]/25 transition-colors">
-                                  Stake more BLUE →
+                                  How credits work →
                                 </Link>
                                 <span className="font-mono text-[10px] text-slate-700 self-center">
-                                  Top-up via USDC coming next
+                                  Resets daily · connect a wallet for 500/day
                                 </span>
                               </div>
                             </div>
@@ -886,6 +899,15 @@ export default function ChatMessages() {
           <div ref={bottomRef} />
         </div>
       )}
+
+      {/* Non-custodial USDC top-up — opened by the inline "credits low" notice.
+          Single instance for the whole message list; refresh the balance on a
+          successful credit so the header count updates without a reload. */}
+      <TopUpModal
+        open={topUpOpen}
+        onClose={() => setTopUpOpen(false)}
+        onCredited={triggerWalletRefresh}
+      />
     </div>
   );
 }

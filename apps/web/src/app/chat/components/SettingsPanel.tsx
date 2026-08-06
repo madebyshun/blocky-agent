@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useChat } from "../ChatContext";
 import { getMemory, clearMemory } from "@/lib/memory";
 import WalletBar from "@/components/WalletBar";
+import TopUpModal from "@/components/TopUpModal";
 import PersonaSelector from "./PersonaSelector";
 
 // The settings categories — Claude-style two-pane modal. The modal owns the
@@ -41,11 +42,12 @@ function PaneHeader({ title, subtitle, right }: { title: string; subtitle?: stri
 export default function SettingsPanel({ section }: { section: SettingsSection }) {
   const {
     holderTier,
-    walletAddr, onWalletChange, walletRefresh,
+    walletAddr, onWalletChange, walletRefresh, triggerWalletRefresh,
     credits, countdown, isUnlimited, daily,
   } = useChat();
 
-  const [showHelp, setShowHelp] = useState(false);
+  const [showHelp, setShowHelp]   = useState(false);
+  const [topUpOpen, setTopUpOpen] = useState(false);
 
   const memory    = getMemory(walletAddr);
   const hasMemory = !!(memory.currentProject || memory.commandHistory.length > 0);
@@ -157,6 +159,17 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
               </>
             )}
           </div>
+
+          {/* Top up with USDC — opens the non-custodial pack picker */}
+          <button
+            onClick={() => setTopUpOpen(true)}
+            className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl hover:opacity-90 transition-opacity"
+            style={{ background: "#4FC3F7", color: "#050508" }}
+          >
+            Top up with USDC
+          </button>
+
+          <TopUpModal open={topUpOpen} onClose={() => setTopUpOpen(false)} onCredited={triggerWalletRefresh} />
 
           {/* How credits & tiers work — inline explainer */}
           <button
