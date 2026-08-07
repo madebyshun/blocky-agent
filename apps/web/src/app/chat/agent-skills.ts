@@ -202,3 +202,12 @@ export const PROVIDER_ICONS: Record<SkillProvider, string> = {
   "Base MCP":   "🔵",
   "Bundled":    "📦",
 };
+
+/** BrandMark keys for providers that are an actual third-party brand. "Bundled"
+ *  has no owner (it's our own grouping), so it keeps the semantic emoji — only
+ *  real brands get a real logo. Consumed by the provider cards, which are large
+ *  enough for a mark to read; the 8px inline badges keep the emoji. */
+export const PROVIDER_BRANDS: Partial<Record<SkillProvider, string>> = {
+  "Blue Agent": "blue-agent",
+  "Base MCP":   "base",
+};

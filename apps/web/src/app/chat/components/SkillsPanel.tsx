@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import BrandMark from "@/components/BrandMark";
 import {
-  AGENT_SKILLS, SKILL_PROVIDERS, PROVIDER_COLORS, PROVIDER_ICONS,
+  AGENT_SKILLS, SKILL_PROVIDERS, PROVIDER_COLORS, PROVIDER_ICONS, PROVIDER_BRANDS,
   type SkillProvider,
 } from "../agent-skills";
 import { useChat } from "../ChatContext";
@@ -37,7 +38,13 @@ function ProviderBadge({ provider }: { provider: SkillProvider }) {
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-export default function SkillsPanel({ onPick }: { onPick?: () => void }) {
+export default function SkillsPanel({ onPick, onUse }: {
+  onPick?: () => void;
+  // Standalone surfaces (e.g. /app/skills) have no local composer to seed, so
+  // they pass onUse to route the pick elsewhere (→ /chat?prefill=<trigger>).
+  // When provided it fully overrides the default setInput + onPick behaviour.
+  onUse?: (trigger?: string) => void;
+}) {
   const { setInput } = useChat();
   const [activeProvider, setActiveProvider] = useState<SkillProvider | "all">("all");
   const [search, setSearch] = useState("");
@@ -76,6 +83,7 @@ export default function SkillsPanel({ onPick }: { onPick?: () => void }) {
   const soon      = filtered.filter(s => s.status === "soon");
 
   function use(trigger?: string) {
+    if (onUse) { onUse(trigger); return; }
     if (trigger) setInput(trigger);
     // Jump back to the Chat surface so the inserted trigger is visible.
     onPick?.();
@@ -357,7 +365,11 @@ export default function SkillsPanel({ onPick }: { onPick?: () => void }) {
                       className="px-3 py-3 rounded-xl border text-left transition-all hover:scale-[1.02]"
                       style={{ borderColor: `${color}25`, background: `${color}08` }}
                     >
-                      <div className="text-lg mb-1.5">{PROVIDER_ICONS[p]}</div>
+                      <div className="mb-1.5">
+                        {PROVIDER_BRANDS[p]
+                          ? <BrandMark brand={PROVIDER_BRANDS[p]} size={24} />
+                          : <span className="text-lg">{PROVIDER_ICONS[p]}</span>}
+                      </div>
                       <div className="font-mono text-xs font-semibold mb-0.5" style={{ color }}>{p}</div>
                       <div className="font-mono text-[9px] text-slate-600">{count}/{total} active</div>
                     </button>

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import BrandMark from "@/components/BrandMark";
 import {
   useConnectors, addConnector, removeConnector, setConnectorEnabled,
-  probeConnector, isPresetAdded,
+  probeConnector, isPresetAdded, brandForUrl,
   CONNECTOR_PRESETS, type ConnectorPreset, type ConnectorAuth, type McpToolDef,
 } from "../connectors";
 
@@ -143,6 +144,7 @@ export default function ConnectorsPanel({ onPick }: { onPick?: () => void }) {
                 {connectors.map(c => (
                   <div key={c.id} className="px-4 py-3 rounded-xl border border-[#1A1A2E] bg-[#0A0A12]">
                     <div className="flex items-center gap-3">
+                      <BrandMark brand={brandForUrl(c.url)} size={28} />
                       <div className="flex-1 min-w-0">
                         <span className="font-mono text-[13px] text-slate-200 truncate block">{c.name}</span>
                         <p className="font-mono text-[10px] text-slate-600 truncate">{c.url}</p>
@@ -229,9 +231,7 @@ export default function ConnectorsPanel({ onPick }: { onPick?: () => void }) {
                     style={{ borderColor: added ? "#34D39930" : "#1A1A2E", opacity: p.auth === "oauth" ? 0.6 : 1 }}
                   >
                     <div className="flex items-start gap-2.5 mb-2">
-                      <span className="w-8 h-8 rounded-lg bg-[#12121C] flex items-center justify-center text-base shrink-0">
-                        {p.icon}
-                      </span>
+                      <BrandMark brand={p.brand} size={32} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-[12px] font-semibold text-slate-200 truncate">{p.name}</span>
@@ -278,9 +278,12 @@ export default function ConnectorsPanel({ onPick }: { onPick?: () => void }) {
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => { setOpen(false); reset(); }} />
           <div className="relative z-10 w-full max-w-sm rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-5 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
-              <p className="font-mono text-[11px] tracking-widest" style={{ color: ACCENT }}>
-                {preset ? `// ADD ${preset.name.toUpperCase()}` : "// ADD CUSTOM MCP"}
-              </p>
+              <div className="flex items-center gap-2.5 min-w-0">
+                {preset && <BrandMark brand={preset.brand} size={26} />}
+                <p className="font-mono text-[11px] tracking-widest truncate" style={{ color: ACCENT }}>
+                  {preset ? `// ADD ${preset.name.toUpperCase()}` : "// ADD CUSTOM MCP"}
+                </p>
+              </div>
               <button onClick={() => { setOpen(false); reset(); }} className="font-mono text-[13px] text-slate-500 hover:text-white">✕</button>
             </div>
 
