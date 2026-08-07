@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
 import { CONSOLE_SYSTEMS, CONSOLE_MAX_TOKENS, groundConsolePrompt, type ConsoleCommand } from "@/lib/console-systems";
 import { callLLM, NO_FABRICATION_RULE } from "@/app/api/_lib/llm";
+import { kv } from "@/lib/kv";
 
 export const runtime = "nodejs";
 // 120s lets the upstream LLM's ~100s ceiling resolve before Vercel kills us.
@@ -48,6 +49,17 @@ export async function POST(req: NextRequest) {
     if (!r.text) {
       return NextResponse.json({ error: "Empty LLM response." }, { status: 502 });
     }
+    // Run counter — the ONLY measurement the 5 console commands have. Keyed
+    // `usage:blue_<cmd>` to share the namespace the x402 + MCP hub-tool paths
+    // already use, so /api/usage can read every surface through one key shape.
+    // Counted here (after a non-empty result) rather than at entry, so a failed
+    // or rate-limited call never inflates the number.
+    //
+    // Forward-only: this starts at deploy time, exactly like the x402 settlement
+    // counters. It is NOT a lifetime-since-launch figure and must never be
+    // presented as one — the UI only renders it once it is > 0.
+    try { await kv.incr(`usage:blue_${cmd}`); } catch { /* counter is best-effort */ }
+
     return NextResponse.json({
       result:      r.text,
       provider:    r.provider,

@@ -4,10 +4,11 @@ import { useState } from "react";
 import BrandMark from "@/components/BrandMark";
 import {
   AGENT_SKILLS, SKILL_PROVIDERS, PROVIDER_COLORS, PROVIDER_ICONS, PROVIDER_BRANDS,
-  type SkillProvider,
+  type SkillProvider, type SkillAuthor,
 } from "../agent-skills";
 import { useChat } from "../ChatContext";
 import { useIntegrations, setSkillEnabled, removeSkill, runSkillCommand } from "../integrations";
+import { useSkillUsage } from "../use-skill-usage";
 
 // ── Provider pill colors ───────────────────────────────────────────────────────
 const PROVIDER_BG: Record<SkillProvider, string> = {
@@ -37,6 +38,35 @@ function ProviderBadge({ provider }: { provider: SkillProvider }) {
   );
 }
 
+/** Real run count from `usage:<id>` KV counters.
+ *
+ *  Renders NOTHING for null (skill has no instrumented backend — unknown, not
+ *  zero) and nothing for 0 (the counters are forward-only, so a 0 means "nothing
+ *  recorded since we started counting", which is not the same claim as "nobody
+ *  ran this"). Only a genuine positive measurement gets printed. */
+function RunCount({ runs }: { runs: number | null }) {
+  if (runs === null || runs <= 0) return null;
+  return (
+    <span className="font-mono text-[9px] text-slate-600 shrink-0 tabular-nums" title="Recorded runs since this surface was instrumented">
+      <span className="text-slate-400">{runs.toLocaleString()}</span> runs
+    </span>
+  );
+}
+
+/** "by <backend operator>" — only present when we actually call that party's
+ *  service (see the SkillAuthor doc in agent-skills.ts). Skills with no wired
+ *  backend carry no author and this renders nothing. */
+function AuthorLine({ author }: { author?: SkillAuthor }) {
+  if (!author) return null;
+  return (
+    <span className="inline-flex items-center gap-1 font-mono text-[9px] text-slate-700 shrink-0">
+      <span>by</span>
+      {author.brand && <BrandMark brand={author.brand} size={11} />}
+      <span className="text-slate-600">{author.name}</span>
+    </span>
+  );
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function SkillsPanel({ onPick, onUse }: {
   onPick?: () => void;
@@ -48,6 +78,10 @@ export default function SkillsPanel({ onPick, onUse }: {
   const { setInput } = useChat();
   const [activeProvider, setActiveProvider] = useState<SkillProvider | "all">("all");
   const [search, setSearch] = useState("");
+
+  // Real run counts (usage:<id> KV). Null for skills we don't meter — see
+  // use-skill-usage.ts; the UI never invents a 0.
+  const { runsOf } = useSkillUsage();
 
   // All installed skills (localStorage). User-installed = non-default only;
   // default/bundle skills are always active and shown in the ACTIVE catalog below.
@@ -78,7 +112,13 @@ export default function SkillsPanel({ onPick, onUse }: {
     return matchProvider && matchSearch;
   });
 
-  const active    = filtered.filter(s => s.status === "active");
+  // ACTIVE is ranked by real recorded runs (desc) so the top of the catalog is
+  // what people actually use, not whatever order the file happens to list.
+  // Unmetered skills score -1 — below any real measurement, but they keep their
+  // catalog order among themselves because Array.sort is stable. Before /api/usage
+  // resolves every score is -1, so the initial paint is plain catalog order.
+  const active    = filtered.filter(s => s.status === "active")
+                            .sort((a, b) => (runsOf(b) ?? -1) - (runsOf(a) ?? -1));
   const available = filtered.filter(s => s.status === "available");
   const soon      = filtered.filter(s => s.status === "soon");
 
@@ -221,6 +261,10 @@ export default function SkillsPanel({ onPick, onUse }: {
               <div className="space-y-1.5">
                 {active.map(skill => {
                   const color = PROVIDER_COLORS[skill.provider];
+                  const runs  = runsOf(skill);
+                  // Meta row appears only when there is something TRUE to say —
+                  // a real backend operator, or a run count we actually recorded.
+                  const showMeta = Boolean(skill.author) || (runs !== null && runs > 0);
                   return (
                     <button
                       key={skill.id}
@@ -248,6 +292,15 @@ export default function SkillsPanel({ onPick, onUse }: {
                         <p className="font-mono text-[10px] text-slate-600 leading-relaxed truncate">
                           {skill.description}
                         </p>
+                        {showMeta && (
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <AuthorLine author={skill.author} />
+                            {skill.author && runs !== null && runs > 0 && (
+                              <span className="font-mono text-[9px] text-slate-800">·</span>
+                            )}
+                            <RunCount runs={runs} />
+                          </div>
+                        )}
                         {/* Tool chips — shown for Bundled skills so user sees what gets chained */}
                         {skill.tools && skill.tools.length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-1.5">
