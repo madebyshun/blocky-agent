@@ -13,7 +13,7 @@ const SOUL_SECTIONS = [
     sub: "Who Blue Agent is",
     content: [
       { k: "name",     v: "Blue Agent" },
-      { k: "role",     v: "The Builder OS for Robinhood Chain" },
+      { k: "role",     v: "The onchain Agent OS" },
       { k: "chains",   v: "Robinhood Chain (4663) — flagship · Base (8453) — secondary" },
       { k: "built by", v: "Blocky Studio — @madebyshun" },
       { k: "token",    v: "$BLUEAGENT · 0xf895783b2931c919955e18b5e3343e7c7c456ba3 (Base)" },
@@ -66,68 +66,9 @@ const SOUL_SECTIONS = [
   },
 ];
 
-const AEON_SKILLS = [
-  {
-    id: "token-movers",
-    name: "aeon-token-movers",
-    label: "Token Movers",
-    color: "#34d399",
-    icon: "📈",
-    desc: "Top movers, losers, and trending coins from CoinGecko with pump-risk flags — low liquidity, fresh listing, volume-no-mcap, cex-only.",
-    triggers: ["top movers today", "what's pumping", "biggest losers 24h", "trending coins"],
-    requires: "None — public CoinGecko API",
-    github: "https://github.com/madebyshun/blue-agent/blob/main/skills/aeon-token-movers.md",
-    raw:    "https://raw.githubusercontent.com/madebyshun/blue-agent/main/skills/aeon-token-movers.md",
-  },
-  {
-    id: "token-pick",
-    name: "aeon-token-pick",
-    label: "Token Pick",
-    color: "#fbbf24",
-    icon: "🎯",
-    desc: "One token recommendation per run with falsifiable thesis, entry, sizing, and kill criterion. Fires NO_PICK when no candidate has a named catalyst.",
-    triggers: ["give me a token pick", "what should I trade today", "is there an asymmetric setup"],
-    requires: "None — skip branch is a valid output",
-    github: "https://github.com/madebyshun/blue-agent/blob/main/skills/aeon-token-pick.md",
-    raw:    "https://raw.githubusercontent.com/madebyshun/blue-agent/main/skills/aeon-token-pick.md",
-  },
-  {
-    id: "narrative-tracker",
-    name: "aeon-narrative-tracker",
-    label: "Narrative Tracker",
-    color: "#4FC3F7",
-    icon: "🧭",
-    desc: "Daily narrative map — mindshare score (1-5), velocity arrow, phase label (Emerging / Rising / Peak / Fading), and position calls: FRONT-RUN / RIDE / FADE / WATCH / IGNORE.",
-    triggers: ["what's running on CT", "narrative positions today", "is X peaking"],
-    requires: "Optional: XAI_API_KEY for deeper signal threads",
-    github: "https://github.com/madebyshun/blue-agent/blob/main/skills/aeon-narrative-tracker.md",
-    raw:    "https://raw.githubusercontent.com/madebyshun/blue-agent/main/skills/aeon-narrative-tracker.md",
-  },
-  {
-    id: "deep-research",
-    name: "aeon-deep-research",
-    label: "Deep Research",
-    color: "#a78bfa",
-    icon: "🔬",
-    desc: "Exhaustive multi-source research with attributed claims and adversarial counterpoint. Claims tagged by source class with confidence scores.",
-    triggers: ["deep research X", "DD on Y", "build me a memo on Z", "contrarian take on X"],
-    requires: "None — uses web search",
-    github: "https://github.com/madebyshun/blue-agent/blob/main/skills/aeon-deep-research.md",
-    raw:    "https://raw.githubusercontent.com/madebyshun/blue-agent/main/skills/aeon-deep-research.md",
-  },
-  {
-    id: "distribute-tokens",
-    name: "aeon-distribute-tokens",
-    label: "Distribute Tokens",
-    color: "#fb923c",
-    icon: "💸",
-    desc: "Batch token payouts (USDC on Base or USDG on Robinhood Chain) with per-recipient idempotency, two-phase resolve→execute, dry-run preview, and recovery from partial runs.",
-    triggers: ["distribute tokens", "pay contributors", "weekly payout", "send USDC to this list"],
-    requires: "Signer with treasury write scope · non-custodial per-tx signing",
-    github: "https://github.com/madebyshun/blue-agent/blob/main/skills/aeon-distribute-tokens.md",
-    raw:    "https://raw.githubusercontent.com/madebyshun/blue-agent/main/skills/aeon-distribute-tokens.md",
-  },
-];
+// Aeon Skills removed 2026-08 — the aeon-* trading/research skill set is no
+// longer surfaced here. This page now centers on SOUL.md (the forkable agent
+// identity) + how skills fire. The grounding-file catalog lives at /docs/skills.
 
 // ─── Components ───────────────────────────────────────────────────────────────
 
@@ -155,7 +96,15 @@ function CopyBtn({ text, label = "Copy" }: { text: string; label?: string }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function SkillsPage() {
+// /soul — the public SOUL.md page: agent identity, values, tone, hard limits.
+//
+// Lived at /skills until 2026-08. Renamed because "Skills" now unambiguously
+// means the installed agent-skill catalog in the app shell (/skills →
+// src/app/app/skills), and this page never described those — it's the
+// personality config. Two pages on one path also broke localhost + Vercel
+// preview, where marketing and app share a single origin and this route shadowed
+// the catalog. /skills on the main host 301s here (see middleware).
+export default function SoulPage() {
   const [openSection, setOpenSection] = useState<string | null>("identity");
 
   return (
@@ -173,24 +122,24 @@ export default function SkillsPage() {
         <section className="max-w-5xl mx-auto px-6 pt-32 pb-20 text-center">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[#4FC3F730] bg-[#4FC3F708] mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-[#4FC3F7] animate-pulse" />
-            <span className="font-mono text-[11px] text-[#4FC3F7] tracking-widest">6 SKILLS · OPEN SOURCE · MIT</span>
+            <span className="font-mono text-[11px] text-[#4FC3F7] tracking-widest">SOUL.md · OPEN SOURCE · MIT</span>
           </div>
 
           <h1 className="text-5xl sm:text-6xl font-bold tracking-tight mb-6 leading-tight">
             Agent<br />
-            <span className="text-[#4FC3F7]">Skills</span>
+            <span className="text-[#4FC3F7]">Soul</span>
           </h1>
 
           <p className="text-slate-400 text-lg max-w-2xl mx-auto leading-relaxed mb-12">
-            SOUL.md defines who Blue Agent is. Five Aeon skills define what it knows.
-            All open source, forkable, and loadable into any MCP-compatible agent session.
+            SOUL.md defines who Blue Agent is — its identity, values, tone, and hard limits.
+            Open source, forkable, and loadable into any MCP-compatible agent session.
           </p>
 
           <div className="inline-grid grid-cols-3 gap-px bg-[#1A1A2E] rounded-2xl overflow-hidden border border-[#1A1A2E] mb-12">
             {[
-              { value: "6",     label: "Skills",  color: "#4FC3F7" },
-              { value: "MIT",   label: "License", color: "#34D399" },
-              { value: "RH+Base", label: "Chains",  color: "#2563EB" },
+              { value: "5",   label: "Values",  color: "#4FC3F7" },
+              { value: "MIT", label: "License", color: "#34D399" },
+              { value: "MCP", label: "Native",  color: "#2563EB" },
             ].map((s) => (
               <div key={s.label} className="bg-[#0d0d12] px-8 py-5 text-center">
                 <div className="font-mono text-2xl font-bold mb-1" style={{ color: s.color }}>{s.value}</div>
@@ -297,80 +246,8 @@ export default function SkillsPage() {
           </div>
         </section>
 
-        {/* ══ AEON SKILLS ═══════════════════════════════════════════════════════ */}
-        <section className="max-w-5xl mx-auto px-6 py-20 border-t border-[#1A1A2E]">
-          <div className="text-center mb-14">
-            <SectionLabel>Aeon Skills</SectionLabel>
-            <h2 className="text-3xl font-bold">5 grounding skills</h2>
-            <p className="text-slate-500 mt-3 text-sm max-w-xl mx-auto">
-              Trigger-activated knowledge files — structured outputs, source-attributed, no hallucinations.
-              Load on demand or install all with <code className="text-[#4FC3F7] font-mono">blue init</code>.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-            {AEON_SKILLS.map((skill) => (
-              <div key={skill.id}
-                className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] p-6 flex flex-col"
-                style={{ boxShadow: `0 0 30px ${skill.color}06` }}>
-
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
-                      style={{ background: `${skill.color}12`, border: `1px solid ${skill.color}25` }}>
-                      {skill.icon}
-                    </div>
-                    <div>
-                      <div className="font-bold text-white">{skill.label}</div>
-                      <div className="font-mono text-[10px]" style={{ color: skill.color }}>{skill.name}.md</div>
-                    </div>
-                  </div>
-                  <span className="font-mono text-[9px] px-1.5 py-0.5 border rounded shrink-0"
-                    style={{ color: skill.color, borderColor: `${skill.color}30` }}>AEON</span>
-                </div>
-
-                <p className="text-slate-500 text-sm leading-relaxed flex-1 mb-4">{skill.desc}</p>
-
-                {/* Trigger chips */}
-                <div className="flex flex-wrap gap-1.5 mb-4">
-                  {skill.triggers.slice(0, 2).map((t) => (
-                    <span key={t} className="font-mono text-[10px] px-2.5 py-1 rounded-lg border"
-                      style={{ color: skill.color, borderColor: `${skill.color}25`, background: `${skill.color}08` }}>
-                      &ldquo;{t}&rdquo;
-                    </span>
-                  ))}
-                  {skill.triggers.length > 2 && (
-                    <span className="font-mono text-[10px] px-2.5 py-1 rounded-lg border border-[#1A1A2E] text-slate-600">
-                      +{skill.triggers.length - 2} more
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between pt-4 border-t border-[#1A1A2E]">
-                  <span className="font-mono text-[10px] text-slate-700 truncate max-w-[60%]">{skill.requires}</span>
-                  <div className="flex gap-2 shrink-0">
-                    <CopyBtn text={skill.raw} label="raw" />
-                    <a href={skill.github} target="_blank" rel="noopener noreferrer"
-                      className="font-mono text-[10px] px-2 py-1 rounded border text-[#4FC3F7] border-[#4FC3F7]/30 hover:bg-[#4FC3F7]/5 transition-all">
-                      GitHub →
-                    </a>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Install all */}
-          <div className="rounded-2xl border border-[#4FC3F720] bg-[#4FC3F705] p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div>
-              <div className="font-bold text-white mb-1">Install all 5 Aeon skills</div>
-              <div className="font-mono text-[11px] text-slate-500">Copies all skill files to ~/.blue-agent/skills/ — loaded before every command</div>
-            </div>
-            <div className="font-mono text-sm text-[#4FC3F7] bg-[#050508] border border-[#1A1A2E] rounded-xl px-5 py-3 shrink-0">
-              $ blue init
-            </div>
-          </div>
-        </section>
+        {/* AEON SKILLS section removed 2026-08 — the aeon-* skill set is no longer
+            surfaced here. Grounding-file catalog lives at /docs/skills. */}
 
         {/* ══ HOW SKILLS WORK ═══════════════════════════════════════════════════ */}
         <section className="max-w-5xl mx-auto px-6 py-20 border-t border-[#1A1A2E]">
@@ -378,13 +255,14 @@ export default function SkillsPage() {
             <SectionLabel>How it works</SectionLabel>
             <h2 className="text-3xl font-bold">Trigger → Parse → Output</h2>
             <p className="text-slate-500 mt-3 text-sm max-w-xl mx-auto">
-              Skills are read-to-apply markdown files. No plugins, no setup beyond <code className="font-mono text-[#4FC3F7]">blue init</code>.
+              Skills are read-to-apply markdown files. No plugins, no CLI — they load into the
+              agent&apos;s context inside Blue Chat and any MCP client.
             </p>
           </div>
 
           <div className="grid sm:grid-cols-3 gap-4 mb-12">
             {[
-              { step: "01", title: "Trigger", icon: "💬", desc: "User types a matching phrase — e.g. \"what's pumping\" or \"give me a token pick\"", color: "#4FC3F7" },
+              { step: "01", title: "Trigger", icon: "💬", desc: "User types a matching phrase — e.g. \"DD on this token\" or \"is there an arb on NVDA\"", color: "#4FC3F7" },
               { step: "02", title: "Parse",   icon: "⚙️", desc: "Blue Agent reads the skill .md file and applies its grounding rules and output format", color: "#A78BFA" },
               { step: "03", title: "Output",  icon: "📊", desc: "Structured signal — source-attributed, falsifiable, no hallucinated data or addresses", color: "#34D399" },
             ].map((s) => (
@@ -411,12 +289,10 @@ export default function SkillsPage() {
               <span className="font-mono text-xs text-slate-600 ml-1">terminal</span>
             </div>
             <div className="p-5 space-y-2 font-mono text-sm">
-              <div><span className="text-slate-600"># install all skills</span></div>
-              <div><span className="text-slate-600">$ </span><span className="text-[#4FC3F7]">blue init</span></div>
-              <div className="pt-2"><span className="text-slate-600"># install a single skill</span></div>
-              <div><span className="text-slate-600">$ </span><span className="text-white">cp blue-agent/skills/aeon-token-movers.md ~/.blue-agent/skills/</span></div>
-              <div className="pt-2"><span className="text-slate-600"># check installation</span></div>
-              <div><span className="text-slate-600">$ </span><span className="text-white">blue doctor</span></div>
+              <div><span className="text-slate-600"># connect Blue Agent to any MCP client</span></div>
+              <div><span className="text-slate-600">$ </span><span className="text-[#4FC3F7]">claude mcp add --transport http blueagent https://blueagent.dev/api/mcp</span></div>
+              <div className="pt-2"><span className="text-slate-600"># SOUL.md + skills load automatically — no API key</span></div>
+              <div><span className="text-slate-600">$ </span><span className="text-white">claude</span><span className="text-slate-500"> → ask &quot;is there an arb on NVDA&quot;</span></div>
             </div>
           </div>
         </section>
@@ -427,7 +303,7 @@ export default function SkillsPage() {
             style={{ boxShadow: "0 0 60px #4FC3F708" }}>
             <h2 className="text-3xl font-bold mb-4">Try the skills in Blue Chat</h2>
             <p className="text-slate-500 mb-8 max-w-md mx-auto text-sm leading-relaxed">
-              All 6 skills are pre-loaded. Type any trigger phrase and the agent responds with structured, grounded signal.
+              SOUL.md and the agent&apos;s grounding skills are pre-loaded. Type any trigger phrase and the agent responds with structured, grounded signal.
             </p>
             <div className="flex items-center justify-center gap-4 flex-wrap">
               <Link href="/app/chat"

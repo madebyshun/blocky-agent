@@ -19,8 +19,8 @@ const APP_PUBLIC = new Set(["pay", "share", "badge"]);
 const APP_SEGMENTS = new Set([
   "alerts",
   "b20",
-  // `bank` removed 2026-07-24 — BlueAgent Relaunch "Builder OS for Robinhood
-  // Chain" hides Blue Bank. Bank + /pay/[address] now hard-redirect to /chat
+  // `bank` removed 2026-07-24 — BlueAgent Relaunch ("onchain Agent OS"
+  // positioning) hides Blue Bank. Bank + /pay/[address] now hard-redirect to /chat
   // via ARCHIVED_REDIRECTS below (b20 and launches stay accessible via
   // direct URL because task #78 B20HUB is still WIP; only their nav entry
   // was removed in AppShell.tsx).
@@ -30,6 +30,18 @@ const APP_SEGMENTS = new Set([
   "hood",
   "hub",
   "launches",
+  // AgentOS Control pages (2026-08) — promoted from Blue Chat tabs to
+  // first-class /app pages, each backed by REAL data (installed skills, the
+  // connector store, the wallet's crons, the credit ledger, CREDIT_PACKS).
+  // Promotion is one-way: these are NO LONGER chat tabs, so this set is their
+  // only home (see ChatClient's TAB_META + AppSidebar's ACTION_ORDER).
+  // `skills` is unambiguous — the marketing SOUL.md page that used to own
+  // /skills moved to /soul, and /skills 301s there on the main host.
+  "skills",       // installed agent-skills catalog (SkillsPanel)
+  "connectors",   // MCP servers / integrations gallery (ConnectorsPanel)
+  "cron",         // the wallet's scheduled tasks (CronPanel)
+  "usage",        // credit balance + ledger activity (getBalance)
+  "plans",        // pricing comparison → TopUpModal (CREDIT_PACKS)
   "robinhood-router",
   // `profile`, `rewards`, `terminal` removed 2026-07 (0.1 route
   // consolidation) — all three now 301 to their canonical home via
@@ -185,16 +197,26 @@ export function middleware(request: NextRequest) {
   // blueagent-web-new-git-dev-*.vercel.app/app/robinhood-router bounces off to
   // app.blueagent.dev (prod) which doesn't have the branch's code and 404s.
   const isProdHost = host === MAIN_HOST || host === APP_HOST;
+  const firstSeg = pathname.split("/")[1] || "";
+
   if (!isProdHost) {
-    // Exception: Blue Hood (/hood…) and Blue Hub (/hub…) share URLs need to
-    // resolve in-shell on localhost + preview so a reviewer can verify the same
-    // URL that ships to prod. Same rewrite rule as `app.blueagent.dev` — see the
-    // APP_SEGMENTS block below. Same-path rewrite, so /hub/tool/<slug> lands on
-    // its /app/hub/tool/[slug] twin. Everything else still passes through.
-    if (
-      pathname === "/hood" || pathname.startsWith("/hood/") ||
-      pathname === "/hub"  || pathname.startsWith("/hub/")
-    ) {
+    // Localhost + Vercel preview serve marketing AND the app from ONE origin,
+    // so there's no host to key the reshuffle off. Apply the same APP_SEGMENTS
+    // rewrite the app host uses, so every clean in-app URL (/chat, /skills,
+    // /cron, /usage, /plans, /hood, /hub, …) resolves to its /app/* twin and a
+    // reviewer verifies the exact URL that ships to prod.
+    //
+    // This was a hardcoded /hood + /hub exception until 2026-08, which meant
+    // every OTHER clean sidebar link was broken off-prod: /cron, /usage,
+    // /plans, /connectors, /dashboard 404'd (no root route), and /skills
+    // silently rendered the marketing SOUL page. Driving the rewrite off the
+    // same set the app host uses means the two can no longer drift — adding a
+    // segment above fixes both hosts at once. /skills is unambiguous now that
+    // the marketing page moved to /soul.
+    //
+    // API routes, framework internals and static files are never rewritten:
+    // their first segment isn't in APP_SEGMENTS, so they fall through.
+    if (APP_SEGMENTS.has(firstSeg)) {
       const url = request.nextUrl.clone();
       url.pathname = `/app${pathname}`;
       return NextResponse.rewrite(url);
@@ -203,7 +225,6 @@ export function middleware(request: NextRequest) {
   }
 
   const isAppHost = host.startsWith(APP_HOST);
-  const firstSeg = pathname.split("/")[1] || "";
 
   // ── app.blueagent.dev ──────────────────────────────────────────────────────
   // Serve the in-app surface from a clean, /app-less URL on the subdomain.
@@ -254,7 +275,9 @@ export function middleware(request: NextRequest) {
     }
 
     // Everything else is marketing — its canonical home is the main host. 301 it
-    // over so the subdomain never duplicates /docs, /about, /skills, etc.
+    // over so the subdomain never duplicates /docs, /about, etc. (/soul lands
+    // here and bounces to blueagent.dev/soul; /skills does NOT, because it's an
+    // APP segment above and renders the installed-skill catalog on this host.)
     return NextResponse.redirect(
       `https://${MAIN_HOST}${pathname}${request.nextUrl.search}`,
       { status: 301 }
@@ -262,6 +285,21 @@ export function middleware(request: NextRequest) {
   }
 
   // ── blueagent.dev (main host) ───────────────────────────────────────────────
+
+  // /skills → /soul (2026-08 rename). The SOUL.md identity page lived at
+  // /skills, but "Skills" now means the app's installed-skill catalog on the
+  // app host. Renaming freed the word AND unblocked localhost/preview, where a
+  // single origin can only give /skills to one of the two pages. 301 (not a
+  // silent rewrite) so the old URL's SEO transfers to the canonical /soul —
+  // it's the only public marketing path being renamed, and the sitemap now
+  // advertises /soul only.
+  if (pathname === "/skills" || pathname.startsWith("/skills/")) {
+    return NextResponse.redirect(
+      `https://${MAIN_HOST}${pathname.replace(/^\/skills/, "/soul")}${request.nextUrl.search}`,
+      { status: 301 },
+    );
+  }
+
   // Move the in-app surface to the subdomain; keep old deep links alive via 301.
   if (pathname === "/app" || pathname.startsWith("/app/")) {
     const clean = pathname.replace(/^\/app/, "") || "/";
