@@ -22,54 +22,29 @@
 import { kvGet, kvSet, kvScan } from "./kv";
 import { getTierInfo, fetchBlueBalance } from "./credits";
 
-// A connected wallet's spendable balance has TWO buckets:
-//   - daily allowance: tier.dailyCr, granted fresh each UTC day (HOLD-driven —
-//     hold 500K → Starter 500/day, 2M → Pro 2,000/day, 10M → Max 10,000/day).
-//   - pool: on-chain stake accrual + USDC top-ups, CUMULATIVE (doesn't reset).
+// A connected wallet's spendable balance has TWO buckets (token-free):
+//   - daily allowance: WALLET_DAILY, granted fresh each UTC day to ANY wallet
+//     (no $BLUEAGENT to hold, nothing to stake).
+//   - pool: USDC credit-pack top-ups, CUMULATIVE (doesn't reset).
 // A spend drains the daily bucket first (use-it-or-lose-it), then the pool.
-// Every tier (including Max) is finite and metered — there is no unlimited bucket.
+// Both buckets are finite and metered — there is no unlimited bucket.
 function utcDay(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 }
 
 
-// ─── On-chain accrued (read via /lib/credits → contract) ─────────────────────
+// ─── Credit pool source (token-free) ─────────────────────────────────────────
 
 /**
- * Reads BlueMarketStaking.totalCreditsAccrued(address) and returns the value
- * as a plain number (after dividing by 10^18 since the contract stores credits
- * scaled by 1e18 of stake-token decimals).
- *
- * Returns 0 if the contract can't be reached.
+ * Token-free build: the credit pool is no longer fed by on-chain stake accrual.
+ * This used to read BlueMarketStaking.totalCreditsAccrued(address); it now
+ * returns 0 so the cumulative pool is `topup - spent` (USDC credit packs only).
+ * Kept exported + 0-returning so the getBalance/spend/topup call sites are
+ * unchanged.
  */
-const STAKING_ADDRESS = "0x69e539684EE48F71eCDAd58618d8e8a2423E279d";
-const BASE_RPC        = "https://mainnet.base.org";
-
 export async function readAccruedCredits(address: string): Promise<number> {
-  // totalCreditsAccrued(address) — selector 0x1e434399
-  // Computed as keccak256("totalCreditsAccrued(address)")[:4]; verified against
-  // viem's toFunctionSelector(). If the ABI ever changes, recompute.
-  const selector = "0x1e434399";
-  const data     = selector + address.slice(2).padStart(64, "0").toLowerCase();
-
-  try {
-    const res = await fetch(BASE_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1, method: "eth_call",
-        params: [{ to: STAKING_ADDRESS, data }, "latest"],
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
-    const json = await res.json() as { result?: string };
-    if (!json.result || json.result === "0x") return 0;
-    // The contract returns credits already in human units (no extra scaling
-    // by 1e18): the rate math in the contract bakes the decimals out.
-    return Number(BigInt(json.result));
-  } catch {
-    return 0;
-  }
+  void address; // kept for the import surface; pool is now USDC top-ups only
+  return 0;
 }
 
 // ─── Off-chain spent + top-up (KV-backed) ────────────────────────────────────
@@ -172,14 +147,15 @@ export interface BalanceSummary {
 /**
  * Compute the spendable balance for a wallet.
  *
- * `accrued` is read fresh from the contract on every call; this is a single
- * RPC roundtrip and accepts a 5-second timeout. KV reads/writes are cheap.
+ * Token-free: `accrued`/`blueBalance` are 0-returning stubs now (no contract
+ * read), so this is just KV reads plus flat-tier math — `pool = topup - spent`,
+ * `dailyCr = WALLET_DAILY`.
  */
 export async function getBalance(address: string): Promise<BalanceSummary> {
   const addr = address.toLowerCase();
   const [accrued, blueBalance, ledger] = await Promise.all([
     readAccruedCredits(addr),
-    fetchBlueBalance(addr),   // held + staked → tier → daily allowance
+    fetchBlueBalance(addr),   // token-free stub → 0 (getTierInfo ignores it)
     loadLedger(addr),
   ]);
 

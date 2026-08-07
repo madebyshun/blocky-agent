@@ -3,6 +3,7 @@ import { DocHeader, H2, P, CardGrid, Card, PrevNext, Callout } from "../_ui";
 import { CHAT_MODELS, CHAT_CAPABILITIES } from "../_data";
 import { AGENT_SKILLS, SKILL_PROVIDERS, PROVIDER_COLORS, PROVIDER_ICONS } from "@/app/chat/agent-skills";
 import { HUB_SKILLS, SKILL_CATEGORIES, CATEGORY_ICONS } from "@/app/chat/hub-skills";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 export const metadata = { title: "Blue Chat — Blue Agent Docs" };
 
@@ -136,7 +137,7 @@ export default function BlueChatDoc() {
       </CardGrid>
 
       <P>
-        See the full 68-tool catalog on the <Link href="/docs/blue-hub" className="text-[#4FC3F7] underline">Blue Hub</Link> page,
+        See the full {TOOL_COUNT}-tool catalog on the <Link href="/docs/blue-hub" className="text-[#4FC3F7] underline">Blue Hub</Link> page,
         with pricing in <Link href="/docs/x402" className="text-[#4FC3F7] underline">x402 Tools</Link>.
       </P>
 

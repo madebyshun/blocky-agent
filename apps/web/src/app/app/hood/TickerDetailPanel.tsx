@@ -20,7 +20,7 @@ const SURFACE = "#0B0D13";
 const MUTED = "#6b7280";
 const AMBER = "#f5b342";
 const GREEN = "#22c55e";
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 
 interface DetailPool {
   name?: string;

@@ -31,7 +31,7 @@ export const revalidate = 300;
 const getArrow = cache((serial: string) => getPublicArrowBySerial(serial));
 
 // ── palette (mirror /track + the in-app board) ───────────────────────────────
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
 const RED = "#ef4444";
 const GREEN = "#22c55e";
@@ -133,7 +133,7 @@ export default async function ArrowSharePage({
         <Link
           href="/track"
           className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 font-mono text-[11px] font-bold transition-colors"
-          style={{ background: "#00C80515", color: RH_GREEN, border: "1px solid #00C80530" }}
+          style={{ background: "#34D39915", color: RH_GREEN, border: "1px solid #34D39930" }}
         >
           Track record →
         </Link>
@@ -225,7 +225,7 @@ export default async function ArrowSharePage({
               >
                 <span
                   className="rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wider"
-                  style={{ background: "#00C80518", border: "1px solid #00C80530" }}
+                  style={{ background: "#34D39918", border: "1px solid #34D39930" }}
                 >
                   VERIFIED
                 </span>

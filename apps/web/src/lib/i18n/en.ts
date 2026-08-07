@@ -8,9 +8,9 @@ export const en = {
   // ─── Marketing (blueagent.dev) ──────────────────────────────────────────────
   home: {
     badge: "Built on Base · x402 native",
-    hero_title: "The Builder OS for Base",
+    hero_title: "The onchain Agent OS",
     hero_subtitle:
-      "Chat with an agent that reads the chain — live Base data, 74 real tools, and onchain actions right in the conversation. Idea → build → audit → ship → raise.",
+      "Chat with an agent that reads the chain — live Base data, {{TOOLS}} real tools, and onchain actions right in the conversation. Idea → build → audit → ship → raise.",
     cta_open_chat: "Open Blue Chat →",
     cta_browse_hub: "Browse Hub",
     cta_token: "$BLUEAGENT ↗",
@@ -29,7 +29,7 @@ export const en = {
     stack_chat_label: "Blue Chat",
     stack_chat_desc: "Talk to it — no wallet to start. Multi-model: Kimi K2, DeepSeek, Claude, Grok.",
     stack_hub_label: "Blue Hub",
-    stack_hub_desc: "74 x402 tools any agent can call. Pay-per-call in USDC on Base.",
+    stack_hub_desc: "{{TOOLS}} x402 tools any agent can call. Pay-per-call in USDC on Base.",
     stack_mcp_label: "Blue MCP",
     stack_mcp_desc: "Run the whole toolset inside Claude Code, Cursor & Claude Desktop.",
     stack_conn_label: "Blue Connector",
@@ -49,7 +49,7 @@ export const en = {
     s_why_kicker: "Why Blue Chat",
     s_why_title: "Most chatbots guess about crypto. Blue Chat reads it.",
     s_why_sub:
-      "Generic AI hallucinates token data, can't see a wallet, and can't act. Blue Chat is wired to live Base data and 74 real tools — every number comes from a source, not a guess.",
+      "Generic AI hallucinates token data, can't see a wallet, and can't act. Blue Chat is wired to live Base data and {{TOOLS}} real tools — every number comes from a source, not a guess.",
 
     // 3 · How you use Blue (modality tabs)
     s_chat_kicker: "How to use",
@@ -69,12 +69,12 @@ export const en = {
 
     // 4 · Hub
     s_hub_kicker: "Hub",
-    s_hub_title: "74 tools. Called inside the chat.",
+    s_hub_title: "{{TOOLS}} tools. Called inside the chat.",
     s_hub_sub:
       "The intelligence layer for Base agents. Raw data, security checks, alpha signals — all x402 native. No API key. No subscription.",
-    hub_browse_all: "Browse all 74 →",
+    hub_browse_all: "Browse all {{TOOLS}} →",
     hub_browse_sub: "9 categories · live data",
-    hub_pricing_line: "From $0.01/call · Pay in USDC or $BLUEAGENT",
+    hub_pricing_line: "From $0.01/call · USDC on Base",
 
     // 5 · Two ways in
     s_ways_kicker: "Access",
@@ -86,28 +86,37 @@ export const en = {
     ways_api_label: "For agents",
     ways_api_desc: "Call any tool over x402 / MCP. Pay per call in USDC on Base — no signup.",
 
-    // 6 · Pricing
+    // 6 · Pricing — two rails (chat credits + x402 tools)
     s_pricing_kicker: "Pricing",
-    s_pricing_title: "Hold $BLUEAGENT. Chat for free.",
+    s_pricing_title: "Two rails. No subscription.",
     s_pricing_sub:
-      "Credits refresh every day. No subscription. Just hold $BLUEAGENT and build.",
-    pricing_x402_line: "x402: $0.01–$0.20/call · USDC or $BLUEAGENT · no signup",
-    pricing_hold_line: "The more $BLUEAGENT you hold, the more you build for free.",
-    buy_token: "Buy $BLUEAGENT →",
-    stake_now: "Stake now →",
+      "Blue Chat runs on free daily credits. Hub tools are pay-per-call in USDC on Base. Reach for whichever fits.",
+    pricing_chat_label: "Blue Chat",
+    pricing_chat_price: "Free to start",
+    pricing_chat_desc: "Free daily credits, no wallet needed. Connect any wallet for more, or top up with USDC.",
+    pricing_hub_label: "Hub tools",
+    pricing_hub_price: "$0.01–$1.00",
+    pricing_hub_desc: "Pay-per-call in USDC on Base. No subscription, no API key.",
+    pricing_mcp_label: "MCP server",
+    pricing_mcp_price: "Free",
+    pricing_mcp_desc: "The full toolset in Claude Code, Cursor & Claude Desktop. No key.",
+    pricing_footnote: "x402: $0.01–$1.00 per call · USDC on Base · no signup",
 
     final_title: "Start building on Base today",
     final_open_chat: "Open Blue Chat →",
-    final_browse_hub: "Browse 74 Hub Tools →",
+    final_browse_hub: "Browse {{TOOLS}} Hub Tools →",
     final_install_mcp: "Install MCP →",
     final_read_docs: "Read Docs →",
 
-    footer_tagline: "The onchain agent for Base",
-    footer_powered: "Powered by Bankr · Venice AI · x402 native · Base",
+    footer_tagline: "The onchain agent",
+    footer_powered: "Powered by Venice AI · x402 native · Base",
   },
   nav_marketing: {
     about: "About",
-    skills: "Skills",
+    // `soul` (was `skills`, 2026-08) — the SOUL.md identity page at /soul.
+    // "Skills" now means the app's installed-skill catalog, so the marketing
+    // nav no longer uses that word.
+    soul: "Soul",
     docs: "Docs",
     github: "GitHub",
     launch_app: "Launch App →",
@@ -122,10 +131,20 @@ export const en = {
     launches: "Launches",
     hood: "Hood",
     b20: "B20",
-    dashboard: "Account",
+    dashboard: "Overview",
     profile: "Profile",
     docs: "Docs",
     home: "Home",
+    // AgentOS Control pages (promoted from Blue Chat tabs).
+    skills: "Skills",
+    connectors: "Connectors",
+    cron: "Scheduled",
+    usage: "Usage",
+    plans: "Plans",
+    // Sidebar group headers.
+    group_workspace: "Workspace",
+    group_control: "Control",
+    group_account: "Account",
   },
   chat: {
     placeholder: "Message BlueAgent...",

@@ -111,8 +111,11 @@ interface ChatContextValue {
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
-const STARTER_TIER: TierInfo = {
-  tier: "Starter", blueBalance: 0, dailyCr: 500, discount: 0, color: "#4FC3F7",
+// Pre-connection default holderTier. Token-free: no balance, no discount.
+// The "Guest" label surfaces whenever no wallet is connected; a connected
+// wallet overrides this via onWalletChange → getTierInfo ("Member").
+const GUEST_TIER: TierInfo = {
+  tier: "Guest", blueBalance: 0, dailyCr: 500, discount: 0, color: "#4FC3F7",
 };
 
 function formatCountdown(ms: number): string {
@@ -128,7 +131,7 @@ const ChatCtx = createContext<ChatContextValue | null>(null);
 export function ChatProvider({ children }: { children: ReactNode }) {
   // ── Wallet / credits ──────────────────────────────────────────────────────
   const [walletAddr,    setWalletAddr]    = useState<string | undefined>();
-  const [holderTier,    setHolderTier]    = useState<TierInfo>(STARTER_TIER);
+  const [holderTier,    setHolderTier]    = useState<TierInfo>(GUEST_TIER);
   const [credits,       setCredits]       = useState(0);
   // walletReady: true once wallet detection has completed (even if no wallet found)
   // Prevents "out of credits" flash before we know the user's real balance

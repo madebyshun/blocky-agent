@@ -1,4 +1,5 @@
 import { ImageResponse } from "next/og";
+import { AGENT_TOOLS } from "@/lib/agent-tools";
 import { getBrandFonts, brandFonts, C, BG_IMAGE } from "@/lib/og-font";
 
 export const runtime = "nodejs";
@@ -7,6 +8,8 @@ export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
 export default async function Image() {
+  // Live Hub-tool count so the badge never goes stale as tools change.
+  const count = AGENT_TOOLS.filter((t) => t.x402Url).length;
   const fonts = await getBrandFonts();
   const f = brandFonts(fonts.length > 0);
 
@@ -39,7 +42,7 @@ export default async function Image() {
         <div style={{ display: "flex", gap: 14 }}>
           {([
             ["6 AI models", C.cyan],
-            ["74 tools", C.violet],
+            [`${count} tools`, C.violet],
             ["B20 launch", C.green],
             ["free credits", C.muted],
           ] as [string, string][]).map(([label, color]) => (

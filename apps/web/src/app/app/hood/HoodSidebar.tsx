@@ -20,7 +20,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { Arrow, HoodSnapshot, M5Verdict, TickerSnapshot } from "@/lib/blue-hood/types";
 
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
 const AMBER = "#f5b342";
 const RED = "#ef4444";

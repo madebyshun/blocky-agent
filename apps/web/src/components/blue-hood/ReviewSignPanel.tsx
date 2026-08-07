@@ -43,7 +43,7 @@ const HEAVY_IMPACT_PCT = 3;      // amber warning + require ack above this
 const MIN_TVL_USD = 5_000;       // dust floor — same as engine
 const QUOTE_STALE_MS = 60_000;   // 60s from last quote fetch
 
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const AMBER = "#f5b342";
 const RED = "#ef4444";
 const MUTED = "#6b7280";

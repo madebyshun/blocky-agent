@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { DocHeader, H2, P, Card, CardGrid, Callout, PrevNext } from "../_ui";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 export const metadata = {
   title: "Blue Hood — Blue Agent Docs",
@@ -19,7 +20,7 @@ const PILLARS = [
   },
   {
     name: "Act",
-    accent: "#00C805",
+    accent: "#34D399",
     items: [
       { k: "Trade", d: "Standalone quote → prepare → sign panel. Non-custodial. Coming in Stage 2." },
       { k: "Bridge", d: "Route finder for Base/Arb/ETH → Robinhood Chain, deep-link to canonical bridge. Coming in Stage 2." },
@@ -37,7 +38,7 @@ const PILLARS = [
     name: "Build",
     accent: "#FBBF24",
     items: [
-      { k: "Hub", d: "74 x402 skills — call any tool for $0.05, no auth. B2B routing endpoints available for indexes." },
+      { k: "Hub", d: `${TOOL_COUNT} x402 skills — call any tool for $0.05, no auth. B2B routing endpoints available for indexes.` },
       { k: "Docs / Embed", d: "Public API + embed widgets for other builders." },
     ],
   },
@@ -105,7 +106,7 @@ export default function BlueHoodDoc() {
           Writes <code>bh:snapshot:latest</code> to KV.
         </Card>
         <Card title="T-B · Explain">
-          A4 rh-stock-agent-brief LLM chain (Virtuals → Venice → Bankr)
+          A4 rh-stock-agent-brief LLM chain (Virtuals → Venice)
           writes a 1-line context for each fired arrow. Runs every 1 min
           via <code>/api/cron/blue-hood/brief-worker</code>.
         </Card>
@@ -167,7 +168,7 @@ export default function BlueHoodDoc() {
       </Callout>
 
       <H2>Product roadmap (4 groups, 9 nav items)</H2>
-      <P>Blue Hood is the first pillar of the &quot;Builder OS for Robinhood Chain&quot; relaunch. All new features are surfaces on top of skills that already exist in <Link href="/hub" className="underline">/hub</Link> — no new engines.</P>
+      <P>Blue Hood is the first pillar of the &quot;onchain Agent OS&quot; relaunch. All new features are surfaces on top of skills that already exist in <Link href="/hub" className="underline">/hub</Link> — no new engines.</P>
       {PILLARS.map((p) => (
         <div key={p.name} className="mt-8">
           <div className="font-mono text-[11px] tracking-widest uppercase mb-3" style={{ color: p.accent }}>

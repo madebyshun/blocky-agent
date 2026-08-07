@@ -290,9 +290,7 @@ export default function BuyBlueModal({ onClose, onSuccess }: Props) {
                           <span className="font-mono text-[10px] text-slate-600">{fmtBlue(t.blue)} BLUE</span>
                         </div>
                         <div className="font-mono text-[10px] text-slate-600">
-                          {`${t.cr.toLocaleString()} credits/day`}
-                          {t.name === "Pro" && <span className="ml-1.5 text-[#A78BFA]">· 20% off</span>}
-                          {t.name === "Max" && <span className="ml-1.5 text-[#F59E0B]">· 40% off</span>}
+                          $BLUEAGENT · Base
                         </div>
                       </div>
                     </div>
@@ -342,7 +340,7 @@ export default function BuyBlueModal({ onClose, onSuccess }: Props) {
             <div className="text-4xl mb-3">🎉</div>
             <div className="font-mono text-lg font-bold text-white mb-1">Swap complete!</div>
             <div className="font-mono text-sm text-slate-400 mb-2">{blueHuman} BLUE received</div>
-            <div className="font-mono text-[10px] text-slate-600 mb-4">Credits will refresh automatically in the next session</div>
+            <div className="font-mono text-[10px] text-slate-600 mb-4">$BLUEAGENT is now in your wallet · chat credits are separate</div>
             {swapHash && (
               <a
                 href={`https://basescan.org/tx/${swapHash}`}

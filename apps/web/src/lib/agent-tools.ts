@@ -46,7 +46,7 @@ export type AgentTool = {
   releasedAt?:    number;            // Unix ms — drives "Newest" sort; default 2024-06-01
 };
 
-// ─── All 70 tools ─────────────────────────────────────────────────────────────
+// ─── The Hub tool catalog (live size = TOOL_COUNT, exported below) ────────────
 
 const AGENT_TOOLS_RAW: AgentTool[] = [
 
@@ -1957,3 +1957,10 @@ function withV2Defaults(t: AgentTool): AgentTool {
 }
 
 export const AGENT_TOOLS: AgentTool[] = AGENT_TOOLS_RAW.map(withV2Defaults);
+
+/** Live Hub-catalog size — the SINGLE dynamic source for every "N tools" count
+ *  across the site (i18n `{{TOOLS}}` sentinel, docs, OG cards, about, metadata).
+ *  Never hardcode the number anywhere; import this so a catalog change can't
+ *  leave a stale count behind. NOTE: this is the full Hub catalog only — the MCP
+ *  surface (57) and the chat tool-calling set (HUB_TOOLS) are different counts. */
+export const TOOL_COUNT = AGENT_TOOLS.length;

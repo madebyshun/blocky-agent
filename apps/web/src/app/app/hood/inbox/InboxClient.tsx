@@ -27,7 +27,7 @@ import { useHoodShellData } from "../useHoodShellData";
 const RH_EXPLORER = "https://robinhoodchain.blockscout.com";
 
 const REFRESH_MS = 15_000;
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
 const RED = "#ef4444";
 const GREEN = "#22c55e";

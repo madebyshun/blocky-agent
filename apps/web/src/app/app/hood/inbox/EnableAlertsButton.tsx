@@ -43,7 +43,7 @@ type UiState =
   | { kind: "error"; step: string; message: string };
 
 const BORDER = "#1A1A2E";
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const MUTED = "#6b7280";
 const AMBER = "#f5b342";
 const RED = "#ef4444";
