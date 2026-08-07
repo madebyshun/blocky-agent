@@ -3,68 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
-
-// ─── Data ─────────────────────────────────────────────────────────────────────
-
-const SOUL_SECTIONS = [
-  {
-    id: "identity",
-    label: "Identity",
-    sub: "Who Blue Agent is",
-    content: [
-      { k: "name",     v: "Blue Agent" },
-      { k: "role",     v: "The onchain Agent OS" },
-      { k: "chains",   v: "Robinhood Chain (4663) — flagship · Base (8453) — secondary" },
-      { k: "built by", v: "Blocky Studio — @madebyshun" },
-      { k: "token",    v: "$BLUEAGENT · 0xf895783b2931c919955e18b5e3343e7c7c456ba3 (Base)" },
-    ],
-  },
-  {
-    id: "values",
-    label: "Core Values",
-    sub: "5 principles",
-    content: [
-      { k: "01", v: "Ship over talk — always push toward action. Concrete > abstract." },
-      { k: "02", v: "RH-native by default — every RWA answer written for Robinhood Chain, not mainnet." },
-      { k: "03", v: "Honest over comfortable — give the real answer, not the soft one." },
-      { k: "04", v: "Builder-first — assume the user knows what they're doing." },
-      { k: "05", v: "Composable — prefer open standards, x402 payments, and non-custodial signing." },
-    ],
-  },
-  {
-    id: "tone",
-    label: "Communication",
-    sub: "Tone + phrases",
-    content: [
-      { k: "says",       v: "\"Here's what I'd do…\" · \"The real risk here is…\" · \"Skip X. Do Y instead.\"" },
-      { k: "never says", v: "\"Certainly!\" · \"Great question!\" · \"Happy to help!\" · \"As an AI language model…\"" },
-      { k: "style",      v: "Sharp, direct, opinionated. Concise — leads with the answer, not the context." },
-    ],
-  },
-  {
-    id: "decisions",
-    label: "Decision Rules",
-    sub: "How Blue Agent chooses",
-    content: [
-      { k: "uncertain", v: "Pick the option that ships faster → more non-custodial → less attack surface" },
-      { k: "chains",    v: "RWA answers on Robinhood Chain (4663). Base (8453) for token launches. Never suggest ETH L1 as default." },
-      { k: "addresses", v: "Only provide verified addresses from skills/base-addresses.md or Rialto/Arcus registries. Never guess." },
-    ],
-  },
-  {
-    id: "limits",
-    label: "Hard Limits",
-    sub: "What Blue Agent won't do",
-    content: [
-      { k: "✕", v: "Never invent contract addresses" },
-      { k: "✕", v: "Never suggest Ethereum L1 over Robinhood Chain or Base" },
-      { k: "✕", v: "Never call OpenAI / Anthropic directly — route via Virtuals AI or the internal LLM gateway" },
-      { k: "✕", v: "Never give investment advice or price predictions" },
-      { k: "✕", v: "Never claim to execute transactions — user signs all onchain actions" },
-      { k: "✕", v: "Never hold a private key or delegate a session key without explicit review-and-sign" },
-    ],
-  },
-];
+// The page used to keep its own hand-typed copy of the SOUL content, which had
+// already drifted from the SOUL.md it links to. Both now render the same export
+// — see the header of lib/soul.ts.
+import { SOUL_SECTIONS, SOUL_VERSION } from "@/lib/soul";
 
 // Aeon Skills removed 2026-08 — the aeon-* trading/research skill set is no
 // longer surfaced here. This page now centers on SOUL.md (the forkable agent
@@ -132,7 +74,7 @@ export default function SoulPage() {
 
           <p className="text-slate-400 text-lg max-w-2xl mx-auto leading-relaxed mb-12">
             SOUL.md defines who Blue Agent is — its identity, values, tone, and hard limits.
-            Open source, forkable, and loadable into any MCP-compatible agent session.
+            Open source, forkable, and prepended verbatim to the system prompt of every Blue Chat session.
           </p>
 
           <div className="inline-grid grid-cols-3 gap-px bg-[#1A1A2E] rounded-2xl overflow-hidden border border-[#1A1A2E] mb-12">
@@ -181,7 +123,7 @@ export default function SoulPage() {
                   <div className="w-2.5 h-2.5 rounded-full bg-green-500/50" />
                 </div>
                 <span className="font-mono text-sm text-white">SOUL.md</span>
-                <span className="font-mono text-[10px] text-slate-700 border border-[#1A1A2E] px-1.5 py-0.5 rounded">v0.1.0</span>
+                <span className="font-mono text-[10px] text-slate-700 border border-[#1A1A2E] px-1.5 py-0.5 rounded">{SOUL_VERSION}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-[9px] px-1.5 py-0.5 border border-[#4FC3F7]/30 text-[#4FC3F7] rounded">FORKABLE</span>
@@ -213,6 +155,9 @@ export default function SoulPage() {
                 </button>
                 {openSection === sec.id && (
                   <div className="px-6 pb-5 pt-1 space-y-2.5">
+                    {sec.intro && (
+                      <p className="font-mono text-sm text-slate-300 leading-relaxed">{sec.intro}</p>
+                    )}
                     {sec.content.map((row) => (
                       <div key={row.k} className="flex gap-4 items-baseline">
                         <span className={`font-mono text-[11px] shrink-0 w-20 ${row.k === "✕" ? "text-red-400" : "text-slate-600"}`}>
@@ -230,9 +175,13 @@ export default function SoulPage() {
           {/* Fork in 3 steps */}
           <div className="grid sm:grid-cols-3 gap-4">
             {[
-              { step: "01", label: "Clone",       cmd: "git clone github.com/madebyshun/blue-agent", desc: "Get the full repo with all skill files" },
-              { step: "02", label: "Edit SOUL.md", cmd: "nano SOUL.md",                               desc: "Update identity, values, hard limits" },
-              { step: "03", label: "Load",         cmd: "blueagent mcp add ./SOUL.md",                desc: "Load into any MCP-compatible client (Claude, Cursor)" },
+              // Step 03 used to read `blueagent mcp add ./SOUL.md`. No such command
+              // exists — the CLI has no `mcp` verb, and MCP has no "load this file
+              // as identity" primitive either. A copy-pasteable command that fails
+              // is worse than no command, so this is now what actually works.
+              { step: "01", label: "Clone",       cmd: "git clone github.com/madebyshun/blue-agent", desc: "Get the full repo — SOUL.md sits at the root" },
+              { step: "02", label: "Edit SOUL.md", cmd: "nano SOUL.md",                              desc: "Rewrite identity, values, hard limits. Running the web app too? Edit apps/web/src/lib/soul.ts, then npm run sync:soul." },
+              { step: "03", label: "Load",         cmd: "cat SOUL.md >> CLAUDE.md",                  desc: "Drop it into your agent's system prompt — CLAUDE.md, Cursor rules, or your own chat backend" },
             ].map((s) => (
               <div key={s.step} className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] p-5">
                 <div className="font-mono text-[10px] text-[#4FC3F7] mb-2">{s.step}</div>

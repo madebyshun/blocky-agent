@@ -17,6 +17,7 @@ import { checkAuthorization } from "@/lib/b20/check-authorization";
 import { checkWallet } from "@/lib/wallet/holdings";
 import { getRobinhoodAddressBalances } from "@/lib/robinhood/blockscout";
 import { mcpCallTool } from "@/lib/mcp-client";
+import { SOUL_MD } from "@/lib/soul";
 import { VIRTUALS_PRESETS } from "@/app/api/_lib/llm";
 
 export const runtime = "nodejs";
@@ -2265,6 +2266,11 @@ export async function POST(req: NextRequest) {
       : "";
 
   const system = [
+    // SOUL.md goes FIRST — it's the identity layer (who Blue Agent is, how it
+    // talks, what it won't do); everything after it is operational detail.
+    // /soul told visitors this file "is loaded into every chat session"; until
+    // now nothing read it, so this line is what makes that sentence true.
+    SOUL_MD,
     BASE_SYSTEM,
     AGENT_CAPABILITIES_SECTION,
     B20_SECTION,
