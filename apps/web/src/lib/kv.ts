@@ -176,11 +176,37 @@ export async function kvDel(...keys: string[]): Promise<void> {
 }
 
 /**
- * Atomic SET if-not-exists with TTL.
- * Returns true if the key was set (lock acquired), false if it already existed.
- * Uses Redis SET NX EX — single atomic op, no race condition.
+ * Durable write — the counterpart to `kvSet` that does NOT swallow failures.
+ *
+ * `kvSet` catches, logs and returns normally, so a throttled/failed write is
+ * indistinguishable from a successful one. That's fine for caches; it is NOT
+ * fine on the money path — a swallowed `kvSet` in the credit ledger lets
+ * `topup()` report "credited" while nothing persisted, and the purchase route
+ * then writes its `processed` marker, making the credits unrecoverable.
+ * Callers that must know the write landed use this and let it throw.
  */
-export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
+export async function kvSetOrThrow(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
+  await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined);
+}
+
+/**
+ * Outcome of an atomic SET-NX. Distinguishes the two cases `kvSetNX` collapses
+ * into `false`:
+ *   • acquired — the key was free, we own it until the TTL expires
+ *   • held     — someone else owns it (real contention)
+ *   • error    — the KV command THREW; we learned nothing about the key
+ *
+ * A lock caller MUST tell `held` from `error`: retrying is correct for `held`
+ * but pointless for `error`, and treating `error` as `held` means one KV blip
+ * blocks every writer. Same reasoning as `kvGetProbe` above.
+ */
+export type LockAttempt = "acquired" | "held" | "error";
+
+/**
+ * Atomic SET if-not-exists with TTL, reporting which of the three things
+ * happened. `kvSetNX` is the boolean sugar over this.
+ */
+export async function kvTryLock(key: string, value: unknown, ttlSeconds: number): Promise<LockAttempt> {
   try {
     const creds = kvCreds();
     if (creds) {
@@ -189,18 +215,28 @@ export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): 
       const redis  = new Redis({ url: creds.url, token: creds.token });
       // SET key value NX EX ttl — atomic, returns "OK" or null
       const result = await redis.set(key, value, { nx: true, ex: ttlSeconds });
-      return result === "OK";
+      return result === "OK" ? "acquired" : "held";
     }
     // In-memory fallback: check expiry + set atomically
     const existing = memStore.get(key);
     const expired  = existing?.expiresAt ? Date.now() > existing.expiresAt : false;
-    if (existing && !expired) return false;
+    if (existing && !expired) return "held";
     memStore.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
-    return true;
+    return "acquired";
   } catch (e) {
     console.error(`[kv:setNX] ${key}: ${(e as Error).message}`);
-    return false;
+    return "error";
   }
+}
+
+/**
+ * Atomic SET if-not-exists with TTL.
+ * Returns true if the key was set (lock acquired), false if it already existed
+ * — or if the KV command failed. Use `kvTryLock` when those differ to you.
+ * Uses Redis SET NX EX — single atomic op, no race condition.
+ */
+export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
+  return (await kvTryLock(key, value, ttlSeconds)) === "acquired";
 }
 
 /**

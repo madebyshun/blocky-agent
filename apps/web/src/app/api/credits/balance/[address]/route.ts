@@ -28,10 +28,21 @@ export async function GET(
   if (!isAddress(address)) {
     return NextResponse.json({ error: "Invalid address" }, { status: 400 });
   }
-  const summary = await getBalance(address);
-  return NextResponse.json(summary, {
-    headers: {
-      "Cache-Control": "public, s-maxage=15, stale-while-revalidate=60",
-    },
-  });
+  try {
+    const summary = await getBalance(address);
+    return NextResponse.json(summary, {
+      headers: {
+        "Cache-Control": "public, s-maxage=15, stale-while-revalidate=60",
+      },
+    });
+  } catch (e) {
+    // KV read failed. Deliberately return NO `balance` field: every client here
+    // (ChatContext, WalletBar, /app/usage, the dashboard) only applies the value
+    // when it parses as a finite number, so they keep the last known figure
+    // instead of flashing a fabricated "0 credits" at a paying user.
+    return NextResponse.json(
+      { error: (e as Error).message, code: "LEDGER_UNAVAILABLE" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 }

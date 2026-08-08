@@ -19,7 +19,7 @@
  * via a contract redeploy + KV → on-chain migration.
  */
 
-import { kvGet, kvSet, kvScan } from "./kv";
+import { kvGet, kvGetProbe, kvSetOrThrow, kvTryLock, kvDel, kvScan } from "./kv";
 import { getTierInfo, fetchBlueBalance } from "./credits";
 
 // A connected wallet's spendable balance has TWO buckets (token-free):
@@ -67,19 +67,91 @@ export interface LedgerEvent {
 
 const key = (addr: string) => `ledger:${addr.toLowerCase()}`;
 
+/**
+ * Read a wallet's row.
+ *
+ * Uses `kvGetProbe`, not `kvGet`, because the two failure modes must not look
+ * alike here: `kvGet` swallows a KV error and returns null, which this function
+ * would read as "new wallet, empty ledger" — and the caller would then WRITE
+ * that empty row back, erasing the wallet's paid top-up balance. A read failure
+ * has to abort the whole operation, so it throws.
+ */
 async function loadLedger(addr: string): Promise<LedgerRow> {
-  const row = await kvGet<LedgerRow | string>(key(addr));
-  if (!row) return { spent: 0, topup: 0, history: [] };
+  const probe = await kvGetProbe<LedgerRow | string>(key(addr));
+  if (probe.status === "error") {
+    const err = new Error(`Ledger read failed: ${probe.message}`);
+    (err as { code?: string }).code = "LEDGER_UNAVAILABLE";
+    throw err;
+  }
+  if (probe.status === "miss") return { spent: 0, topup: 0, history: [] };
+
+  const row = probe.value;
   if (typeof row === "string") {
     try { return JSON.parse(row) as LedgerRow; } catch { return { spent: 0, topup: 0, history: [] }; }
   }
   return row;
 }
 
+/**
+ * Persist a wallet's row. Throws if the write didn't land — see `kvSetOrThrow`.
+ * A silently-dropped write here means a paid top-up vanishes, so this is the
+ * one place we want the caller to hear about a KV failure.
+ */
 async function saveLedger(addr: string, row: LedgerRow): Promise<void> {
   // Cap history at last 50 events so the row never grows unbounded.
   if (row.history.length > 50) row.history = row.history.slice(-50);
-  await kvSet(key(addr), JSON.stringify(row));
+  await kvSetOrThrow(key(addr), JSON.stringify(row));
+}
+
+// ─── Per-address write lock ──────────────────────────────────────────────────
+//
+// `spend` and `topup` are read-modify-write over ONE key, so two concurrent
+// writers read the same snapshot and the second `saveLedger` silently discards
+// the first one's mutation. That's reachable in ordinary use — a USDC top-up
+// settling while the same wallet sends a chat message — and the loser is either
+// a paid top-up or a debit. The `purchase:<txHash>` lock in the purchase route
+// does NOT cover this: it's keyed by transaction, so it only stops the same tx
+// being credited twice.
+//
+// Fix: serialise writes per address. Costs 2 extra KV ops per debit (SET NX +
+// DEL); the TTL is deliberately short so a request that dies mid-write frees
+// the row in seconds instead of locking the wallet out.
+const lockKey = (addr: string) => `ledger-lock:${addr.toLowerCase()}`;
+
+const LOCK_TTL_S   = 10;
+const LOCK_TRIES   = 15;
+const LOCK_WAIT_MS = 80;  // 15 × 80ms ≈ 1.2s of patience before giving up
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function withLedgerLock<T>(addr: string, fn: () => Promise<T>): Promise<T> {
+  const k = lockKey(addr);
+  let last: "held" | "error" = "held";
+
+  for (let i = 0; i < LOCK_TRIES; i++) {
+    const got = await kvTryLock(k, Date.now(), LOCK_TTL_S);
+    if (got === "acquired") {
+      try { return await fn(); }
+      finally { await kvDel(k); }
+    }
+    last = got;
+    // KV is failing, not contended — spinning won't help, and `loadLedger` is
+    // about to throw on the same error anyway. Bail now.
+    if (got === "error") break;
+    await sleep(LOCK_WAIT_MS);
+  }
+
+  // Either the holder is wedged or KV is down. Refuse rather than write from a
+  // snapshot we can't trust. Every caller already handles a throw: chat degrades
+  // to a free message, and the purchase route releases its per-tx lock so the
+  // modal's "Check again" genuinely re-credits.
+  const err = new Error(
+    last === "error"
+      ? "Ledger store is unavailable — try again in a moment."
+      : "Ledger is busy — try again in a moment.",
+  );
+  (err as { code?: string }).code = last === "error" ? "LEDGER_UNAVAILABLE" : "LEDGER_BUSY";
+  throw err;
 }
 
 function coerceLedger(raw: LedgerRow | string | null): LedgerRow | null {
@@ -194,46 +266,52 @@ export async function spend(
   if (amount <= 0) throw new Error("amount must be positive");
   const addr = address.toLowerCase();
 
-  const [accrued, blueBalance, ledger] = await Promise.all([
+  // Read the non-ledger inputs BEFORE taking the lock — they don't depend on
+  // the row, so holding the wallet's lock across them would only widen the
+  // window other writers have to wait on.
+  const [accrued, blueBalance] = await Promise.all([
     readAccruedCredits(addr),
     fetchBlueBalance(addr),
-    loadLedger(addr),
   ]);
   const dailyCr = getTierInfo(blueBalance).dailyCr;
   const today   = utcDay();
 
-  let dailySpent       = ledger.dailyDay === today ? (ledger.dailySpent ?? 0) : 0;
-  const pool           = Math.max(0, accrued + ledger.topup - ledger.spent);
-  const dailyRemaining = Math.max(0, dailyCr - dailySpent);
+  return withLedgerLock(addr, async () => {
+    const ledger = await loadLedger(addr);
 
-  if (pool + dailyRemaining < amount) {
-    const err = new Error(`Insufficient credits: have ${pool + dailyRemaining}, need ${amount}`);
-    (err as { code?: string }).code = "INSUFFICIENT_CREDITS";
-    throw err;
-  }
+    let dailySpent       = ledger.dailyDay === today ? (ledger.dailySpent ?? 0) : 0;
+    const pool           = Math.max(0, accrued + ledger.topup - ledger.spent);
+    const dailyRemaining = Math.max(0, dailyCr - dailySpent);
 
-  // Drain the daily allowance first (use-it-or-lose-it), then the pool.
-  const fromDaily = Math.min(amount, dailyRemaining);
-  dailySpent += fromDaily;
-  ledger.spent += amount - fromDaily;   // overflow hits the cumulative pool
-  ledger.dailyDay   = today;
-  ledger.dailySpent = dailySpent;
-  ledger.history.push({ ts: Date.now(), kind: "spend", amount, reason, ref });
-  await saveLedger(addr, ledger);
+    if (pool + dailyRemaining < amount) {
+      const err = new Error(`Insufficient credits: have ${pool + dailyRemaining}, need ${amount}`);
+      (err as { code?: string }).code = "INSUFFICIENT_CREDITS";
+      throw err;
+    }
 
-  const newPool  = Math.max(0, accrued + ledger.topup - ledger.spent);
-  const newDaily = Math.max(0, dailyCr - dailySpent);
-  return {
-    address: addr,
-    accrued,
-    topup:   ledger.topup,
-    spent:   ledger.spent,
-    pool:    newPool,
-    dailyCr,
-    dailyRemaining: newDaily,
-    balance: newPool + newDaily,
-    recent:  ledger.history.slice(-10).reverse(),
-  };
+    // Drain the daily allowance first (use-it-or-lose-it), then the pool.
+    const fromDaily = Math.min(amount, dailyRemaining);
+    dailySpent += fromDaily;
+    ledger.spent += amount - fromDaily;   // overflow hits the cumulative pool
+    ledger.dailyDay   = today;
+    ledger.dailySpent = dailySpent;
+    ledger.history.push({ ts: Date.now(), kind: "spend", amount, reason, ref });
+    await saveLedger(addr, ledger);
+
+    const newPool  = Math.max(0, accrued + ledger.topup - ledger.spent);
+    const newDaily = Math.max(0, dailyCr - dailySpent);
+    return {
+      address: addr,
+      accrued,
+      topup:   ledger.topup,
+      spent:   ledger.spent,
+      pool:    newPool,
+      dailyCr,
+      dailyRemaining: newDaily,
+      balance: newPool + newDaily,
+      recent:  ledger.history.slice(-10).reverse(),
+    };
+  });
 }
 
 /**
@@ -249,20 +327,22 @@ export async function topup(
   if (credits <= 0) throw new Error("credits must be positive");
   const addr = address.toLowerCase();
 
-  const [accrued, ledger] = await Promise.all([
-    readAccruedCredits(addr),
-    loadLedger(addr),
-  ]);
-  ledger.topup += credits;
-  ledger.history.push({ ts: Date.now(), kind: "topup", amount: credits, reason, ref });
-  await saveLedger(addr, ledger);
+  const accrued = await readAccruedCredits(addr);
 
-  return {
-    address: addr,
-    accrued,
-    topup:   ledger.topup,
-    spent:   ledger.spent,
-    balance: Math.max(0, accrued + ledger.topup - ledger.spent),
-    recent:  ledger.history.slice(-10).reverse(),
-  };
+  return withLedgerLock(addr, async () => {
+    const ledger = await loadLedger(addr);
+
+    ledger.topup += credits;
+    ledger.history.push({ ts: Date.now(), kind: "topup", amount: credits, reason, ref });
+    await saveLedger(addr, ledger);
+
+    return {
+      address: addr,
+      accrued,
+      topup:   ledger.topup,
+      spent:   ledger.spent,
+      balance: Math.max(0, accrued + ledger.topup - ledger.spent),
+      recent:  ledger.history.slice(-10).reverse(),
+    };
+  });
 }
