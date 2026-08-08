@@ -12,6 +12,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { en, type Dict } from "./en";
 import { zh } from "./zh";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 export type Lang = "en" | "zh";
 
@@ -70,7 +71,9 @@ function lookup(dict: Dict, key: string): string {
       return key; // missing key → echo the key so it's obvious in the UI
     }
   }
-  return typeof cur === "string" ? cur : key;
+  // `{{TOOLS}}` is a live-count sentinel so dict strings never hardcode a stale
+  // Hub-tool number. Deterministic (same on server + client) → no hydration gap.
+  return typeof cur === "string" ? cur.replace(/\{\{TOOLS\}\}/g, String(TOOL_COUNT)) : key;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────

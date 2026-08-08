@@ -10,7 +10,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: BASE,              lastModified: now, changeFrequency: "weekly",  priority: 1.0 },
     { url: `${BASE}/hub`,     lastModified: now, changeFrequency: "daily",   priority: 0.9 },
     { url: `${BASE}/docs`,    lastModified: now, changeFrequency: "monthly", priority: 0.5 },
-    { url: `${BASE}/skills`,  lastModified: now, changeFrequency: "monthly", priority: 0.5 },
+    // /skills 301s here on the main host (it now means the app catalog) — only
+    // the canonical /soul URL is advertised.
+    { url: `${BASE}/soul`,    lastModified: now, changeFrequency: "monthly", priority: 0.5 },
   ];
 
   const toolPages: MetadataRoute.Sitemap = AGENT_TOOLS

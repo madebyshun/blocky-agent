@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { DocHeader, H2, P, CardGrid, Card, PrevNext, Callout } from "./_ui";
 import { STATS, PRODUCTS, FOUNDATION } from "./_data";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 export const metadata = {
-  title: "BlueAgent Docs — The Builder OS for Base",
-  description: "BlueAgent: 74 AI tools, Blue Chat, Blue Feed — built for Base builders and autonomous agents. x402 native, pay per call.",
+  title: "BlueAgent Docs — The onchain Agent OS",
+  description: `BlueAgent: ${TOOL_COUNT} AI tools, Blue Chat, Blue Feed — built for Base builders and autonomous agents. x402 native, pay per call.`,
 };
 
 export default function DocsOverview() {
@@ -13,7 +14,7 @@ export default function DocsOverview() {
       <DocHeader
         eyebrow="Introduction"
         title="Blue Agent"
-        lead="The Builder OS for Base. 74 AI tools, Blue Chat, and live Base intelligence — built for builders and autonomous agents. x402 native, no API key needed."
+        lead={`The onchain Agent OS. ${TOOL_COUNT} AI tools, Blue Chat, and live Base intelligence — built for builders and autonomous agents. x402 native, no API key needed.`}
       />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-[#1A1A2E] rounded-2xl overflow-hidden border border-[#1A1A2E] my-8">
@@ -29,7 +30,7 @@ export default function DocsOverview() {
       <P>
         BlueAgent is an AI agent layer built on Base. It is not just a chatbot — it is a full economic actor:
         it holds a wallet, executes onchain transactions, and powers a growing ecosystem of tools and services.
-        It is the <strong className="text-slate-200">Builder OS for Base</strong> — chat with AI agents, run 74 tools,
+        It is the <strong className="text-slate-200">onchain Agent OS</strong> — chat with AI agents, run {TOOL_COUNT} tools,
         and read live Base intelligence, all in one place.
       </P>
 
@@ -61,7 +62,7 @@ export default function DocsOverview() {
 
       <Callout color="#34D399" title="New here?">
         Open <Link href="/app/chat" className="text-[#34D399] underline">Blue Chat</Link> for zero-install access, or browse the{" "}
-        <Link href="/app/hub" className="text-[#34D399] underline">Hub</Link>&apos;s 74 pay-per-call tools. The{" "}
+        <Link href="/app/hub" className="text-[#34D399] underline">Hub</Link>&apos;s {TOOL_COUNT} pay-per-call tools. The{" "}
         <Link href="/docs/quickstart" className="text-[#34D399] underline">Quickstart</Link> gets you running in 60 seconds.
       </Callout>
 

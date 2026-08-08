@@ -1,15 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import BuyBlueModal  from "@/components/BuyBlueModal";
 import WalletBar     from "@/components/WalletBar";
 import { ChatProvider, useChat } from "@/app/chat/ChatContext";
 import { useAppChrome, type DrawerNavItem, type DrawerRecent } from "@/app/app/AppChrome";
 
 import AppSidebar    from "@/app/chat/components/AppSidebar";
 import ModelsPanel   from "@/app/chat/components/ModelsPanel";
-import SkillsPanel   from "@/app/chat/components/SkillsPanel";
-import ConnectorsPanel from "@/app/chat/components/ConnectorsPanel";
 import SettingsModal from "@/app/chat/components/SettingsModal";
 import ChatMessages  from "@/app/chat/components/ChatMessages";
 import ChatInput     from "@/app/chat/components/ChatInput";
@@ -19,17 +16,16 @@ import type { ActiveTab } from "@/app/chat/types";
 
 // ── Tab metadata ───────────────────────────────────────────────────────────────
 // Settings is intentionally absent — it opens as a modal from the account chip,
-// not as a content tab.
+// not as a content tab. Skills + Connectors are gone too: they're shell pages
+// (/skills, /connectors) now, so chat no longer duplicates their catalogs.
 const TAB_META: Record<Exclude<ActiveTab, "chat" | "settings">, { title: string; subtitle: string }> = {
-  models:     { title: "Models",     subtitle: "AI engines behind Blue Chat · pick by use-case" },
-  skills:     { title: "Skills",     subtitle: "Agent capabilities · Blue Hood · Blue Chat · Base + RH Chain MCP" },
-  connectors: { title: "Connectors", subtitle: "Attach external MCP servers · GitHub · custom HTTP" },
+  models: { title: "Models", subtitle: "AI engines behind Blue Chat · pick by use-case" },
 };
 
 // ── Shell ──────────────────────────────────────────────────────────────────────
 function ChatShell() {
   const {
-    buyOpen, setBuyOpen, triggerWalletRefresh, artifactsPanelOpen,
+    artifactsPanelOpen,
     onWalletChange, walletRefresh,
     createNewTask, tasks, selectTask, activeTaskId,
     setInput,
@@ -96,13 +92,6 @@ function ChatShell() {
         <WalletBar onWalletChange={onWalletChange} refreshTrigger={walletRefresh} />
       </div>
 
-      {buyOpen && (
-        <BuyBlueModal
-          onClose={() => setBuyOpen(false)}
-          onSuccess={triggerWalletRefresh}
-        />
-      )}
-
       {/* No <Navbar /> — /app/layout.tsx provides the side navigation */}
 
       <div className="flex bg-[#050508] font-mono h-full overflow-hidden">
@@ -147,24 +136,11 @@ function ChatShell() {
               </>
             )}
 
-            {/* 🤖 Models */}
+            {/* 🤖 Models — the only non-chat tab left. Skills + Connectors moved
+                out to /skills and /connectors in the shell's Control group. */}
             {activeTab === "models" && (
               <div className="flex-1 h-full overflow-hidden">
                 <ModelsPanel onPick={() => setActiveTab("chat")} />
-              </div>
-            )}
-
-            {/* ⚡ Skills */}
-            {activeTab === "skills" && (
-              <div className="flex-1 h-full overflow-hidden">
-                <SkillsPanel onPick={() => setActiveTab("chat")} />
-              </div>
-            )}
-
-            {/* 🔌 Connectors */}
-            {activeTab === "connectors" && (
-              <div className="flex-1 h-full overflow-hidden">
-                <ConnectorsPanel onPick={() => setActiveTab("chat")} />
               </div>
             )}
 

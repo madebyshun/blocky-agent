@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { useLang } from "@/lib/i18n/context";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 // Marketing surface → mono-forward. JetBrains Mono is the PRIMARY brand voice
 // here (display headlines + reading body). DM Sans (.font-ui) is reserved for the
@@ -12,11 +13,12 @@ const MONO = "'JetBrains Mono', monospace";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
-// BlueAgent Relaunch 2026-07-24 — "Builder OS for Robinhood Chain".
-// Social proof leads with the flagship (Blue Hood live) + chain + x402
-// pricing so a visitor lands on positioning, not on legacy Base tool
-// count. `74 skills` retained — Hub still ships them.
-const SOCIAL_PROOF = ["Blue Hood live", "Robinhood Chain", "x402 · $0.05/call", "MCP native", "74 skills"];
+// BlueAgent positioning — "The onchain Agent OS" (chain-neutral; spans
+// Base + Robinhood Chain). Social proof leads with the flagship (Blue
+// Hood live) + chain + x402 pricing so a visitor lands on positioning,
+// not a legacy tool count. Skill count is dynamic (TOOL_COUNT) — never
+// hardcode it.
+const SOCIAL_PROOF = ["Blue Hood live", "Robinhood Chain", "x402 · $0.05/call", "MCP native", `${TOOL_COUNT} skills`];
 
 const CHAT_COMMANDS = ["/idea", "/build", "/audit", "/ship", "/raise", "/pick", "/scan", "/wallet", "/launch"];
 
@@ -41,7 +43,7 @@ const MODELS: { name: string; color: string; href?: string }[] = [
 // redirects /bank + /pay to /chat). Image/video kept as Soon slots.
 // icon: "logo" → BlueAgent logomark, otherwise an emoji glyph.
 const PRODUCTS: { k: string; color: string; icon: string; href: string | null; soon?: boolean }[] = [
-  { k: "hood",  color: "#00C805", icon: "🎯",  href: "/app/hood" },
+  { k: "hood",  color: "#34D399", icon: "🎯",  href: "/app/hood" },
   { k: "chat",  color: "#4FC3F7", icon: "logo", href: "/app/chat" },
   { k: "hub",   color: "#A78BFA", icon: "🛒",  href: "/hub" },
   { k: "mcp",   color: "#60A5FA", icon: "🔌",  href: "/docs/mcp" },
@@ -61,7 +63,7 @@ const USE_TABS: { k: string; color: string; icon: string; soon?: boolean }[] = [
 ];
 
 const HUB_CATEGORIES = [
-  { label: "RH RWA",       color: "#00C805", tools: "rh-stock-arb · rh-stock-movers · rh-stock-swap · rh-rwa-dca" },
+  { label: "RH RWA",       color: "#34D399", tools: "rh-stock-arb · rh-stock-movers · rh-stock-swap · rh-rwa-dca" },
   { label: "On-chain",     color: "#FBBF24", tools: "token price · pool scan · gas tracker · bridge route" },
   { label: "Security",     color: "#F87171", tools: "honeypot · risk gate · scam detector · scam-clone check" },
   { label: "Intelligence", color: "#4FC3F7", tools: "token alpha · narrative pulse · whale tracker" },
@@ -69,14 +71,8 @@ const HUB_CATEGORIES = [
   { label: "Builder",      color: "#A78BFA", tools: "repo health · founder check · roadmap validator" },
 ];
 
-const PRICING = [
-  { tier: "Guest",   hold: "no wallet",       credits: "100 cr/day",   note: null,            highlight: false },
-  { tier: "Starter", hold: "500K BLUEAGENT",  credits: "500 cr/day",   note: null,            highlight: false },
-  { tier: "Pro",     hold: "2M BLUEAGENT",    credits: "2,000 cr/day", note: "20% discount",  highlight: false },
-  { tier: "Max",     hold: "10M BLUEAGENT",   credits: "10,000 cr/day", note: "40% discount",  highlight: true  },
-];
-
-const BUY_URL = "https://bankr.bot/agents/blue-agent";
+// Token-hold pricing tiers removed 2026-08 — BlueAgent positioning is
+// x402 pay-per-call (USDC on Base), not hold-to-earn.
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -346,14 +342,14 @@ export default function Home() {
             <span className="font-mono text-[10px] text-[#4FC3F7] tracking-[0.18em] uppercase">{t("home.badge")}</span>
           </div>
 
-          {/* BlueAgent Relaunch 2026-07-24 hero — Robinhood Chain
-              positioning. English fallback uses the new copy directly;
-              Chinese still routes through `home.hero_title` i18n key
-              (updated in en.ts follow-up if needed). */}
+          {/* BlueAgent hero — chain-neutral "The onchain Agent OS"
+              positioning (agent-centric; spans Base + Robinhood Chain, no
+              single chain named in the tagline). English fallback uses the
+              copy directly; Chinese routes through `home.hero_title`. */}
           <h1 className="text-[2.75rem] leading-[1.04] sm:text-6xl lg:text-7xl font-bold tracking-tight mb-5">
             {lang === "zh"
               ? t("home.hero_title")
-              : <>The Builder OS<br className="hidden sm:block" /> for <span className="text-[#00C805]">Robinhood Chain.</span></>}
+              : <>The onchain<br className="hidden sm:block" /> <span className="text-[#4FC3F7]">Agent OS.</span></>}
           </h1>
           <p className="text-base sm:text-xl text-slate-400 mb-9 max-w-2xl mx-auto leading-relaxed">
             {lang === "zh"
@@ -367,7 +363,7 @@ export default function Home() {
               Chain launch comes via Virtuals launchpad later). */}
           <div className="flex flex-wrap items-center justify-center gap-3 mb-10">
             <Link href="/app/hood" className="text-sm font-semibold px-7 py-3 rounded-xl transition-all hover:opacity-90 active:scale-[0.98]"
-              style={{ background: "linear-gradient(135deg, #00C805, #009c04)", color: "#050508", boxShadow: "0 0 26px #00C80533" }}>
+              style={{ background: "linear-gradient(135deg, #34D399, #10B981)", color: "#050508", boxShadow: "0 0 26px #34D39933" }}>
               Open Blue Hood →
             </Link>
             <Link href="/app/chat" className="text-sm font-semibold text-[#4FC3F7] border border-[#4FC3F7]/30 px-7 py-3 rounded-xl hover:bg-[#4FC3F7]/5 transition-all">
@@ -400,24 +396,24 @@ export default function Home() {
                 </div>
                 <div className="p-4 sm:p-6 space-y-4">
                   <div className="flex justify-end">
-                    <div className="bg-[#00C805]/10 border border-[#00C805]/20 rounded-2xl rounded-br-md px-4 py-2.5 max-w-[80%]">
-                      <span className="font-mono text-[13px] text-[#7fdd82]">/drift NVDA — is there an arb open right now?</span>
+                    <div className="bg-[#34D399]/10 border border-[#34D399]/20 rounded-2xl rounded-br-md px-4 py-2.5 max-w-[80%]">
+                      <span className="font-mono text-[13px] text-[#6EE7B7]">/drift NVDA — is there an arb open right now?</span>
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <span className="w-7 h-7 rounded-lg bg-[#00C805]/15 flex items-center justify-center shrink-0">
+                    <span className="w-7 h-7 rounded-lg bg-[#34D399]/15 flex items-center justify-center shrink-0">
                       <img src="/logomark.svg" alt="BlueAgent" width={16} height={16} className="rounded" />
                     </span>
                     <div className="flex-1 space-y-2.5">
                       <div className="flex flex-wrap gap-1.5">
                         <span className="font-mono text-[10px] text-[#34D399] border border-[#34D399]/25 bg-[#34D399]/5 rounded px-2 py-0.5">↳ rh-stock-arb</span>
                         <span className="font-mono text-[10px] text-[#FBBF24] border border-[#FBBF24]/25 bg-[#FBBF24]/5 rounded px-2 py-0.5">↳ rh-stock-agent-brief</span>
-                        <span className="font-mono text-[10px] text-slate-500 border border-[#1A1A2E] rounded px-2 py-0.5">$0.10 · USDG</span>
+                        <span className="font-mono text-[10px] text-slate-500 border border-[#1A1A2E] rounded px-2 py-0.5">$0.10 · USDC</span>
                       </div>
                       <p className="text-[13px] text-slate-300 leading-relaxed">
                         <span className="text-white font-semibold">NVDA</span> — Chainlink oracle $208.37, DEX pool $210.38 → drift +0.97%. Below 1% arb threshold, verdict <span className="text-[#FBBF24]">ALIGNED</span>. Watch premarket for widening; total pool depth $26.9M.
                       </p>
-                      <p className="text-[11px] text-slate-600 font-mono">live Chainlink RH Chain + GeckoTerminal · x402 settled in USDG</p>
+                      <p className="text-[11px] text-slate-600 font-mono">live Chainlink RH Chain + GeckoTerminal · $0.10 USDC via x402</p>
                     </div>
                   </div>
                 </div>
@@ -506,7 +502,7 @@ export default function Home() {
             </div>
             <h2 className="text-3xl sm:text-5xl font-bold tracking-tight leading-[1.08] mb-6 max-w-3xl">
               {lang === "zh" ? t("home.s_why_title")
-                : <>Most agents <span className="text-slate-500">guess</span> about markets.<br className="hidden sm:block" /> Blue Hood <span className="text-[#00C805]">watches them.</span></>}
+                : <>Most agents <span className="text-slate-500">guess</span> about markets.<br className="hidden sm:block" /> Blue Hood <span className="text-[#34D399]">watches them.</span></>}
             </h2>
             <p className="text-slate-400 text-[15px] sm:text-lg leading-relaxed max-w-2xl">
               {lang === "zh" ? t("home.s_why_sub")
@@ -531,7 +527,7 @@ export default function Home() {
           <SectionHead
             num="4.0" kicker={t("home.s_hub_kicker")} accent="#A78BFA"
             title={lang === "zh" ? t("home.s_hub_title")
-              : <>74 tools. <span className="text-[#A78BFA]">Called inside the chat.</span></>}
+              : <>{TOOL_COUNT} tools. <span className="text-[#A78BFA]">Called inside the chat.</span></>}
             sub={t("home.s_hub_sub")}
           />
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-6">
@@ -598,7 +594,7 @@ export default function Home() {
 <span className="text-slate-600">$ </span><span className="text-[#4FC3F7]">curl</span><span className="text-slate-300"> https://blueagent.dev/api/x402/rh-stock-arb \</span>
 {"\n"}<span className="text-slate-500">    -d </span><span className="text-[#34D399]">{'\'{"ticker":"NVDA"}\''}</span>
 {"\n"}<span className="text-slate-500">→ </span><span className="text-slate-300">{'{"verdict":"ALIGNED","oracle":208.37,"dex":210.38,"drift":0.97,...}'}</span>
-{"\n"}<span className="text-slate-600">Charged: </span><span className="text-[#FBBF24]">$0.05 USDG · RH Chain</span>
+{"\n"}<span className="text-slate-600">Charged: </span><span className="text-[#FBBF24]">$0.05 USDC · Base</span>
               </pre>
             </div>
           </Reveal>
@@ -609,36 +605,26 @@ export default function Home() {
           <SectionHead
             num="6.0" kicker={t("home.s_pricing_kicker")} accent="#34D399"
             title={lang === "zh" ? t("home.s_pricing_title")
-              : <>Hold $BLUEAGENT. <span className="text-[#34D399]">Chat for free.</span></>}
+              : <>Two rails. <span className="text-[#34D399]">No subscription.</span></>}
             sub={t("home.s_pricing_sub")}
           />
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-            {PRICING.map((p, i) => (
-              <Reveal key={p.tier} delay={i * 60}>
-                <div className={`ba-card h-full rounded-2xl p-5 flex flex-col gap-2 ${p.highlight ? "ba-card--hot" : ""}`}>
-                  <div className="text-sm font-semibold" style={{ color: p.highlight ? "#34D399" : "#fff" }}>{p.tier}</div>
-                  <div className="font-mono text-[11px] text-slate-500">{p.hold}</div>
-                  <div className="text-2xl font-bold text-white mt-1">{p.credits}</div>
-                  {p.note && <div className="font-mono text-[11px] text-[#34D399]">{p.note}</div>}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+            {[
+              { label: t("home.pricing_chat_label"), price: t("home.pricing_chat_price"), desc: t("home.pricing_chat_desc"), accent: "#4FC3F7" },
+              { label: t("home.pricing_hub_label"),  price: t("home.pricing_hub_price"),  desc: t("home.pricing_hub_desc"),  accent: "#34D399" },
+              { label: t("home.pricing_mcp_label"),  price: t("home.pricing_mcp_price"),  desc: t("home.pricing_mcp_desc"),  accent: "#60A5FA" },
+            ].map((c, i) => (
+              <Reveal key={c.label} delay={i * 80}>
+                <div className="ba-card h-full rounded-2xl p-6 flex flex-col">
+                  <div className="text-sm font-semibold mb-3" style={{ color: c.accent }}>{c.label}</div>
+                  <div className="text-2xl font-bold text-white mb-2 tracking-tight">{c.price}</div>
+                  <p className="font-mono text-[12px] text-slate-500 leading-relaxed">{c.desc}</p>
                 </div>
               </Reveal>
             ))}
           </div>
           <Reveal>
-            <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] p-5 sm:p-6 flex flex-col gap-4">
-              <p className="font-mono text-[12px] text-slate-500">{t("home.pricing_x402_line")}</p>
-              <p className="text-[15px] sm:text-base text-slate-300">{t("home.pricing_hold_line")}</p>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <a href={BUY_URL} target="_blank" rel="noopener noreferrer"
-                  className="text-sm font-semibold px-6 py-2.5 rounded-xl text-center transition-all hover:opacity-90 active:scale-[0.98]"
-                  style={{ background: "linear-gradient(135deg, #34D399, #10B981)", color: "#031b12" }}>
-                  {t("home.buy_token")}
-                </a>
-                <Link href="/app/rewards" className="text-sm font-semibold text-[#34D399] border border-[#34D399]/30 px-6 py-2.5 rounded-xl text-center hover:bg-[#34D399]/5 transition-all">
-                  {t("home.stake_now")}
-                </Link>
-              </div>
-            </div>
+            <p className="font-mono text-[12px] text-slate-500 mt-6">{t("home.pricing_footnote")}</p>
           </Reveal>
         </section>
 
@@ -648,7 +634,7 @@ export default function Home() {
             <div className="rounded-3xl border border-[#4FC3F7]/20 p-8 sm:p-14 text-center" style={{ background: "radial-gradient(ellipse 80% 70% at 50% 40%, #4FC3F710 0%, transparent 70%)" }}>
               <h2 className="text-3xl sm:text-5xl font-bold tracking-tight mb-8">
                 {lang === "zh" ? t("home.final_title")
-                  : <>Start building on <span className="text-[#4FC3F7]">Base</span> today</>}
+                  : <>Put your <span className="text-[#4FC3F7]">onchain agent</span> to work</>}
               </h2>
               <div className="flex flex-wrap justify-center gap-3">
                 <Link href="/app/chat" className="text-sm font-semibold px-7 py-3 rounded-xl transition-all hover:opacity-90 active:scale-[0.98]"
@@ -658,7 +644,7 @@ export default function Home() {
                 <Link href="/hub" className="text-sm font-semibold text-[#4FC3F7] border border-[#4FC3F7]/30 px-7 py-3 rounded-xl hover:bg-[#4FC3F7]/5 transition-all">
                   {t("home.final_browse_hub")}
                 </Link>
-                <Link href="/docs" className="text-sm font-semibold text-slate-400 border border-[#1A1A2E] px-7 py-3 rounded-xl hover:text-white hover:border-[#4FC3F7]/30 transition-all">
+                <Link href="/docs/mcp" className="text-sm font-semibold text-slate-400 border border-[#1A1A2E] px-7 py-3 rounded-xl hover:text-white hover:border-[#4FC3F7]/30 transition-all">
                   {t("home.final_install_mcp")}
                 </Link>
                 <Link href="/docs" className="text-sm font-semibold text-slate-400 border border-[#1A1A2E] px-7 py-3 rounded-xl hover:text-white hover:border-[#4FC3F7]/30 transition-all">

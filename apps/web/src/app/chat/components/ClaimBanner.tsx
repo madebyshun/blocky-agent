@@ -6,8 +6,8 @@
 // once the user has claimed, dismissed it, or the campaign is full.
 
 import { useEffect, useState } from "react";
-import { useConnect } from "wagmi";
 import { useChat } from "../ChatContext";
+import { WalletPickerModal } from "@/components/WalletPicker";
 
 const DISMISS_KEY = "blueagent:claim-dismissed";
 
@@ -21,12 +21,12 @@ interface Status {
 
 export default function ClaimBanner() {
   const { walletAddr, triggerWalletRefresh } = useChat();
-  const { connectors, connect, isPending } = useConnect();
 
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [claimed, setClaimed] = useState(false);
+  const [picker, setPicker] = useState(false);
   const [dismissed, setDismissed] = useState(true); // assume dismissed until we read storage (avoids flash)
 
   useEffect(() => {
@@ -49,13 +49,8 @@ export default function ClaimBanner() {
     try { localStorage.setItem(DISMISS_KEY, "1"); } catch {}
   }
 
-  function connectWallet() {
-    const cb = connectors.find((c) => c.id === "coinbaseWalletSDK" || c.name.toLowerCase().includes("coinbase")) ?? connectors[0];
-    if (cb) connect({ connector: cb });
-  }
-
   async function claim() {
-    if (!walletAddr) { connectWallet(); return; }
+    if (!walletAddr) { setPicker(true); return; }
     setBusy(true); setMsg("");
     try {
       const r = await fetch("/api/credits/claim", {
@@ -106,10 +101,10 @@ export default function ClaimBanner() {
         </div>
 
         {!showSuccess && (
-          <button onClick={claim} disabled={busy || isPending}
+          <button onClick={claim} disabled={busy}
             className="shrink-0 font-mono text-[11px] font-bold px-3.5 py-1.5 rounded-lg disabled:opacity-60 transition-opacity hover:opacity-90"
             style={{ background: "#4FC3F7", color: "#050508" }}>
-            {busy || isPending ? "…" : walletAddr ? "Claim" : "Connect & claim"}
+            {busy ? "…" : walletAddr ? "Claim" : "Connect & claim"}
           </button>
         )}
 
@@ -118,6 +113,9 @@ export default function ClaimBanner() {
           ✕
         </button>
       </div>
+
+      {/* Shared wallet picker — same list/UX as every other connect surface. */}
+      <WalletPickerModal open={picker} onClose={() => setPicker(false)} />
     </div>
   );
 }

@@ -27,7 +27,7 @@ import type { TickerSnapshot } from "@/lib/blue-hood/types";
 import { RWA_TOKENS } from "@/lib/robinhood/rwa-registry";
 
 const RH_CHAIN_ID = 4663;
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const RED = "#ef4444";
 const AMBER = "#f5b342";
 const MUTED = "#6a7080";

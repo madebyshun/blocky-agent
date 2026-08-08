@@ -10,6 +10,8 @@
     "hood:smoke": "tsx scripts/blue-hood-smoke.ts",
     "hood:kick-crons": "tsx scripts/hood-kick-crons.ts",
     "tg:set-webhook": "tsx scripts/tg-set-webhook.ts",
+    "sync:soul": "tsx scripts/sync-soul.ts",
+    "test:ledger": "tsx scripts/ledger-race-test.ts",
     "verify:build": "NEXT_DIST_DIR=.next-verify next build"
   },
   "dependencies": {

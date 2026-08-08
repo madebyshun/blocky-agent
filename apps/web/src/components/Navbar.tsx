@@ -5,10 +5,13 @@ import { usePathname } from "next/navigation";
 import LanguageToggle from "@/components/LanguageToggle";
 import { useLang } from "@/lib/i18n/context";
 
+// `soul` was `skills` → `/skills` until 2026-08. The page is the SOUL.md
+// identity spec, and /skills now belongs to the app's installed-skill catalog
+// (app.blueagent.dev/skills), so both the label and the path moved.
 const NAV_LINKS = [
-  { key: "about",  href: "/about" },
-  { key: "skills", href: "/skills" },
-  { key: "docs",   href: "/docs" },
+  { key: "about", href: "/about" },
+  { key: "soul",  href: "/soul" },
+  { key: "docs",  href: "/docs" },
 ];
 
 export default function Navbar() {

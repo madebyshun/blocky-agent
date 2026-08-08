@@ -36,33 +36,19 @@ const NAV_TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
       </svg>
     ),
   },
-  {
-    id: "skills",
-    label: "Skills",
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
-          d="M13 10V3L4 14h7v7l9-11h-7z" />
-      </svg>
-    ),
-  },
-  {
-    id: "connectors",
-    label: "Connectors",
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
-          d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 10-5.656-5.656l-1.1 1.1" />
-      </svg>
-    ),
-  },
-  // Settings is no longer a tab here — it opens as a modal from the footer
-  // account chip (ChatGPT/Claude pattern). See SettingsModal + onOpenSettings.
+  // Skills + Connectors are NOT tabs here any more (2026-08, AgentOS Control).
+  // Both were promoted to shell pages (/skills, /connectors) that render the
+  // exact same panels, so listing them here too put one catalog behind two
+  // different navs. The shell's Control group is now their single home.
+  // Settings is also not a tab — it opens as a modal from the footer account
+  // chip (ChatGPT/Claude pattern). See SettingsModal + onOpenSettings.
 ];
 
-// The labeled action rows shown under "New chat" (skills · tools · scheduled).
-// "chat" is excluded — the conversation list itself is the chat surface.
-const ACTION_ORDER: ActiveTab[] = ["models", "skills", "connectors"];
+// The labeled action rows shown under "New chat". "chat" is excluded — the
+// conversation list itself is the chat surface. Models stays because it is a
+// per-conversation setting (the ChatInput dropdown is its primary control;
+// this row opens the expanded comparison view), not a shared catalog.
+const ACTION_ORDER: ActiveTab[] = ["models"];
 const ACTION_ITEMS = ACTION_ORDER
   .map(id => NAV_TABS.find(t => t.id === id))
   .filter((t): t is (typeof NAV_TABS)[number] => Boolean(t));

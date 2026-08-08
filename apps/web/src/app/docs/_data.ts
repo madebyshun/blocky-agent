@@ -1,50 +1,55 @@
 // Shared data for the Blue Agent docs. Single source of truth so each docs page
 // stays thin and the numbers don't drift across pages.
 
+import { TOOL_COUNT } from "@/lib/agent-tools";
+
 export const STATS = [
-  { value: "74", label: "Hub Tools",  color: "#4FC3F7" },
-  { value: "70", label: "x402 Tools", color: "#34D399" },
-  { value: "57", label: "MCP Tools",  color: "#A78BFA" },
-  { value: "3",  label: "Agents",     color: "#fbbf24" },
+  // Hub-tool count is dynamic (TOOL_COUNT). Every Hub tool is now x402, so the old
+  // "x402 Tools" subset stat collapsed into Hub Tools — replaced with Commands (5)
+  // to keep four distinct, non-redundant numbers.
+  { value: String(TOOL_COUNT), label: "Hub Tools", color: "#4FC3F7" },
+  { value: "5",                label: "Commands",  color: "#34D399" },
+  { value: "57",               label: "MCP Tools", color: "#A78BFA" },
+  { value: "3",                label: "Agents",    color: "#fbbf24" },
 ];
 
 export const PRODUCTS = [
-  { name: "Blue Hood", color: "#22C55E", desc: "RH Chain copilot · Chainlink vs DEX drift · non-custodial trading",       link: "/app/hood", label: "Open Hood →" },
+  { name: "Blue Hood", color: "#34D399", desc: "RH Chain copilot · Chainlink vs DEX drift · non-custodial trading",       link: "/app/hood", label: "Open Hood →" },
   { name: "Blue Chat", color: "#A78BFA", desc: "AI agent chat · multi-model · skill-based · Built for RH + Base",         link: "/app/chat", label: "Open Chat →" },
-  { name: "Blue Hub",  color: "#4FC3F7", desc: "74 AI tools · 3-agent consensus · x402 pay-per-call · no API key",        link: "/app/hub",  label: "Open Hub →" },
+  { name: "Blue Hub",  color: "#4FC3F7", desc: `${TOOL_COUNT} AI tools · 3-agent consensus · x402 pay-per-call · no API key`, link: "/app/hub",  label: "Open Hub →" },
 ];
 
 export const FOUNDATION = [
   { label: "Venice AI",  desc: "Primary LLM for x402 handlers + web search",       color: "#4FC3F7" },
   { label: "Virtuals",   desc: "RH-native inference for Blue Hood arrow briefs",   color: "#22C55E" },
-  { label: "x402",       desc: "Pay per call in USDC (Base) / USDG (RH Chain)",    color: "#34D399" },
+  { label: "x402",       desc: "Pay per call in USDC on Base — EIP-3009 via CDP",  color: "#34D399" },
   { label: "RH Chain",   desc: "Robinhood Chain (chain ID 4663) — RWA trading",    color: "#22C55E" },
   { label: "Base",       desc: "Base (chain ID 8453) — builder + token surface",   color: "#2563EB" },
   { label: "Moralis",    desc: "Wallet data, token holdings, tx history",          color: "#fbbf24" },
 ];
 
+// One preset per use-case — kept 1:1 with VIRTUALS_PRESETS_V1 in
+// app/chat/components/ChatInput.tsx (the authoritative picker). All inference
+// runs on Virtuals; update both sites together.
 export const CHAT_MODELS = [
-  { icon: "💬", label: "Chat",       model: "Sonnet",       note: "Balanced default · 200K ctx",  cr: "50 cr",  color: "#4FC3F7" },
-  { icon: "⚡", label: "Fast",        model: "DeepSeek V4",  note: "Cheapest · 1M ctx",            cr: "10 cr",  color: "#34D399" },
-  { icon: "🎯", label: "RH Native",   model: "Virtuals",     note: "Robinhood Chain inference",    cr: "40 cr",  color: "#22C55E" },
-  { icon: "🔍", label: "Web Search",  model: "Grok 4",       note: "Live multi-source web",        cr: "60 cr",  color: "#E879F9" },
-  { icon: "🔬", label: "Deep Think",  model: "Opus",         note: "Heavy reasoning + web",        cr: "200 cr", color: "#A78BFA" },
-  { icon: "✍️", label: "Fable 5",     model: "Claude Fable", note: "Creative · 1M ctx",            cr: "120 cr", color: "#F472B6" },
-  { icon: "🔒", label: "Private",     model: "Gemma 27B",    note: "E2EE · no logs",               cr: "30 cr",  color: "#6EE7B7" },
+  { icon: "💬", label: "Balanced", model: "Claude Sonnet 5",    note: "Default for most work · 200K ctx", cr: "50 cr",  color: "#4FC3F7" },
+  { icon: "⚡", label: "Fast",     model: "DeepSeek V4 Flash",  note: "Cheapest · snappy · 1M ctx",       cr: "10 cr",  color: "#34D399" },
+  { icon: "🔬", label: "Deep",     model: "Claude Opus 4.8",    note: "Heavy reasoning · 200K ctx",       cr: "200 cr", color: "#A78BFA" },
+  { icon: "🔍", label: "Grok",     model: "Grok 4",             note: "Live web · 2M ctx",                cr: "60 cr",  color: "#E879F9" },
+  { icon: "🔒", label: "Private",  model: "E2EE DeepSeek V4",   note: "E2EE · no logs · 1M ctx",          cr: "30 cr",  color: "#6EE7B7" },
 ];
 
 export const CHAT_CAPABILITIES = [
   { t: "Slash commands", d: "/idea /build /audit /ship /raise · /pick /scan /wallet — same power as the CLI, inline." },
-  { t: "Hub tools",      d: "Live token prices, whale flow, risk gate, wallet PnL — 68 Hub tools the model calls for you." },
+  { t: "Hub tools",      d: "Live token prices, whale flow, risk gate, wallet PnL — the Hub tools the model calls for you." },
   { t: "Personas",       d: "Swap the agent's expert role (Trader · Cipher · Oracle · Custom) without changing the model." },
-  { t: "Web search",     d: "Toggle on to let the model pull live web data and cite sources (auto-on for Web Search / Deep Think)." },
+  { t: "Web search",     d: "Toggle on to let the model pull live web data and cite sources (the Grok preset is built for live web)." },
 ];
 
 export const TIERS = [
-  { tier: "Guest",   need: "No wallet", perk: "100 cr/day · ~10 messages", color: "#64748b" },
-  { tier: "Starter", need: "500K BLUE", perk: "500 cr/day",                color: "#4FC3F7" },
-  { tier: "Pro",     need: "2M BLUE",   perk: "2,000 cr/day",              color: "#A78BFA" },
-  { tier: "Max",     need: "10M BLUE",  perk: "10,000 cr/day · 40% off",   color: "#F59E0B" },
+  { tier: "Guest",  need: "No wallet",    perk: "100 cr/day · ~10 messages",       color: "#64748b" },
+  { tier: "Member", need: "Any wallet",   perk: "500 cr/day · no token needed",    color: "#4FC3F7" },
+  { tier: "Packs",  need: "USDC on Base", perk: "Top up anytime · pay-per-credit", color: "#F59E0B" },
 ];
 
 export const CORE_COMMANDS = [
@@ -106,7 +111,7 @@ export const SKILLS_DOCS = [
   { file: "base-ecosystem.md",                desc: "Base ecosystem overview — key protocols, teams, infrastructure." },
   { file: "base-account-integration.md",      desc: "Coinbase Smart Wallet — ERC-4337, passkeys, sponsored txs." },
   { file: "account-abstraction-deep-dive.md", desc: "ERC-4337 deep dive — UserOps, bundlers, paymasters, EntryPoint." },
-  { file: "x402-tools.md",                    desc: "The full 74-tool x402 hub — pricing, inputs, and how agents call each one." },
+  { file: "x402-tools.md",                    desc: `The full ${TOOL_COUNT}-tool x402 hub — pricing, inputs, and how agents call each one.` },
   { file: "blue-agent-identity.md",           desc: "Blue Agent mission, product voice, do/don't rules." },
   { file: "design-system.md",                 desc: "Visual language, colors, card patterns, spacing." },
   { file: "x402-patterns.md",                 desc: "x402 payment patterns — pay-per-call APIs, pricing, flow." },

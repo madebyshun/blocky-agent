@@ -13,8 +13,8 @@
  *   • bg #050508  · surface #0B0D13 · border #1A1A2E
  *   • font-mono for every number
  *   • section headers `// HOOD · <SECTION>` in slate-500 tracking-widest
- *   • Robinhood green #00C805 is THIS page's interactive accent (spec:
- *     "this section's own accent"); blue #4FC3F7 shows only in the
+ *   • Blue Hood green #34D399 (emerald) is THIS page's interactive accent
+ *     (spec: "this section's own accent"); blue #4FC3F7 shows only in the
  *     footer "powered by 30 Blue Hub skills" attribution.
  *
  * Two data fetches, both `no-store`:
@@ -40,7 +40,7 @@ import { WatchlistProvider, useWatchlist } from "./WatchlistProvider";
 import { WATCHLIST_LIMITS } from "@/lib/blue-hood/watchlist-config";
 
 const REFRESH_MS = 15_000;
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
 const AMBER = "#f5b342";
 const RED = "#ef4444";

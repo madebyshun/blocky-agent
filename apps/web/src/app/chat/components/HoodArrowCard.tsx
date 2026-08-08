@@ -11,7 +11,7 @@
  * the raw arrow record.
  *
  * Design tokens follow Blue Hood: bg #050508, surface #0B0D13,
- * border #1A1A2E, RH_GREEN #00C805, mono JetBrains. This card is
+ * border #1A1A2E, RH_GREEN #34D399, mono JetBrains. This card is
  * rendered OUTSIDE `.hood-section` (chat context) so it re-declares
  * the mono family locally rather than relying on inherit.
  */
@@ -22,7 +22,7 @@ import Link from "next/link";
 import { useState } from "react";
 import ReviewSignPanel from "@/components/blue-hood/ReviewSignPanel";
 
-const RH_GREEN = "#00C805";
+const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
 const AMBER = "#f5b342";
 const MUTED = "#6b7280";

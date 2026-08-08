@@ -6,6 +6,7 @@
 // extend the /api/chat body (integration toggles + enabled-skill prompt).
 
 import { useEffect, useState } from "react";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 export interface InstalledSkill {
   name: string;
@@ -29,9 +30,9 @@ function emit() { if (isClient) window.dispatchEvent(new Event(EVENT)); }
 const DEFAULT_SKILLS: InstalledSkill[] = [
   {
     name: "blueagent",
-    description: "70 x402 AI tools for Base — intelligence, security, DeFi, builder.",
+    description: `${TOOL_COUNT} x402 AI tools for Base — intelligence, security, DeFi, builder.`,
     url: "https://github.com/BankrBot/skills/tree/main/blueagent",
-    content: "BlueAgent: 70 pay-per-use x402 tools on Base. Use hub_token_price for prices, hub_risk_gate / hub_honeypot for safety, and the hub_* tools for intelligence, DeFi, and builder workflows.",
+    content: `BlueAgent: ${TOOL_COUNT} pay-per-use x402 tools on Base. Use hub_token_price for prices, hub_risk_gate / hub_honeypot for safety, and the hub_* tools for intelligence, DeFi, and builder workflows.`,
     enabled: true, installedAt: 0, default: true,
   },
   {

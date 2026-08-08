@@ -4,28 +4,26 @@ import Link from "next/link";
 import { useChat } from "../ChatContext";
 import { getMemory, clearMemory } from "@/lib/memory";
 import WalletBar from "@/components/WalletBar";
+import TopUpModal from "@/components/TopUpModal";
 import PersonaSelector from "./PersonaSelector";
 
 // The settings categories — Claude-style two-pane modal. The modal owns the
 // left nav + active section; this panel renders the matching content.
 export type SettingsSection = "account" | "credits" | "persona" | "memory" | "about";
 
-// $BLUEAGENT — Base, Uniswap v4 (CLAUDE.md). Shown in About with copy.
-const BLUE_CONTRACT = "0xf895783b2931c919955e18b5e3343e7c7c456ba3";
 const LINKS: { label: string; sub: string; href: string }[] = [
-  { label: "X / Twitter", sub: "@blueagent_",              href: "https://x.com/blueagent_" },
-  { label: "Telegram",    sub: "t.me/blueagent_hub",       href: "https://t.me/blueagent_hub" },
-  { label: "Bankr",       sub: "bankr.bot/agents/blue-agent", href: "https://bankr.bot/agents/blue-agent" },
+  { label: "Website",     sub: "blueagent.dev",      href: "https://blueagent.dev" },
+  { label: "X / Twitter", sub: "@blueagent_",        href: "https://x.com/blueagent_" },
+  { label: "Telegram",    sub: "t.me/blueagent_hub", href: "https://t.me/blueagent_hub" },
 ];
 
-// Tier ladder — mirrors lib/credits.ts TIERS + GUEST_DAILY. Shown in the
-// "How credits & tiers work" explainer so users understand why to connect and
-// the hold-OR-stake model (both count toward your tier).
+// Credit ladder — mirrors lib/credits.ts GUEST_DAILY / WALLET_DAILY. Shown in
+// the "How credits work" explainer. Token-free: a free daily bucket for everyone
+// (bigger the moment you connect any wallet), then USDC credit packs for more.
 const TIER_ROWS: { need: string; tier: string; perk: string; color: string }[] = [
-  { need: "No wallet", tier: "Guest",   perk: "100 cr/day",   color: "#64748b" },
-  { need: "500K BLUE", tier: "Starter", perk: "500 cr/day",   color: "#4FC3F7" },
-  { need: "2M BLUE",   tier: "Pro",     perk: "2,000 cr/day", color: "#A78BFA" },
-  { need: "10M BLUE",  tier: "Max",     perk: "10,000 cr/day · 40% off",  color: "#F59E0B" },
+  { need: "No wallet",    tier: "Guest",  perk: "100 cr/day",     color: "#64748b" },
+  { need: "Any wallet",   tier: "Member", perk: "500 cr/day",     color: "#4FC3F7" },
+  { need: "USDC on Base", tier: "Packs",  perk: "Top up anytime", color: "#F59E0B" },
 ];
 
 // Section content header — mirrors Claude's right-pane title + subtitle.
@@ -44,23 +42,15 @@ function PaneHeader({ title, subtitle, right }: { title: string; subtitle?: stri
 export default function SettingsPanel({ section }: { section: SettingsSection }) {
   const {
     holderTier,
-    walletAddr, onWalletChange, walletRefresh,
+    walletAddr, onWalletChange, walletRefresh, triggerWalletRefresh,
     credits, countdown, isUnlimited, daily,
-    setBuyOpen,
   } = useChat();
 
-  const [showHelp, setShowHelp] = useState(false);
-  const [copied, setCopied]     = useState(false);
+  const [showHelp, setShowHelp]   = useState(false);
+  const [topUpOpen, setTopUpOpen] = useState(false);
 
   const memory    = getMemory(walletAddr);
   const hasMemory = !!(memory.currentProject || memory.commandHistory.length > 0);
-
-  function copyContract() {
-    navigator.clipboard?.writeText(BLUE_CONTRACT).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }).catch(() => {});
-  }
 
   return (
     <div className="px-5 sm:px-7 py-6">
@@ -70,22 +60,9 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
         <>
           <PaneHeader
             title="Account"
-            subtitle="Your Base wallet sets your tier, credits and discounts."
+            subtitle="Connect any Base wallet for a bigger daily credit allowance — no token needed."
           />
           <WalletBar onWalletChange={onWalletChange} refreshTrigger={walletRefresh} />
-          {holderTier.blueBalance > 0 && (
-            <div
-              className="mt-4 px-3.5 py-2.5 rounded-xl font-mono text-[13px] font-semibold flex items-center justify-between"
-              style={{ background: `${holderTier.color}12`, color: holderTier.color, border: `1px solid ${holderTier.color}25` }}
-            >
-              <span>{holderTier.tier} tier</span>
-              <span>
-                {holderTier.blueBalance >= 1_000_000
-                  ? `${(holderTier.blueBalance / 1_000_000).toFixed(1)}M`
-                  : `${(holderTier.blueBalance / 1_000).toFixed(0)}K`} BLUE
-              </span>
-            </div>
-          )}
 
           {/* Network + explorer — only meaningful once connected. */}
           {walletAddr && (
@@ -115,7 +92,7 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
         <>
           <PaneHeader
             title="Credits"
-            subtitle="Every message spends credits. Hold or stake $BLUEAGENT to level up."
+            subtitle="Every message spends credits. Connect any wallet for more each day, or top up with USDC."
             right={
               <span
                 className="font-mono text-[10px] px-2 py-0.5 rounded border font-semibold shrink-0"
@@ -146,13 +123,8 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-[10px] text-slate-600">
-                    {isUnlimited ? "Dev mode · no metering" : "Daily tier allowance + staked accrual"}
+                    {isUnlimited ? "Dev mode · no metering" : "Daily allowance + USDC top-ups"}
                   </span>
-                  {holderTier.discount > 0 && (
-                    <span className="font-mono text-[10px]" style={{ color: holderTier.color }}>
-                      {Math.round(holderTier.discount * 100)}% off
-                    </span>
-                  )}
                 </div>
               </>
             ) : (
@@ -183,40 +155,21 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
 
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-[10px] text-slate-600">resets in {countdown}</span>
-                  {holderTier.discount > 0 && (
-                    <span className="font-mono text-[10px]" style={{ color: holderTier.color }}>
-                      {Math.round(holderTier.discount * 100)}% off
-                    </span>
-                  )}
                 </div>
               </>
             )}
           </div>
 
-          {/* Next-tier hint — "Hold or stake" because tier = effective balance
-              (wallet balanceOf + staked); both paths count. */}
-          {holderTier.nextTier && walletAddr && (
-            <p className="font-mono text-[10px] text-slate-700 mb-3 leading-relaxed">
-              Hold or stake{" "}
-              <span className="text-slate-500">
-                {holderTier.nextTier.need >= 1_000_000
-                  ? `${(holderTier.nextTier.need / 1_000_000).toFixed(1)}M`
-                  : `${(holderTier.nextTier.need / 1_000).toFixed(0)}K`} BLUE
-              </span>
-              {" "}→ earn{" "}
-              <span style={{ color: holderTier.color }}>
-                {holderTier.nextTier.dailyCr.toLocaleString()} cr/day
-              </span>
-            </p>
-          )}
-
+          {/* Top up with USDC — opens the non-custodial pack picker */}
           <button
-            onClick={() => setBuyOpen(true)}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-mono text-[13px] font-semibold transition-all hover:opacity-90 active:scale-[0.98]"
-            style={{ background: "#F59E0B12", color: "#F59E0B", border: "1px solid #F59E0B30" }}
+            onClick={() => setTopUpOpen(true)}
+            className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl hover:opacity-90 transition-opacity"
+            style={{ background: "#4FC3F7", color: "#050508" }}
           >
-            💰 Buy $BLUEAGENT
+            Top up with USDC
           </button>
+
+          <TopUpModal open={topUpOpen} onClose={() => setTopUpOpen(false)} onCredited={triggerWalletRefresh} />
 
           {/* How credits & tiers work — inline explainer */}
           <button
@@ -230,9 +183,9 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
           {showHelp && (
             <div className="mt-2 rounded-2xl bg-[#0A0A12] border border-[#1A1A2E] p-4 space-y-3">
               <p className="font-mono text-[10px] text-slate-500 leading-relaxed">
-                With no wallet you get <span className="text-[#4FC3F7]">100 free credits/day</span> (~10 messages). Hold $BLUEAGENT to step up a tier and unlock tools.
-                Your tier — and how many credits you get — is set by your <span className="text-slate-300">$BLUEAGENT</span>,
-                and <span className="text-slate-300">holding or staking both count</span>.
+                With no wallet you get <span className="text-[#4FC3F7]">100 free credits/day</span> (~10 messages). Connect
+                <span className="text-slate-300"> any wallet — no token needed</span> — for <span className="text-[#4FC3F7]">500 credits/day</span>.
+                Need more than the daily bucket? Top up with a <span className="text-slate-300">USDC credit pack</span> on Base.
               </p>
 
               <div className="rounded-xl border border-[#1A1A2E] overflow-hidden">
@@ -252,15 +205,16 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
               </div>
 
               <p className="font-mono text-[10px] text-slate-600 leading-relaxed">
-                <span className="text-slate-400">Staking</span> is the better path: it counts toward your tier
-                AND accrues extra credits + a share of x402 revenue (USDC) over time. Holding only sets your tier.
+                The daily bucket is <span className="text-slate-400">use-it-or-lose-it</span> and refreshes every 24h.
+                A <span className="text-slate-400">USDC top-up</span> adds to a cumulative pool that carries over. Hub tools
+                stay pay-per-call in USDC — no token, no subscription.
               </p>
 
               <Link
-                href="/dashboard?tab=stake"
+                href="/docs/credits"
                 className="inline-flex items-center gap-1.5 font-mono text-[11px] font-semibold text-[#A78BFA] hover:opacity-80 transition-opacity"
               >
-                Stake $BLUEAGENT on the dashboard →
+                How credits &amp; USDC packs work →
               </Link>
             </div>
           )}
@@ -329,19 +283,13 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
             subtitle="Blue Agent — the AI agent layer on Base."
           />
 
-          {/* $BLUEAGENT token */}
+          {/* What Blue Chat is — token-free */}
           <div className="rounded-2xl bg-[#0A0A12] border border-[#1A1A2E] p-4 mb-3">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="font-mono text-[11px] text-slate-300 font-semibold">$BLUEAGENT</span>
-              <button
-                onClick={copyContract}
-                className="font-mono text-[10px] text-slate-600 hover:text-[#4FC3F7] transition-colors"
-              >
-                {copied ? "copied ✓" : "copy"}
-              </button>
-            </div>
-            <p className="font-mono text-[10px] text-slate-500 break-all leading-relaxed">{BLUE_CONTRACT}</p>
-            <p className="font-mono text-[10px] text-slate-700 mt-1">Base · Uniswap v4</p>
+            <p className="font-mono text-[11px] text-slate-300 leading-relaxed">
+              The onchain agent console. Free daily credits — connect any wallet for more.
+              Pay-per-use with <span className="text-[#4FC3F7]">USDC on Base</span> for Hub tools and top-ups.
+            </p>
+            <p className="font-mono text-[10px] text-slate-600 mt-2">No token to hold · nothing to stake · no subscription.</p>
           </div>
 
           {/* Links */}

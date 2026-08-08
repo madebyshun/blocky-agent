@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -13,28 +14,28 @@ const SURFACES = [
     desc: "The flagship copilot for Robinhood Chain. 24/7 non-custodial arbitrage between Chainlink oracles and DEX pools. Review-and-sign trading — every arrow is user-signed, no session keys.",
     link: "/app/hood",
     linkLabel: "Open Hood →",
-    color: "#22C55E",
+    color: "#34D399",
     stats: [{ label: "Chain", value: "RH 4663" }, { label: "Signing", value: "Non-custodial" }],
   },
   {
     icon: "💬",
     name: "Blue Chat",
     handle: "blueagent.dev/app/chat",
-    desc: "Multi-model AI chat wired to live Base + RH Chain intelligence, tool execution, artifacts, and share links. Stake BLUE → earn credits → unlock tools.",
+    desc: "Multi-model AI chat wired to live Base + RH Chain intelligence, tool execution, artifacts, and share links. Your wallet is your identity — pay per tool call via x402.",
     link: "/app/chat",
     linkLabel: "Open Chat →",
     color: "#4FC3F7",
-    stats: [{ label: "Models", value: "6" }, { label: "Access", value: "Stake · Earn" }],
+    stats: [{ label: "Models", value: "6" }, { label: "Access", value: "Free tier" }],
   },
   {
     icon: "🛠️",
     name: "Blue Hub",
     handle: "blueagent.dev/app/hub",
-    desc: "74 pay-per-use AI tools for Base + RH Chain builders and agents. idea → build → audit → ship → raise. Pay per call in USDC (Base) or USDG (Robinhood Chain) via x402.",
+    desc: `${TOOL_COUNT} pay-per-use AI tools for Base + RH Chain builders and agents. idea → build → audit → ship → raise. Pay per call in USDC on Base via x402.`,
     link: "/app/hub",
     linkLabel: "Open Hub →",
     color: "#A78BFA",
-    stats: [{ label: "Tools", value: "74" }, { label: "Commands", value: "5 core" }],
+    stats: [{ label: "Tools", value: String(TOOL_COUNT) }, { label: "Commands", value: "5 core" }],
   },
   {
     icon: "⚡",
@@ -53,8 +54,8 @@ const ROADMAP = [
     period: "Mar–Jun 2026",
     status: "done",
     items: [
-      { done: true, text: "$BLUEAGENT — Base, Uniswap v4, stake → credits + USDC yield" },
-      { done: true, text: "Blue Hub — 74 x402 tools, pay-per-call in USDC/USDG" },
+      { done: true, text: "Web-native relaunch — onchain Agent OS console, non-custodial by default" },
+      { done: true, text: `Blue Hub — ${TOOL_COUNT} x402 tools, pay-per-call in USDC on Base` },
       { done: true, text: "Blue Chat — multi-model AI, artifacts, public share links" },
       { done: true, text: "Blue Bank — send, swap, yield, invoices, QR pay (archived 2026-07)" },
       { done: true, text: "MCP Server — 57 tools, full x402 catalog parity" },
@@ -70,12 +71,11 @@ const ROADMAP = [
       { done: true,  text: "Blue Hood — See · Explain · Alert · Act on RH Chain (chainId 4663)" },
       { done: true,  text: "Market-aware grader — arrows scored in NYSE regular hours only" },
       { done: true,  text: "RH RWA Phases 1–7 — registry, market analytics, trading, portfolio, discovery, agent skills, bridge/builder kit" },
-      { done: true,  text: "USDG-native pricing — pay-per-call in USDG on RH · USDC on Base" },
+      { done: true,  text: "x402 pay-per-call — RH + Base tools billed in USDC on Base" },
       { done: false, text: "Blue Hood reputation — arrow track record → public builder scores" },
-      { done: false, text: "Builder Registry — submit your tool, earn 95% in USDC/USDG" },
+      { done: false, text: "Builder Registry — submit your tool, earn 95% in USDC" },
       { done: false, text: "Tool discovery — search, rank by calls/revenue, verified badges" },
       { done: false, text: "Tool chains — compose multiple tools, one payment" },
-      { done: false, text: "Real yield — 20% Hub fees auto-route to staking pool" },
       { done: false, text: "Distribution — listed on Smithery, MCP.SO, CDP Bazaar, RH Agentic Directory" },
     ],
   },
@@ -86,16 +86,16 @@ const ROADMAP = [
       { done: false, text: "Public API — api.blueagent.dev, the Stripe of AI tools on Base + RH" },
       { done: false, text: "Cross-agent routing — best agent + tool per intent" },
       { done: false, text: "Agent registry — directory of active buyer agents" },
-      { done: false, text: "Tool creator rewards — top tools earn weekly in USDC/USDG" },
+      { done: false, text: "Tool creator rewards — top tools earn weekly in USDC" },
       { done: false, text: "Cobalt-ready — gas in B20, account abstraction support" },
     ],
   },
 ];
 
 const STATS = [
-  { value: "74",     label: "AI Tools",       color: "#4FC3F7" },
-  { value: "74",     label: "API Endpoints",  color: "#A78BFA" },
-  { value: "RH+Base", label: "Chains",        color: "#22C55E" },
+  { value: String(TOOL_COUNT), label: "AI Tools",      color: "#4FC3F7" },
+  { value: String(TOOL_COUNT), label: "API Endpoints", color: "#A78BFA" },
+  { value: "RH+Base", label: "Chains",        color: "#34D399" },
   { value: "x402",   label: "Payment rail",   color: "#F59E0B" },
 ];
 
@@ -133,8 +133,8 @@ export default function AboutPage() {
           </div>
 
           <h1 className="text-5xl sm:text-6xl font-bold tracking-tight mb-6 leading-tight">
-            The Builder OS<br />
-            <span className="text-[#4FC3F7]">for Robinhood Chain</span>
+            The onchain<br />
+            <span className="text-[#4FC3F7]">Agent OS</span>
           </h1>
 
           <p className="text-slate-400 text-lg max-w-2xl mx-auto leading-relaxed mb-12">
@@ -179,7 +179,7 @@ export default function AboutPage() {
               Blue Agent started as a Telegram bot — a simple idea to bring AI
               and onchain actions together on Base. It outgrew the chat window.
               So we rebuilt it from scratch, web-native, on Base. Since March 2026,
-              it&apos;s grown into the Builder OS for Base.
+              it&apos;s grown into the onchain Agent OS.
             </p>
             <p>
               AI tools should work like onchain transactions — instant, composable, paid exactly for what you use.
@@ -187,17 +187,17 @@ export default function AboutPage() {
               x402 makes that possible: one HTTP header, one USDC micropayment, one tool call.
             </p>
             <p>
-              We built Blue Hub around that primitive — 78 tools covering everything a Base builder needs:
+              We built Blue Hub around that primitive — {TOOL_COUNT} tools covering everything a Base builder needs:
               token analysis, security audits, launch simulation, grant discovery, DeFi yield, whale signals.
               Every tool is a live API endpoint. Agents and developers call them directly, pay in USDC, get structured data back.
             </p>
             <p>
               Blue Chat layers on top — a multi-model AI interface where your wallet is your identity.
-              Stake <span className="text-white font-mono text-sm">$BLUEAGENT</span> to earn daily credits.
-              Credits unlock tools. Tools generate value. The loop closes onchain.
+              Every tool call settles as an x402 micropayment: no subscription, no seats, pay only for
+              what you run. Value flows to the builders behind each tool, and the loop closes onchain.
             </p>
             <p className="text-slate-300">
-              MCP makes the whole stack agent-native: 70+ tools plug directly into Claude Desktop and Cursor,
+              MCP makes the whole stack agent-native: 57 tools plug directly into Claude Desktop and Cursor,
               no API key, no setup. The same tools that power Blue Chat run inside your IDE.
               One platform. Three surfaces. Built on Base.
             </p>
@@ -249,78 +249,10 @@ export default function AboutPage() {
           </div>
         </section>
 
-        {/* ══ TOKEN ════════════════════════════════════════════════════════════ */}
-        <section className="max-w-5xl mx-auto px-6 py-20 border-t border-[#1A1A2E]">
-          <div className="text-center mb-14">
-            <SectionLabel>The Token</SectionLabel>
-            <h2 className="text-3xl font-bold">$BLUEAGENT on Base</h2>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Token info */}
-            <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] p-6">
-              <div className="font-mono text-[10px] text-slate-600 tracking-widest mb-5">TOKEN DETAILS</div>
-
-              <div className="space-y-3">
-                {[
-                  { label: "Name",       value: "$BLUEAGENT",                                                    color: "#4FC3F7" },
-                  { label: "Network",    value: "Base mainnet",                                                  color: "#2563EB" },
-                  { label: "DEX",        value: "Uniswap v4",                                                    color: "#FF007A" },
-                  { label: "Contract",   value: "0xf895...6ba3",                                                 color: "#94a3b8", mono: true },
-                  { label: "Treasury",   value: "0xf31f...ffe5",                                                 color: "#94a3b8", mono: true },
-                ].map(r => (
-                  <div key={r.label} className="flex items-center justify-between py-2 border-b border-[#1A1A2E] last:border-0">
-                    <span className="font-mono text-[11px] text-slate-600">{r.label}</span>
-                    <span className={`font-${r.mono ? "mono" : "semibold"} text-sm`} style={{ color: r.color }}>{r.value}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-3 mt-6">
-                <a href="https://basescan.org/token/0xf895783b2931c919955e18b5e3343e7c7c456ba3"
-                  target="_blank" rel="noopener noreferrer"
-                  className="flex-1 py-2.5 rounded-xl font-mono text-xs text-center border border-[#2a2a3e] text-slate-400 hover:text-white hover:border-[#4FC3F740] transition-all">
-                  Basescan ↗
-                </a>
-                <a href="https://dexscreener.com/base/0xf895783b2931c919955e18b5e3343e7c7c456ba3"
-                  target="_blank" rel="noopener noreferrer"
-                  className="flex-1 py-2.5 rounded-xl font-mono text-xs font-bold text-center transition-all hover:opacity-90"
-                  style={{ background: "#22C55E15", color: "#22C55E", border: "1px solid #22C55E30" }}>
-                  $BLUEAGENT ↗
-                </a>
-              </div>
-            </div>
-
-            {/* Staking flywheel */}
-            <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] p-6">
-              <div className="font-mono text-[10px] text-slate-600 tracking-widest mb-5">TOKEN UTILITY</div>
-
-              <div className="space-y-3 mb-6">
-                {[
-                  { step: "01", icon: "💎", title: "Hold $BLUEAGENT", desc: "500K → Starter · 2M → Pro · 10M → Max tier" },
-                  { step: "02", icon: "⚡", title: "Earn credits daily", desc: "Credits accrue on-chain every second you hold" },
-                  { step: "03", icon: "🛠️", title: "Use Blue Chat tools", desc: "AI tools, 3-agent consensus, deep research" },
-                  { step: "04", icon: "💵", title: "Earn USDC yield", desc: "Earn real USDC yield, claimed onchain" },
-                ].map(item => (
-                  <div key={item.step} className="flex gap-4 p-3 rounded-xl bg-[#0a0a0f] border border-[#1A1A2E]">
-                    <div className="font-mono text-[10px] text-slate-700 mt-0.5 w-4 shrink-0">{item.step}</div>
-                    <span className="text-base shrink-0">{item.icon}</span>
-                    <div>
-                      <div className="font-semibold text-sm text-white mb-0.5">{item.title}</div>
-                      <div className="font-mono text-[11px] text-slate-600">{item.desc}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <Link href="/app/rewards"
-                className="block w-full py-3 rounded-xl font-mono text-sm font-bold text-center transition-all hover:opacity-90"
-                style={{ background: "linear-gradient(135deg, #4FC3F7, #29ABE2)", color: "#050508", boxShadow: "0 0 20px #4FC3F725" }}>
-                ⚡ Stake & Earn →
-              </Link>
-            </div>
-          </div>
-        </section>
+        {/* ══ TOKEN section removed 2026-08 — token-hold / stake-to-earn narrative
+            retired from marketing; positioning is non-custodial Agent OS + x402
+            pay-per-call. $BLUEAGENT still exists on Base but is no longer a
+            marketing surface here. ══════════════════════════════════════════ */}
 
         {/* ══ ROADMAP ═══════════════════════════════════════════════════════════ */}
         <section className="max-w-3xl mx-auto px-6 py-20 border-t border-[#1A1A2E]">
@@ -373,7 +305,7 @@ export default function AboutPage() {
             style={{ boxShadow: "0 0 60px #4FC3F708" }}>
             <h2 className="text-3xl font-bold mb-4">Ready to trade Robinhood Chain?</h2>
             <p className="text-slate-500 mb-8 max-w-md mx-auto">
-              74 AI tools. 5 core commands. Blue Hood copilot 24/7. Non-custodial. RH + Base.
+              {TOOL_COUNT} AI tools. 5 core commands. Blue Hood copilot 24/7. Non-custodial. RH + Base.
             </p>
             <div className="flex items-center justify-center gap-4 flex-wrap">
               <Link href="/app/chat"
@@ -385,9 +317,9 @@ export default function AboutPage() {
                 className="px-8 py-3.5 rounded-xl font-mono text-sm border border-[#2a2a3e] text-slate-400 hover:text-white hover:border-[#4FC3F740] transition-all">
                 Explore Hub
               </Link>
-              <Link href="/app/rewards"
-                className="px-8 py-3.5 rounded-xl font-mono text-sm border border-[#4FC3F730] text-[#4FC3F7] hover:bg-[#4FC3F710] transition-all">
-                ⚡ Stake BLUE
+              <Link href="/app/hood"
+                className="px-8 py-3.5 rounded-xl font-mono text-sm border border-[#34D399]/30 text-[#34D399] hover:bg-[#34D399]/10 transition-all">
+                Open Blue Hood →
               </Link>
             </div>
           </div>

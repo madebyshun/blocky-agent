@@ -22,7 +22,9 @@ export const DOC_NAV: DocGroup[] = [
   ]},
   { group: "Knowledge", items: [
     { title: "Skills",      href: "/docs/skills" },
-    { title: "Aeon Skills", href: "/docs/aeon-skills" },
+    // Aeon Skills removed from nav 2026-08 (legacy narrative). The page at
+    // /docs/aeon-skills is left parked (still reachable by URL, no 404) — it
+    // is simply unlinked from the sidebar and the prev/next chain.
     { title: "Beryl / B20", href: "/docs/beryl" },
   ]},
   { group: "Platform", items: [

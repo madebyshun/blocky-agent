@@ -2,11 +2,12 @@ import type { Metadata, Viewport } from "next";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import Providers from "@/components/Providers";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 const SITE = "https://blueagent.dev";
-const TITLE = "BlueAgent — The Builder OS for Base";
+const TITLE = "BlueAgent — The onchain Agent OS";
 const DESCRIPTION =
-  "74 AI tools. Build, launch, and scale on Base. AI agent chat, x402 tools, and live Base intelligence.";
+  `${TOOL_COUNT} AI tools. Build, launch, and scale on Base. AI agent chat, x402 tools, and live Base intelligence.`;
 
 // Farcaster v2 mini-app embed — what Base App reads when blueagent.dev is
 // shared in a feed. Tap the button → launches /app/chat inside the wallet's

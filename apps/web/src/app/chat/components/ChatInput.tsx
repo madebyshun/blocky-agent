@@ -158,7 +158,7 @@ export default function ChatInput() {
     input, setInput, send, stop, streaming, outOfCredits,
     error, credits, cost, chatTier, holderTier, setChatTier,
     cmdMenu, setCmdMenu, cmdFilter, setCmdFilter,
-    setBuyOpen, webSearch, setWebSearch, pendingFiles, setPendingFiles,
+    webSearch, setWebSearch, pendingFiles, setPendingFiles,
     personaId, setPersonaId,
   } = useChat();
   const { t } = useLang();
@@ -476,38 +476,15 @@ export default function ChatInput() {
                   {credits} left · need {cost}/msg
                 </span>
               </div>
-              <button
-                onClick={() => setBuyOpen(true)}
-                className="font-mono text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all"
-                style={{ background: "#F59E0B18", color: "#F59E0B", border: "1px solid #F59E0B30" }}
-              >
-                Buy $BLUEAGENT →
-              </button>
+              <span className="font-mono text-[10px] text-slate-500">resets daily</span>
             </div>
-            <div className="flex items-center gap-4 px-4 py-2">
-              {/* Current tier */}
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: holderTier.color }} />
-                <span className="font-mono text-[10px]" style={{ color: holderTier.color }}>{holderTier.tier}</span>
-                <span className="font-mono text-[10px] text-slate-600">
-                  {holderTier.dailyCr.toLocaleString()} cr/day
-                </span>
-              </div>
-              {/* Arrow + next tier */}
-              {holderTier.nextTier && (
-                <>
-                  <span className="font-mono text-[10px] text-slate-700">→</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-[10px] text-slate-400 font-bold">{holderTier.nextTier.name}</span>
-                    <span className="font-mono text-[10px] text-slate-600">
-                      {holderTier.nextTier.dailyCr.toLocaleString()} cr/day
-                    </span>
-                    <span className="font-mono text-[9px] text-slate-700">
-                      (+{(holderTier.nextTier.need / 1_000_000).toFixed(1)}M BLUE)
-                    </span>
-                  </div>
-                </>
-              )}
+            <div className="flex items-center gap-2 px-4 py-2">
+              {/* Current daily allowance */}
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: holderTier.color }} />
+              <span className="font-mono text-[10px]" style={{ color: holderTier.color }}>{holderTier.tier}</span>
+              <span className="font-mono text-[10px] text-slate-600">
+                {holderTier.dailyCr.toLocaleString()} cr/day · USDC credit packs coming soon
+              </span>
             </div>
           </div>
         )}
@@ -539,7 +516,7 @@ export default function ChatInput() {
               value={input}
               onChange={(e) => handleInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={outOfCredits ? "No credits — get more $BLUEAGENT" : t("chat.placeholder")}
+              placeholder={outOfCredits ? "No credits left — resets daily" : t("chat.placeholder")}
               rows={1}
               disabled={streaming || outOfCredits}
               className="flex-1 resize-none bg-transparent outline-none font-mono text-sm text-white placeholder:text-slate-700 leading-relaxed"
