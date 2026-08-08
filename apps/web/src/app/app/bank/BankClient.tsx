@@ -5,8 +5,9 @@
 // (DefiLlama), real transactions (Moralis). Nothing is fabricated.
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useAccount, useReadContract, useBalance, useConnect } from "wagmi";
-import { useWalletDisconnect, clearUserDisconnected } from "@/lib/walletSession";
+import { useAccount, useReadContract, useBalance } from "wagmi";
+import { useWalletDisconnect } from "@/lib/walletSession";
+import { useWallet } from "@/hooks/useWallet";
 import { formatUnits } from "viem";
 import { QRCodeSVG } from "qrcode.react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
@@ -1210,29 +1211,22 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
   );
 }
 
-// Connect-wallet CTA
+// Connect-wallet CTA.
+//
+// The Coinbase-first funnel ("create a free wallet" → everything else behind a
+// toggle) is deliberate BlueBank onboarding and stays. What's gone is the local
+// copy of the connector plumbing — the de-dup, the icon map and the
+// clearUserDisconnected() call now come from useWallet, so this list can't
+// drift from the one every other surface shows.
 function ConnectButton() {
-  const { connectors, connect, isPending } = useConnect();
+  const { wallets, coinbase, connectWith, isPending } = useWallet();
   const [open, setOpen] = useState(false);
-
-  const coinbase = connectors.find(c => c.id === "coinbaseWalletSDK" || c.name.toLowerCase().includes("coinbase"));
-
-  const seen = new Set<string>();
-  const wallets = connectors.filter(c => { const k = c.name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-  const icon = (name: string) => {
-    const n = name.toLowerCase();
-    if (n.includes("coinbase")) return "🔵";
-    if (n.includes("metamask")) return "🦊";
-    if (n.includes("rabby")) return "🐰";
-    if (n.includes("phantom")) return "👻";
-    return "💼";
-  };
 
   return (
     <div className="relative">
       {coinbase && (
         <>
-          <button onClick={() => { clearUserDisconnected(); connect({ connector: coinbase }); }} disabled={isPending}
+          <button onClick={() => connectWith(coinbase.connector)} disabled={isPending}
             className="w-full font-mono text-[13px] font-bold py-3 rounded-xl transition-all disabled:opacity-60 flex items-center justify-center gap-2"
             style={{ background: "#4FC3F7", color: "#050508" }}>
             {isPending ? "Connecting…" : <>🔵 Create a free wallet</>}
@@ -1250,11 +1244,11 @@ function ConnectButton() {
         <>
           <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-xl border border-[#1A1A2E] bg-[#0A0A12] shadow-2xl overflow-hidden">
             <p className="font-mono text-[10px] text-slate-600 px-3 pt-3 pb-2 tracking-widest">SELECT WALLET</p>
-            {wallets.map(c => (
-              <button key={c.uid} onClick={() => { clearUserDisconnected(); connect({ connector: c }); setOpen(false); }}
+            {wallets.map(w => (
+              <button key={w.connector.uid} onClick={() => { connectWith(w.connector); setOpen(false); }}
                 className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-[#1A1A2E] transition-colors">
-                <span className="w-7 h-7 rounded-lg bg-[#1A1A2E] flex items-center justify-center text-base shrink-0">{icon(c.name)}</span>
-                <span className="font-mono text-xs text-slate-200">{c.name}</span>
+                <span className="w-7 h-7 rounded-lg bg-[#1A1A2E] flex items-center justify-center text-base shrink-0">{w.icon}</span>
+                <span className="font-mono text-xs text-slate-200">{w.name}</span>
               </button>
             ))}
           </div>

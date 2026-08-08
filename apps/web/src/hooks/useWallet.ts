@@ -71,6 +71,17 @@ export function useWallet() {
       }));
   }, [connectors]);
 
+  // Coinbase Smart Wallet gets split out because two surfaces (BlueBank, the
+  // /pay page) lead with it as a "create a free wallet — no seed phrase, no app
+  // to install" onboarding CTA and demote everything else behind an "I already
+  // have a wallet" toggle. They each used to re-derive this split with their own
+  // copy of the matcher; it lives here now so the funnel can't drift per page.
+  const coinbase = useMemo(
+    () => wallets.find((w) => w.connector.id === "coinbaseWalletSDK" || w.name.toLowerCase().includes("coinbase")),
+    [wallets],
+  );
+  const others = useMemo(() => wallets.filter((w) => w !== coinbase), [wallets, coinbase]);
+
   // Connect + clear the explicit-disconnect intent so BaseAppAutoConnect resumes
   // silent host-binding next session.
   const connectWith = useCallback((c: Connector) => {
@@ -87,6 +98,8 @@ export function useWallet() {
     basename,
     label,        // Basename if present, else short 0x… (undefined when no wallet)
     wallets,      // de-duped connector list with icon + subtitle
+    coinbase,     // the Smart Wallet entry, if available (the "free wallet" CTA)
+    others,       // `wallets` minus coinbase — the "I already have a wallet" list
     connectWith,  // connect({ connector }) + clear disconnect intent
     disconnect,   // records intent so auto-connect won't undo it
     isPending,    // a connect attempt is in flight

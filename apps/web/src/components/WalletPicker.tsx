@@ -4,13 +4,21 @@ import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 
 /**
- * WalletPickerModal — the SINGLE wallet-selection modal used everywhere.
+ * WalletPickerModal — the standard wallet-selection modal.
  *
  * Full-screen fixed overlay (z-200) so it's never clipped by an
  * `overflow:hidden` ancestor. Renders the de-duped connector list from
  * `useWallet()`, so the wallet list + icons are identical on every surface
- * (chat settings, claim banner, /app pages, pay page). Replaces the four
- * hand-rolled pickers that had drifted apart.
+ * (chat settings, claim banner, /app pages).
+ *
+ * Two surfaces don't use this modal: BlueBank (`/app/bank`) and the payment
+ * page (`/pay/[address]`) lead with a "create a free wallet" Coinbase CTA and
+ * hide the rest behind a toggle — onboarding design, not drift. Both are
+ * ARCHIVED as of 2026-07-24 (middleware 301s them to /chat), so their pickers
+ * are currently unreachable; they still read `coinbase`/`others`/`connectWith`
+ * from `useWallet()` rather than re-deriving the connector plumbing, so they'd
+ * be correct if the routes are ever un-archived. Nothing in the app derives a
+ * connector list locally anymore.
  */
 export function WalletPickerModal({
   open,
