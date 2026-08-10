@@ -238,6 +238,56 @@ export async function readSeriesDay(day: string): Promise<SeriesDay | null> {
 }
 
 /**
+ * The first UTC day this archive can possibly contain — the day the writer
+ * shipped (PR #263, merged 2026-08-10 03:01 UTC), so 20260810 itself is a
+ * PARTIAL day that starts mid-morning UTC.
+ *
+ * WHY THIS IS A CONSTANT AND NOT A LOOKUP: absence has two completely
+ * different meanings in this dataset and a reader cannot tell them apart from
+ * the data alone. Before this date the answer is "nobody was recording"; after
+ * it, "nothing priced that hour" — one is a gap in our coverage, the other is
+ * a fact about the market. A chart that renders both as the same empty space
+ * invents a flat market that never happened. Every read path must be able to
+ * say which one it is, so it is stated here once.
+ *
+ * There is NO backfill: the 25h ring buffer these points are derived from has
+ * long since dropped everything older, and no upstream sells the history back.
+ */
+export const SERIES_ARCHIVE_START = "20260810";
+
+/** One day's read outcome, kept distinct all the way to the caller. */
+export type SeriesDayRead =
+  | { day: string; status: "hit"; value: SeriesDay }
+  | { day: string; status: "miss" }
+  | { day: string; status: "error"; message: string }
+  | { day: string; status: "before_archive" };
+
+/**
+ * Read a set of days, reporting each one's outcome separately.
+ *
+ * Deliberately NOT `readSeriesDay` in a loop: that collapses `error` into
+ * `null`, and a KV blip would then be served as "this day has no points" —
+ * the same lie in the read path that `persistSeriesPoint`'s probe guard
+ * prevents in the write path. A day we could not read must never be
+ * indistinguishable from a day where nothing happened.
+ *
+ * Days before `SERIES_ARCHIVE_START` cost no KV request at all: the answer is
+ * known without asking, and the engine has been starved by the Upstash request
+ * cap once already (task #123).
+ */
+export async function readSeriesDays(days: string[]): Promise<SeriesDayRead[]> {
+  return Promise.all(
+    days.map(async (day): Promise<SeriesDayRead> => {
+      if (day < SERIES_ARCHIVE_START) return { day, status: "before_archive" };
+      const probe = await kvGetProbe<SeriesDay>(kvSeriesDay(day));
+      if (probe.status === "error") return { day, status: "error", message: probe.message };
+      if (probe.status === "miss") return { day, status: "miss" };
+      return { day, status: "hit", value: probe.value };
+    }),
+  );
+}
+
+/**
  * PURE merge step: given the day as it currently exists in KV (`null` when
  * absent) and this cycle's snapshot, return the day to write — or `null` when
  * there is nothing to write.
