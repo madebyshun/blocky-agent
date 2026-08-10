@@ -13,6 +13,7 @@
     "sync:soul": "tsx scripts/sync-soul.ts",
     "test:ledger": "tsx scripts/ledger-race-test.ts",
     "test:cohorts": "tsx scripts/cohort-stats-test.ts",
+    "test:series": "tsx scripts/series-persist-test.ts",
     "verify:build": "NEXT_DIST_DIR=.next-verify next build"
   },
   "dependencies": {

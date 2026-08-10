@@ -19,16 +19,26 @@
  * re-poll one cycle later still hits network (memo just expired) — that's
  * intentional; we want fresh prices, not stale ones.
  */
-import { kvSet } from "@/lib/kv";
+import { kvSet, kvGetProbe } from "@/lib/kv";
 import { HOOD_WATCHLIST, HOOD_REGISTRY_STATS } from "./registry";
 import { callTool } from "./tool-caller";
 import {
   KV_SNAPSHOT_LATEST,
   TTL_SNAPSHOT_HOUR,
   kvSnapshotHour,
+  kvSeriesDay,
+  yyyymmdd,
   yyyymmddhh,
 } from "./kv-keys";
-import type { HoodSnapshot, M5Verdict, MarketSession, TickerSnapshot } from "./types";
+import type {
+  HoodSnapshot,
+  M5Verdict,
+  MarketSession,
+  SeriesDay,
+  SeriesPoint,
+  SeriesRow,
+  TickerSnapshot,
+} from "./types";
 import { cacheAgeS } from "@/lib/robinhood/rwa-market";
 import { readSparkline } from "./sparkline";
 
@@ -215,14 +225,136 @@ export async function runPollCycle(): Promise<HoodSnapshot> {
   };
 }
 
+/** Schema version stamped into every `SeriesDay`. Bump ONLY on a breaking
+ *  shape change, and never rewrite old days to match — the version exists so
+ *  two shapes can coexist in the archive. */
+const SERIES_VERSION = 1;
+
+/** Read one day of the permanent series. Exported so a future reader never
+ *  has to re-derive the key format or the version handling. */
+export async function readSeriesDay(day: string): Promise<SeriesDay | null> {
+  const probe = await kvGetProbe<SeriesDay>(kvSeriesDay(day));
+  return probe.status === "hit" ? probe.value : null;
+}
+
 /**
- * Persist a snapshot to KV. Two keys:
+ * PURE merge step: given the day as it currently exists in KV (`null` when
+ * absent) and this cycle's snapshot, return the day to write — or `null` when
+ * there is nothing to write.
+ *
+ * Split out from the I/O on purpose. Overwriting a day key is the only
+ * operation in this subsystem that can destroy history, so it should be
+ * provable by a test rather than by reading the code. Everything that decides
+ * WHAT gets written lives here; `persistSeriesPoint` only decides whether it
+ * is safe to write at all.
+ *
+ * Two rules encoded here:
+ *
+ *  • One point per hour bucket. The poll runs every 5 minutes, so 11 of every
+ *    12 calls return `null`. Rewriting a growing day key 288×/day would spend
+ *    KV request budget on nothing — and the Upstash cap has starved this
+ *    engine once already.
+ *
+ *  • An hour where nothing priced is left ABSENT, not written as an empty
+ *    point. A hole meaning "we failed to read" must not be recorded as "the
+ *    market had no prices", and leaving it out lets a later cycle in the same
+ *    hour still fill it.
+ */
+export function mergeSeriesPoint(
+  existing: SeriesDay | null,
+  snap: HoodSnapshot,
+): SeriesDay | null {
+  const at = new Date(snap.started_at);
+  const day = yyyymmdd(at);
+  const hour = yyyymmddhh(at);
+
+  const points = existing?.points ?? [];
+  if (points.some((p) => p.hour === hour)) return null; // this hour is already on record
+
+  const rows: SeriesRow[] = snap.tickers
+    .filter((t) => t.oracle_usd !== null || t.dex_usd !== null)
+    .map((t) => ({
+      ticker: t.ticker,
+      oracle_usd: t.oracle_usd,
+      dex_usd: t.dex_usd,
+      drift_pct: t.drift_pct,
+      total_tvl_usd: t.total_tvl_usd ?? t.tvl_usd,
+    }));
+  if (rows.length === 0) return null;
+
+  const point: SeriesPoint = {
+    hour,
+    at: snap.started_at,
+    is_open: snap.metrics.market_is_open,
+    session: snap.metrics.market_session,
+    rows,
+  };
+  return {
+    day,
+    v: SERIES_VERSION,
+    // Sorted rather than pushed, so a late or retried cycle can't leave the
+    // day out of chronological order for whoever reads it a year from now.
+    points: [...points, point].sort((a, b) => a.hour.localeCompare(b.hour)),
+  };
+}
+
+/**
+ * Append this cycle's prices to the PERMANENT hourly series.
+ *
+ * The one load-bearing decision here is `kvGetProbe`, not `kvGet`. `kvGet`
+ * swallows the error and returns null, which is indistinguishable from "no
+ * data yet" — so a single KV blip at 23:00 would have us merge onto an empty
+ * day and write ONE point over twenty-three real ones. That is the single
+ * failure mode this feature cannot tolerate: unlike code, an overwritten hour
+ * cannot be recreated later. On `error` we write nothing and lose one hour,
+ * which the next cycle inside the same hour will fill.
+ */
+export async function persistSeriesPoint(snap: HoodSnapshot): Promise<void> {
+  const day = yyyymmdd(new Date(snap.started_at));
+
+  const probe = await kvGetProbe<SeriesDay>(kvSeriesDay(day));
+  if (probe.status === "error") {
+    console.error(
+      `[series] read failed day=${day}: ${probe.message} — skipping write so a live day is never clobbered`,
+    );
+    return;
+  }
+
+  const next = mergeSeriesPoint(probe.status === "hit" ? probe.value : null, snap);
+  if (next === null) return;
+
+  // NO TTL, deliberately — see `kvSeriesDay` in kv-keys.ts.
+  await kvSet(kvSeriesDay(day), next);
+  // Log the hour we just added, not the last element — the array is sorted, so
+  // a late-arriving cycle's point is not necessarily at the end.
+  const hour = yyyymmddhh(new Date(snap.started_at));
+  const added = next.points.find((p) => p.hour === hour);
+  console.log(
+    `[series] day=${day} hour=${hour} rows=${added?.rows.length ?? 0} points=${next.points.length}`,
+  );
+}
+
+/**
+ * Persist a snapshot to KV. Three keys:
  *   • latest — always overwritten
  *   • ring-buffer bucket — one write per hour bucket; downstream sparkline
  *     read walks 24 keys backwards from now.
+ *   • permanent series — thin hourly price row, no TTL.
+ *
+ * The series write goes LAST and is wrapped, because the first two writes are
+ * the engine's heartbeat: /hood, the rule engine and the health check all read
+ * them. A new, non-critical archive write must never be able to take those
+ * down (the poll cron has been starved once already; it doesn't get to happen
+ * because of a nice-to-have).
  */
 export async function persistSnapshot(snap: HoodSnapshot): Promise<void> {
   await kvSet(KV_SNAPSHOT_LATEST, snap);
   const bucket = yyyymmddhh(new Date(snap.started_at));
   await kvSet(kvSnapshotHour(bucket), snap, TTL_SNAPSHOT_HOUR);
+
+  try {
+    await persistSeriesPoint(snap);
+  } catch (e) {
+    console.error(`[series] persist failed: ${(e as Error).message}`);
+  }
 }
