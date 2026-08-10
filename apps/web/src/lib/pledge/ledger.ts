@@ -20,7 +20,14 @@
  * exists, and staleness is disclosed rather than prevented.
  */
 import { createPublicClient, http, parseAbi, getAddress, isAddress } from "viem";
-import { CHAINS, CHAIN_KEYS, RECEIVING_WALLET, PLEDGE_DEADLINE_ISO, type ChainKey } from "./config";
+import {
+  CHAINS,
+  CHAIN_KEYS,
+  RECEIVING_WALLET,
+  PLEDGE_DEADLINE_ISO,
+  ALLOCATION_ANNOUNCED,
+  type ChainKey,
+} from "./config";
 import { fetchChainTransfers } from "./sources";
 import { formatAmount, pctOfSupply } from "./format";
 import type { PledgeTx, WalletPledge, ChainSummary, LedgerSnapshot } from "./types";
@@ -197,6 +204,7 @@ export async function buildSnapshot(prev: LedgerSnapshot | null): Promise<Ledger
     staleAgeS: 0,
     receivingWallet: RECEIVING_WALLET,
     deadlineIso: PLEDGE_DEADLINE_ISO,
+    allocationAnnounced: ALLOCATION_ANNOUNCED,
     chains,
     wallets,
   };
@@ -204,9 +212,15 @@ export async function buildSnapshot(prev: LedgerSnapshot | null): Promise<Ledger
 
 // ─── Cached read ─────────────────────────────────────────────────────────────
 
+/**
+ * `allocationAnnounced` is re-stamped from config on every read, never trusted
+ * from the cached copy. It is a policy flag, not a measurement: a snapshot
+ * written a week ago must not keep publishing shares after the flag is turned
+ * off, nor keep hiding them for a week after it is turned on.
+ */
 function withStaleness(snap: LedgerSnapshot, stale: boolean): LedgerSnapshot {
   const ageS = Math.max(0, Math.round((Date.now() - snap.updatedAt) / 1000));
-  return { ...snap, stale, staleAgeS: ageS };
+  return { ...snap, stale, staleAgeS: ageS, allocationAnnounced: ALLOCATION_ANNOUNCED };
 }
 
 /**

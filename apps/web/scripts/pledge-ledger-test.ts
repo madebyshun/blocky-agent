@@ -32,7 +32,13 @@
  * deploy. No secrets are printed — only which env var names were present.
  */
 import { createPublicClient, http, parseAbi } from "viem";
-import { CHAINS, CHAIN_KEYS, RECEIVING_WALLET, type ChainKey } from "../src/lib/pledge/config";
+import {
+  CHAINS,
+  CHAIN_KEYS,
+  RECEIVING_WALLET,
+  NEW_TOKEN_SUPPLY,
+  type ChainKey,
+} from "../src/lib/pledge/config";
 import {
   fetchBaseFromMoralis,
   fetchRhFromBlockscout,
@@ -40,7 +46,13 @@ import {
   getLogsRange,
 } from "../src/lib/pledge/sources";
 import { buildSnapshot, aggregate } from "../src/lib/pledge/ledger";
-import { fmtPct, pctOfSupply, rawToDecimalString, formatAmount } from "../src/lib/pledge/format";
+import {
+  fmtPct,
+  pctOfSupply,
+  rawToDecimalString,
+  formatAmount,
+  convertToNew,
+} from "../src/lib/pledge/format";
 import type { PledgeTx, SourceResult } from "../src/lib/pledge/types";
 
 const ERC20 = parseAbi(["function totalSupply() view returns (uint256)"]);
@@ -75,6 +87,19 @@ async function checkSupply(chain: ChainKey) {
       // Not automatically a bug — a supply change is legitimate — but the
       // constant is the fallback denominator, so it must be updated with it.
       bad(`${cfg.shortLabel} totalSupply DRIFTED: live=${live} pinned=${pinned} — update config.ts`);
+    }
+
+    // The conversion ratio is pinned, so it can silently stop matching reality.
+    // Checked against LIVE supply, not the constant above, so a supply change
+    // that nobody propagated to `oldPerNew` fails here rather than in a payout.
+    const implied = cfg.oldPerNew * NEW_TOKEN_SUPPLY;
+    if (implied === live) {
+      ok(`${cfg.shortLabel} oldPerNew=${cfg.oldPerNew} still equals live supply ÷ $NEW supply`);
+    } else {
+      bad(
+        `${cfg.shortLabel} oldPerNew=${cfg.oldPerNew} implies a supply of ${implied}, ` +
+          `but the contract says ${live} — the conversion would misprice every allocation`,
+      );
     }
   } catch (e) {
     bad(`${cfg.shortLabel} totalSupply() unreadable: ${(e as Error).message}`);
@@ -241,6 +266,62 @@ function checkArithmetic() {
   // on (hash, from, value) would silently halve this holder's pledge.
   const dupes = aggregate([tx(A, e18("500"), 20, H(9)), tx(A, e18("500"), 20, H(9))], "base", supply);
   eq("two identical transfers in one tx are not de-duplicated away", dupes[0].totalAmount, e18("1000"));
+
+  checkConversion();
+}
+
+// ─── 5b. The conversion — the 100× trap ──────────────────────────────────────
+
+/**
+ * The playbook promises "each pledger keeps the same proportional share", and
+ * derives it from a 1-for-1 airdrop — which only preserves the share when the
+ * two supplies are equal. Base's is 100× the new supply, so 1-for-1 there is
+ * both unfair and impossible. These assertions pin the ratio that keeps the
+ * PROMISE instead of the arithmetic, and make the impossible version fail loudly
+ * if anyone ever "simplifies" it back.
+ */
+function checkConversion() {
+  eq("Base converts at 100:1, not 1:1", CHAINS.base.oldPerNew, 100n);
+  eq("RH is the one chain where 1-for-1 is correct", CHAINS.rh.oldPerNew, 1n);
+
+  // Why Base cannot be 1:1 — stated as arithmetic, not as a comment.
+  const fortyPct = (CHAINS.base.token.totalSupply * 40n) / 100n;
+  if (fortyPct > NEW_TOKEN_SUPPLY) {
+    ok(
+      `1-for-1 on Base is impossible: ${fortyPct / 10n ** 18n} tokens at the ` +
+        `playbook's ~40% participation vs a new supply of ${NEW_TOKEN_SUPPLY / 10n ** 18n}`,
+    );
+  } else {
+    bad("1-for-1 on Base no longer overflows the new supply — re-derive oldPerNew");
+  }
+
+  eq("1,000 old Base tokens become 10 new", convertToNew(e18("1000"), 100n), e18("10"));
+  eq("1,000 old RH tokens become 1,000 new", convertToNew(e18("1000"), 1n), e18("1000"));
+  eq("conversion truncates DOWN, never mints a fraction", convertToNew("150", 100n), "1");
+
+  // The fairness claim, made checkable: the same proportional stake on either
+  // chain has to pay out the same number of new tokens. Under 1-for-1 the Base
+  // holder here would receive 1,000,000,000 — the entire new supply.
+  const onePctBase = convertToNew((CHAINS.base.token.totalSupply / 100n).toString(), CHAINS.base.oldPerNew);
+  const onePctRh = convertToNew((CHAINS.rh.token.totalSupply / 100n).toString(), CHAINS.rh.oldPerNew);
+  eq("1% of Base and 1% of RH receive the same amount", onePctBase, onePctRh);
+  eq("…and that amount is 1% of the new supply", onePctBase, (NEW_TOKEN_SUPPLY / 100n).toString());
+
+  // The identity the whole design rests on, checked on both chains at a size
+  // that is not a round fraction: share of the old supply == share of the new.
+  for (const chain of CHAIN_KEYS) {
+    const cfg = CHAINS[chain];
+    const pledged = BigInt(e18("3250531"));
+    const received = BigInt(convertToNew(pledged.toString(), cfg.oldPerNew));
+    const before = pctOfSupply(pledged, cfg.token.totalSupply);
+    const after = pctOfSupply(received, NEW_TOKEN_SUPPLY);
+    const drift = before === 0 ? Math.abs(after) : Math.abs(after - before) / before;
+    if (drift < 1e-9) {
+      ok(`${cfg.shortLabel}: 3,250,531 pledged keeps its share exactly (${fmtPct(before)})`);
+    } else {
+      bad(`${cfg.shortLabel}: share moved from ${before} to ${after} through the conversion`);
+    }
+  }
 }
 
 // ─── 6. The bisect — the anti-silent-drop guarantee ──────────────────────────

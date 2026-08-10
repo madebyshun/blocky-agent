@@ -16,10 +16,18 @@
  * numbers are the last known ones), `stale` (numbers are older than they look),
  * `truncated` (we hit a page cap and this list is short). None of them are
  * allowed to look like success.
+ *
+ * ─── Why no percentage appears anywhere ─────────────────────────────────────
+ * `ALLOCATION_ANNOUNCED` is false, so every share/percent is withheld. The
+ * reason is in config.ts: the two old supplies differ by 100×, so a percentage
+ * only means anything once the per-chain conversion ratio is published, and
+ * beside someone's pledge it reads as an entitlement no matter how it is
+ * labelled. What is rendered instead is the pair that needs no ratio to be
+ * true — the amount received, and the transaction that proves it.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CHAINS, CHAIN_KEYS, type ChainKey } from "@/lib/pledge/config";
+import { CHAINS, CHAIN_KEYS, ALLOCATION_ANNOUNCED, type ChainKey } from "@/lib/pledge/config";
 import { fmtPct, fmtWhen, fmtAge, shortAddr, shortHash } from "@/lib/pledge/format";
 import type { LedgerSnapshot, WalletPledge } from "@/lib/pledge/types";
 
@@ -150,7 +158,15 @@ function ChainCard({ snap, chain }: { snap: LedgerSnapshot; chain: ChainKey }) {
         {degraded && s.txCount === 0 ? "—" : s.totalFormatted}
       </div>
       <div className="font-mono text-[11px] text-slate-500 mb-5">
-        {s.symbol} · {degraded && s.txCount === 0 ? "—" : fmtPct(s.pctOfSupply)} of supply
+        {/*
+          When the ratio is announced this becomes a share of $NEW, not "of
+          supply" — under the pinned per-chain ratio the two are equal, and it
+          is the one people are actually asking about.
+        */}
+        {s.symbol}
+        {ALLOCATION_ANNOUNCED
+          ? ` · ${degraded && s.txCount === 0 ? "—" : fmtPct(s.pctOfSupply)} of $NEW`
+          : " · pledged"}
       </div>
 
       <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[#1A1A2E]">
@@ -261,18 +277,22 @@ function Lookup() {
                   </div>
                   <div className="text-2xl font-bold text-white mt-2 tabular-nums">{e.totalFormatted}</div>
                   <div className="font-mono text-[11px] text-slate-500 mt-1">
-                    {CHAINS[e.chain].token.symbol} · {fmtPct(e.pctOfSupply)} of {CHAINS[e.chain].shortLabel} supply
+                    {CHAINS[e.chain].token.symbol}
+                    {ALLOCATION_ANNOUNCED
+                      ? ` · ${fmtPct(e.pctOfSupply)} of $NEW`
+                      : " · received"}
                   </div>
                 </div>
               ))}
               {/*
-                No combined "total share" is shown on purpose: the two chains
-                have different total supplies, so adding the two percentages
-                would produce a number that describes nothing.
+                Still no combined total across chains, for the original reason
+                (different denominators) and now a second one: until the ratio
+                is announced there is no share to combine.
               */}
               <div className="font-mono text-[10px] text-slate-600 leading-relaxed">
-                Shown per chain. The two supplies differ, so the percentages are not additive — the
-                final allocation table reconciles them.
+                {ALLOCATION_ANNOUNCED
+                  ? "Shown per chain. The two old supplies differ, so these are converted at each chain's own ratio before being compared."
+                  : "This is what the receiving wallet has recorded from this address — an amount and a transaction, nothing more. The conversion ratio to the new token has not been announced, so no share is published here yet."}
               </div>
             </div>
           ) : (
@@ -289,6 +309,15 @@ function Lookup() {
 }
 
 // ─── Ledger table ────────────────────────────────────────────────────────────
+
+/**
+ * "Share" is absent, not blank. An empty column under a header people are
+ * looking for reads as data that failed to load, which is the one impression
+ * this table must never give.
+ */
+const COLUMNS = ALLOCATION_ANNOUNCED
+  ? ["#", "Wallet", "Chain", "Pledged", "Share of $NEW", "Transfers", "Latest"]
+  : ["#", "Wallet", "Chain", "Pledged", "Transfers", "Latest"];
 
 function Ledger({ snap }: { snap: LedgerSnapshot }) {
   const [query, setQuery] = useState("");
@@ -351,7 +380,7 @@ function Ledger({ snap }: { snap: LedgerSnapshot }) {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-[#0a0a10]">
-                {["#", "Wallet", "Chain", "Pledged", "Share", "Transfers", "Latest"].map((h) => (
+                {COLUMNS.map((h) => (
                   <th
                     key={h}
                     className="font-mono text-[10px] uppercase tracking-[0.15em] text-slate-600 px-4 py-3 whitespace-nowrap font-normal"
@@ -390,9 +419,11 @@ function Ledger({ snap }: { snap: LedgerSnapshot }) {
                     <td className="px-4 py-3 font-mono text-[12px] text-white tabular-nums whitespace-nowrap">
                       {w.totalFormatted}
                     </td>
-                    <td className="px-4 py-3 font-mono text-[12px] text-slate-400 tabular-nums whitespace-nowrap">
-                      {fmtPct(w.pctOfSupply)}
-                    </td>
+                    {ALLOCATION_ANNOUNCED ? (
+                      <td className="px-4 py-3 font-mono text-[12px] text-slate-400 tabular-nums whitespace-nowrap">
+                        {fmtPct(w.pctOfSupply)}
+                      </td>
+                    ) : null}
                     <td className="px-4 py-3">
                       {/* Every row links to its own receipt — that is what makes the list checkable. */}
                       <a

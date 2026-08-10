@@ -35,7 +35,14 @@ export interface WalletPledge {
   chain: ChainKey;
   totalAmount: string;
   totalFormatted: string;
-  /** Percent of that chain's total supply, e.g. 0.4231 = 0.4231%. */
+  /**
+   * Percent of THAT CHAIN'S OWN total supply, e.g. 0.4231 = 0.4231%.
+   *
+   * Not a share of the new token and not comparable across chains: the two old
+   * supplies differ by 100×. It becomes the share of $NEW only under the fixed
+   * per-chain `oldPerNew` ratio in config.ts, and only once that ratio is
+   * announced. Until then nothing renders it.
+   */
   pctOfSupply: number;
   txCount: number;
   txs: { txHash: string; timestamp: number | null; amount: string }[];
@@ -80,6 +87,14 @@ export interface LedgerSnapshot {
   staleAgeS: number;
   receivingWallet: string;
   deadlineIso: string | null;
+  /**
+   * Whether the old→new conversion ratio has been published. While false, every
+   * `pctOfSupply` in this payload is a measurement of the OLD token only and no
+   * allocation has been promised — the UI renders no share at all. Stated in
+   * the JSON as well as the page so a third party reading the API cannot mistake
+   * `pctOfSupply` for an entitlement.
+   */
+  allocationAnnounced: boolean;
   chains: Record<ChainKey, ChainSummary>;
   wallets: WalletPledge[];
 }

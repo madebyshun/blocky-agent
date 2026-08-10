@@ -68,6 +68,24 @@ export function fmtPct(pct: number): string {
   return "< 0.0001%";
 }
 
+/**
+ * Old tokens → new tokens at a chain's fixed ratio (`CHAINS[c].oldPerNew`).
+ *
+ * Integer division, so it truncates DOWN. That direction is not an accident:
+ * rounding up would hand out fractions of a token that the new supply does not
+ * contain, and doing that once per pledger is how an airdrop ends up short for
+ * whoever claims last. At 18 decimals the discarded remainder is sub-wei.
+ *
+ * Nothing renders this yet — `ALLOCATION_ANNOUNCED` is false. It exists now so
+ * that the invariant it has to satisfy (a pledger's share of the old supply
+ * equals their share of the new one) is asserted by the test suite BEFORE any
+ * number derived from it is ever shown to a holder.
+ */
+export function convertToNew(rawOld: string, oldPerNew: bigint): string {
+  if (oldPerNew <= 0n) throw new Error("oldPerNew must be positive");
+  return (BigInt(rawOld) / oldPerNew).toString();
+}
+
 export const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 export const shortHash = (h: string) => `${h.slice(0, 10)}…${h.slice(-6)}`;
 
