@@ -15,6 +15,7 @@
     "test:cohorts": "tsx scripts/cohort-stats-test.ts",
     "test:series": "tsx scripts/series-persist-test.ts",
     "test:series-api": "tsx scripts/series-endpoint-test.ts",
+    "test:pledge": "tsx scripts/pledge-ledger-test.ts",
     "verify:build": "NEXT_DIST_DIR=.next-verify next build"
   },
   "dependencies": {
