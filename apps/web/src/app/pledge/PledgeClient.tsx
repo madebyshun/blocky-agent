@@ -17,18 +17,44 @@
  * `truncated` (we hit a page cap and this list is short). None of them are
  * allowed to look like success.
  *
- * ─── Why no percentage appears anywhere ─────────────────────────────────────
- * `ALLOCATION_ANNOUNCED` is false, so every share/percent is withheld. The
- * reason is in config.ts: the two old supplies differ by 100×, so a percentage
- * only means anything once the per-chain conversion ratio is published, and
- * beside someone's pledge it reads as an entitlement no matter how it is
- * labelled. What is rendered instead is the pair that needs no ratio to be
- * true — the amount received, and the transaction that proves it.
+ * ─── Which percentages appear, and which do not ─────────────────────────────
+ * The distinction is aggregate vs personal, not "percentages are dangerous".
+ *
+ * A CHAIN total ("0.00325% of Base supply pledged") is migration progress. It
+ * has a named denominator, it belongs to nobody, and it answers the question
+ * the page is actually for: how much of the old token has moved. That renders
+ * always.
+ *
+ * A WALLET share is a different object. Beside someone's own pledge a
+ * percentage reads as an entitlement however it is labelled, and until
+ * `ALLOCATION_ANNOUNCED` there is no published ratio for it to be a share OF —
+ * the two old supplies differ by 100×. So per-wallet shares are withheld
+ * entirely, and what renders instead is the pair that needs no ratio to be
+ * true: the amount received, and the transaction that proves it.
+ *
+ * When the ratio is published, the per-wallet number comes back as an ESTIMATE
+ * and says so in its own label — the denominator keeps moving while the window
+ * is open, so a firm-looking share before it closes is a share that will be
+ * wrong.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CHAINS, CHAIN_KEYS, ALLOCATION_ANNOUNCED, type ChainKey } from "@/lib/pledge/config";
-import { fmtPct, fmtWhen, fmtAge, shortAddr, shortHash } from "@/lib/pledge/format";
+import {
+  CHAINS,
+  CHAIN_KEYS,
+  ALLOCATION_ANNOUNCED,
+  NEW_TOKEN_DECIMALS,
+  type ChainKey,
+} from "@/lib/pledge/config";
+import {
+  fmtPct,
+  fmtWhen,
+  fmtAge,
+  shortAddr,
+  shortHash,
+  formatAmount,
+  convertToNew,
+} from "@/lib/pledge/format";
 import type { LedgerSnapshot, WalletPledge } from "@/lib/pledge/types";
 
 interface WalletLookup {
@@ -159,14 +185,20 @@ function ChainCard({ snap, chain }: { snap: LedgerSnapshot; chain: ChainKey }) {
       </div>
       <div className="font-mono text-[11px] text-slate-500 mb-5">
         {/*
-          When the ratio is announced this becomes a share of $NEW, not "of
-          supply" — under the pinned per-chain ratio the two are equal, and it
-          is the one people are actually asking about.
+          The denominator is NAMED, and that is the whole point of this line.
+          "of supply" unqualified was the original defect on this page: three
+          supplies coexist here (Base 100B, RH 1B, $NEW 1B) and a bare
+          percentage silently picks one, leaving the reader to assume the one
+          they care about.
+
+          This figure is migration PROGRESS — how much of this chain's old token
+          has been pledged so far — not an allocation. That is why it is safe to
+          publish while the conversion ratio is unannounced, and why it stays a
+          chain-level aggregate: the same percentage printed on one person's row
+          is read as their entitlement.
         */}
-        {s.symbol}
-        {ALLOCATION_ANNOUNCED
-          ? ` · ${degraded && s.txCount === 0 ? "—" : fmtPct(s.pctOfSupply)} of $NEW`
-          : " · pledged"}
+        {s.symbol} ·{" "}
+        {degraded && s.txCount === 0 ? "—" : fmtPct(s.pctOfSupply)} of {s.label} supply pledged
       </div>
 
       <div className="grid grid-cols-2 gap-3 pt-4 border-t border-[#1A1A2E]">
@@ -277,11 +309,43 @@ function Lookup() {
                   </div>
                   <div className="text-2xl font-bold text-white mt-2 tabular-nums">{e.totalFormatted}</div>
                   <div className="font-mono text-[11px] text-slate-500 mt-1">
-                    {CHAINS[e.chain].token.symbol}
-                    {ALLOCATION_ANNOUNCED
-                      ? ` · ${fmtPct(e.pctOfSupply)} of $NEW`
-                      : " · received"}
+                    {CHAINS[e.chain].token.symbol} · received
                   </div>
+
+                  {/*
+                    The received amount above is a MEASUREMENT — it is on-chain
+                    and cannot move. Everything below it is a projection, and
+                    the two must not share a typeface or sit in the same block,
+                    because a holder screenshots this and reads whatever is
+                    largest as the promise. Hence the rule: the estimate is
+                    smaller than the fact it is derived from, is separated by a
+                    rule, and carries its own amber label rather than a
+                    parenthetical someone can crop out.
+
+                    It also never says "final". The denominator is still moving:
+                    every pledge that lands after this one changes what any
+                    given wallet's share works out to, so a firm-looking number
+                    before the window closes is a number that will be wrong.
+                  */}
+                  {ALLOCATION_ANNOUNCED ? (
+                    <div
+                      className="mt-3 pt-3 border-t"
+                      style={{ borderColor: `${ACCENT[e.chain]}20` }}
+                    >
+                      <div className="font-mono text-[12px] text-slate-300 tabular-nums">
+                        ≈{" "}
+                        {formatAmount(
+                          BigInt(convertToNew(e.totalAmount, CHAINS[e.chain].oldPerNew)),
+                          NEW_TOKEN_DECIMALS,
+                        )}{" "}
+                        $NEW · {fmtPct(e.pctOfSupply)}
+                      </div>
+                      <div className="font-mono text-[10px] text-[#F59E0B] mt-1.5 leading-relaxed">
+                        Estimate — finalised after the pledge window closes. Converted at{" "}
+                        {CHAINS[e.chain].oldPerNew.toString()}:1 on {CHAINS[e.chain].label}.
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ))}
               {/*
@@ -291,7 +355,7 @@ function Lookup() {
               */}
               <div className="font-mono text-[10px] text-slate-600 leading-relaxed">
                 {ALLOCATION_ANNOUNCED
-                  ? "Shown per chain. The two old supplies differ, so these are converted at each chain's own ratio before being compared."
+                  ? "Shown per chain and never added together — the two old supplies differ by 100×, so each is converted at its own ratio. No figure here is final until the pledge window closes; every pledge that lands after yours changes what the share works out to."
                   : "This is what the receiving wallet has recorded from this address — an amount and a transaction, nothing more. The conversion ratio to the new token has not been announced, so no share is published here yet."}
               </div>
             </div>
@@ -316,7 +380,10 @@ function Lookup() {
  * this table must never give.
  */
 const COLUMNS = ALLOCATION_ANNOUNCED
-  ? ["#", "Wallet", "Chain", "Pledged", "Share of $NEW", "Transfers", "Latest"]
+  ? // "(est.)" is in the header, not a footnote, because a column of tidy
+    // percentages is the part of this page most likely to be screenshotted
+    // away from its caption.
+    ["#", "Wallet", "Chain", "Pledged", "Share of $NEW (est.)", "Transfers", "Latest"]
   : ["#", "Wallet", "Chain", "Pledged", "Transfers", "Latest"];
 
 function Ledger({ snap }: { snap: LedgerSnapshot }) {

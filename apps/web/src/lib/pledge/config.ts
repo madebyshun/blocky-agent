@@ -18,12 +18,23 @@
  *    ticking toward a placeholder. Setting a date here is what turns the
  *    countdown on — there is no way to show a clock without committing to one.
  *
- * 2. `WARNING_TEXT` states the downside and stops. An earlier draft ended with
- *    "Pledge, or sell out before the deadline", which converts a risk
- *    disclosure into a sell order; the same sentence is what a holder reads as
- *    coercion, and coercion is the loudest scam signal a migration page can
- *    emit. The risks themselves are NOT softened — including the one an
- *    operator is most tempted to omit, that no claim contract exists yet.
+ * 2. `WARNING_TEXT` states the downside and stops. It covers BOTH directions —
+ *    what happens if you pledge, and what happens if you don't — because a
+ *    disclosure that only warns the people who act is not a disclosure, it is a
+ *    filter. Someone who ignores the window keeps a token the migration is
+ *    designed to drain, and they have to be told that plainly.
+ *
+ *    What it does NOT do is tell the reader which way to go. An earlier draft
+ *    ended with "Pledge, or sell out before the deadline", and that clause is
+ *    doing something different from the sentences around it: the rest state
+ *    facts and let the reader decide, that one issues an instruction to make
+ *    one of two irreversible financial moves, on a clock. It is also the single
+ *    most reliable signal a holder uses to recognise a scam — every drainer
+ *    page in this category ends with exactly that sentence. Stating a risk is
+ *    disclosure; telling someone to act on it is pressure, and pressure is what
+ *    the rest of this page exists to avoid emitting. The risks themselves are
+ *    NOT softened — including the one an operator is most tempted to omit, that
+ *    no claim contract exists yet.
  *
  * 3. `totalSupply` is the denominator of every percentage this site publishes,
  *    so it is READ FROM THE CONTRACT at refresh time (see ledger.ts) and these
@@ -40,6 +51,9 @@ export const RECEIVING_WALLET =
 
 /** Total supply of the token being launched. Virtuals launches are 1B. */
 export const NEW_TOKEN_SUPPLY = 1_000_000_000n * 10n ** 18n;
+
+/** Decimals of the new token — needed to format a converted amount for display. */
+export const NEW_TOKEN_DECIMALS = 18;
 
 /**
  * Whether the conversion ratio below has been PUBLISHED to holders.
@@ -165,16 +179,34 @@ export const CHAIN_KEYS = Object.keys(CHAINS) as ChainKey[];
 /**
  * Shown before anything else on the page, and deliberately not softened.
  *
- * Every clause is a fact a holder needs BEFORE they send, including the two an
- * operator is most tempted to leave out: that the tokens get sold (so the old
- * price falls), and that the contract which pays out the new token does not
- * exist yet. What is absent is any instruction about what the reader should
- * do — stating a risk is disclosure, telling someone to act on it is pressure.
+ * Every clause is a fact a holder needs BEFORE they decide, in both directions:
+ *
+ *   • if you pledge — it is irreversible, the tokens get sold (so the old price
+ *     falls), and the contract that pays out the new token does not exist yet;
+ *   • if you don't — you keep a token this migration is designed to drain, and
+ *     you are not in the allocation table.
+ *
+ * The second half was missing for a while, which made the disclosure lopsided:
+ * it warned the people taking the risk and said nothing to the people carrying
+ * a different one by doing nothing. Both are now stated.
+ *
+ * What is still absent is any instruction about what the reader should do, and
+ * that absence is load-bearing — see constraint 2 at the top of this file.
+ *
+ * Note the phrasing "if the window closes without your tokens in it" rather
+ * than "before the deadline": `PLEDGE_DEADLINE_ISO` is null, so there IS no
+ * deadline yet. A warning that refers to a date nobody has set is manufacturing
+ * urgency, which is the same defect as a placeholder countdown.
  */
 export const WARNING_TEXT =
   "Pledging is irreversible. The tokens leave your wallet and cannot be " +
   "recovered by you. Pledged tokens will be sold to fund the new pool, which " +
   "is expected to push the price of the old token down. There is no claim " +
   "contract yet — allocations are published before distribution, not " +
-  "guaranteed at the moment you send. Send only from a wallet you control, " +
-  "never from an exchange, and never more than you are willing to lose.";
+  "guaranteed at the moment you send. If the window closes without your " +
+  "tokens in it, you are not in the allocation table and receive no new " +
+  "token; the old token is expected to be illiquid after the migration, " +
+  "because the pledged supply is what funds the new pool and liquidity is " +
+  "not planned to be maintained behind the old one. Send only from a wallet " +
+  "you control, never from an exchange, and never more than you are willing " +
+  "to lose.";
