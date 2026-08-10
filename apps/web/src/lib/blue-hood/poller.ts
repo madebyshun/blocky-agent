@@ -287,6 +287,91 @@ export async function readSeriesDays(days: string[]): Promise<SeriesDayRead[]> {
   );
 }
 
+/** How much of a day is actually on record, and against what we judged it. */
+export interface SeriesCoverage {
+  hours_present: number;
+  /** Hours inside the expected window holding no point, as `YYYYMMDDHH` — the
+   *  same shape as `SeriesPoint.hour`, so the two lists compare directly. */
+  hours_absent: string[];
+  first_hour: string | null;
+  last_hour: string | null;
+  /** The window `hours_absent` was measured against. Published so a consumer
+   *  reads what "absent" meant here instead of assuming it meant all 24. */
+  expected_from: string | null;
+  expected_to: string | null;
+}
+
+/**
+ * Which hours of a day were missed.
+ *
+ * WHY THIS EXISTS: `readSeriesDays` keeps the three kinds of nothing distinct
+ * at the DAY level, and then hands back a `points` array where the same
+ * ambiguity is alive again one level down. An hour absent from that array is
+ * any of three unrelated events — the cron never ran, it ran and nothing
+ * priced (`mergeSeriesPoint` returns null on zero rows), or it ran and a KV
+ * error made the writer refuse to write rather than clobber the day. Nothing
+ * in the stored data tells them apart, and this function does not pretend
+ * otherwise. It answers only the question that IS answerable: which hours we
+ * expected and did not get. A consumer that plots `points` without asking will
+ * connect 03:00 straight to 09:00 and draw a confident line through six hours
+ * that were never observed.
+ *
+ * WHAT IS DELIBERATELY NOT A HOLE — an absent hour is evidence of loss only
+ * where recording was both already running and already finished:
+ *
+ *  • Before the archive existed. On `SERIES_ARCHIVE_START` recording began
+ *    whenever the deploy landed; the earliest point we hold is the only record
+ *    of when, so nothing before it was ever promised. Counting those hours
+ *    would put a permanent, unfixable gap on the archive's first day.
+ *  • The future — including the hour running right now. The poll appends at
+ *    ~:05, so calling the current hour overdue would manufacture a gap for
+ *    five minutes out of every sixty and teach every consumer to ignore the
+ *    field. Conservative by design: a genuinely dead writer surfaces one hour
+ *    later than it could, which is the cheaper of the two errors.
+ *
+ * `now` is a parameter, not `new Date()`, so the window is testable at any
+ * wall-clock time instead of only between 03:00 and 23:00 UTC.
+ */
+export function seriesCoverage(day: string, points: SeriesPoint[], now: Date): SeriesCoverage {
+  const hours = points.map((p) => p.hour).sort();
+  const first = hours[0] ?? null;
+  const last = hours[hours.length - 1] ?? null;
+
+  // Upper bound: the last hour that has finished. A past day is owed all 24.
+  const to = day === yyyymmdd(now) ? now.getUTCHours() - 1 : 23;
+  // Lower bound: 0 for every day the archive covered in full; on its first day,
+  // the earliest hour we actually hold. `24` when that day holds nothing at
+  // all, which crosses the bounds below and correctly claims no window.
+  const from = day === SERIES_ARCHIVE_START ? (first === null ? 24 : +first.slice(8, 10)) : 0;
+
+  if (from > to || to < 0) {
+    return {
+      hours_present: points.length,
+      hours_absent: [],
+      first_hour: first,
+      last_hour: last,
+      expected_from: null,
+      expected_to: null,
+    };
+  }
+
+  const present = new Set(hours);
+  const absent: string[] = [];
+  for (let h = from; h <= to; h++) {
+    const key = `${day}${String(h).padStart(2, "0")}`;
+    if (!present.has(key)) absent.push(key);
+  }
+
+  return {
+    hours_present: points.length,
+    hours_absent: absent,
+    first_hour: first,
+    last_hour: last,
+    expected_from: `${day}${String(from).padStart(2, "0")}`,
+    expected_to: `${day}${String(to).padStart(2, "0")}`,
+  };
+}
+
 /**
  * PURE merge step: given the day as it currently exists in KV (`null` when
  * absent) and this cycle's snapshot, return the day to write — or `null` when
