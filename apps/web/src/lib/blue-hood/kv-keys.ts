@@ -198,6 +198,35 @@ export const kvAlertsByAddr = (address: string) => `bh:alert:addr:${address.toLo
 /** FIFO queue of alert ids awaiting Telegram (2.2) delivery. NOT shared with other channels. */
 export const KV_ALERT_PENDING = "bh:alert:pending";
 
+/**
+ * PERMANENT hourly oracle-vs-DEX price series — one key per UTC day.
+ *
+ * WHY A SECOND HISTORY KEY: `bh:snapshot:hour:*` already stores hourly
+ * snapshots, but it expires after 25h (TTL_SNAPSHOT_HOUR) because it exists to
+ * feed a 24h sparkline. That makes it useless for anything that spans a market
+ * closure: a weekend is 48–65h, so by Monday the Friday close is already gone.
+ * Every hour we don't persist is an hour that can NEVER be recovered — unlike
+ * code, price history cannot be backfilled later.
+ *
+ * So this key holds a deliberately tiny row (ticker, oracle, dex, drift, TVL)
+ * and carries NO TTL. Full snapshots are ~20 tickers of verbose data and would
+ * be wasteful to keep forever; this is the subset that answers "where was the
+ * DEX trading while the oracle was frozen".
+ *
+ * WHY PER-DAY AND NOT PER-HOUR: per-hour keys would need no read-modify-write
+ * at all, which is tempting. But the consumer reads SPANS — "how did the DEX
+ * behave across the last six weekends" is 42 day-keys, versus 1,008 hour-keys.
+ * The read path is the product, so it gets the cheap side of the trade, and
+ * the write path pays for it with a guarded merge (`mergeSeriesPoint`).
+ *
+ * MEASURED COST at the current 24-ticker watchlist: 2.6 KB per hourly point,
+ * 61 KB for a full day, 22 MB per year, and 312 KV requests/day (288 reads —
+ * one per 5-min cycle — plus 24 writes). Against the 500K/month Upstash cap
+ * that starved this engine once (task #123) that is ~2%, which is why the
+ * simple guarded merge is affordable and no hour-lock is needed.
+ */
+export const kvSeriesDay = (yyyymmdd: string) => `bh:series:day:${yyyymmdd}`;
+
 /** TTL constants (seconds). */
 export const TTL_SNAPSHOT_HOUR = 60 * 60 * 25; // 25h so we always have a full 24h window
 export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are at most 24h
@@ -216,11 +245,18 @@ export const TTL_ALERT = 60 * 60 * 24 * 7; // 7d
 export const ALERT_ADDR_MAX = 100;   // per-wallet history depth kept for the read endpoint
 export const ALERT_PENDING_MAX = 500; // Telegram backlog ceiling; oldest trimmed if a consumer stalls
 
-/** Utility: format a Date into `YYYYMMDDHH` for the ring-buffer bucket. */
-export function yyyymmddhh(d: Date): string {
+/** Utility: format a Date into `YYYYMMDD` (UTC) for the permanent series key. */
+export function yyyymmdd(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
-  const h = String(d.getUTCHours()).padStart(2, "0");
-  return `${y}${m}${day}${h}`;
+  return `${y}${m}${day}`;
+}
+
+/** Utility: format a Date into `YYYYMMDDHH` for the ring-buffer bucket.
+ *  Built ON `yyyymmdd` rather than repeating the same four lines, so the day
+ *  key and the hour key can never disagree about which UTC day an instant
+ *  belongs to — there is exactly one place that decides. */
+export function yyyymmddhh(d: Date): string {
+  return `${yyyymmdd(d)}${String(d.getUTCHours()).padStart(2, "0")}`;
 }

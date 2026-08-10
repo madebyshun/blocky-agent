@@ -119,6 +119,69 @@ export interface HoodSnapshot {
   };
 }
 
+// ── Permanent price series ────────────────────────────────────────────────
+// A deliberately small, PERMANENT subset of the snapshot, written hourly to
+// `bh:series:day:YYYYMMDD`. `HoodSnapshot` is the rich shape and expires
+// after 25h; this is the thin shape that never expires.
+//
+// WHY IT IS SEPARATE rather than "just keep snapshots longer": a snapshot
+// carries per-row sparklines, warnings, pool refs and freshness telemetry —
+// all of it useful for 24h of debugging and none of it worth storing for a
+// year. What IS worth storing forever is the answer to one question we
+// cannot ask retroactively: where was the DEX trading while the oracle was
+// frozen? That needs five numbers per ticker per hour, and it needs to
+// survive a weekend (48–65h), which the 25h ring buffer cannot do.
+
+/** One ticker's prices at one hour. Field names are spelled out rather than
+ *  golfed to one letter: this record outlives the code that wrote it, so it
+ *  has to be readable without a decoder ring. */
+export interface SeriesRow {
+  /** Ticker symbol, uppercase. */
+  ticker: string;
+  /** Chainlink oracle price, USD. Null when the feed didn't read this cycle. */
+  oracle_usd: number | null;
+  /** Deepest DEX pool spot price, USD. Null when no pool resolved. */
+  dex_usd: number | null;
+  /** dex/oracle drift %, positive = DEX above oracle. Copied from the
+   *  snapshot, never recomputed here — one definition of drift, upstream. */
+  drift_pct: number | null;
+  /** Total TVL across every pool for this token, USD. Kept because "the DEX
+   *  disagreed with the oracle" means nothing without knowing how much
+   *  depth was standing behind the disagreement. */
+  total_tvl_usd: number | null;
+}
+
+/** One hour bucket within a day. */
+export interface SeriesPoint {
+  /** `YYYYMMDDHH` UTC — the dedup key within the day. */
+  hour: string;
+  /** ISO start time of the cycle that produced this point. The `hour` bucket
+   *  is truncated; this is the real instant the prices were read. */
+  at: string;
+  /** Market clock at capture. The entire point of this series is comparing
+   *  DEX behaviour across the open/closed boundary, so the boundary itself
+   *  must be recorded — not re-derived later from the timestamp, which would
+   *  silently get holidays and half-days wrong. */
+  is_open: boolean;
+  session: MarketSession;
+  /** Only tickers that actually priced. A ticker that failed is absent
+   *  rather than present-with-nulls: absence is honest, a null row would
+   *  read as "the market had no price". */
+  rows: SeriesRow[];
+}
+
+/** One UTC day of hourly points — the value stored at `bh:series:day:YYYYMMDD`. */
+export interface SeriesDay {
+  /** `YYYYMMDD` UTC. Redundant with the key on purpose, so an exported blob
+   *  can still identify itself once separated from the key. */
+  day: string;
+  /** Schema version. This record is permanent, so a future shape change has
+   *  to be *distinguishable* from today's rather than silently reinterpreted. */
+  v: number;
+  /** Hourly points, oldest first. At most 24. */
+  points: SeriesPoint[];
+}
+
 // ── Arrow ──────────────────────────────────────────────────────────────────
 // An arrow is a graded signal fired by the rule engine (Block 1.2). This
 // file only declares the type; the engine + grader land in a follow-up
