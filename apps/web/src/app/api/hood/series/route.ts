@@ -27,6 +27,14 @@
  * A response containing any `error` day is also sent `no-store`, so a transient
  * KV blip can never be frozen into the CDN as that day's answer.
  *
+ * THE SAME RULE, ONE LEVEL DOWN: a day that reads fine still hands back a
+ * `points` array where an absent HOUR is equally ambiguous — no cron run, or
+ * nothing priced, or a KV error the writer declined to overwrite. That is why
+ * every hit carries `coverage`, and the window carries `contiguous`. We do not
+ * claim to know why an hour is missing; we only refuse to let it go unsaid,
+ * because a consumer that plots `points` blind draws a straight, confident
+ * line across hours nobody ever observed.
+ *
  * COST: one KV request per requested day, which is why the window is capped —
  * the Upstash request cap has starved this engine once already (task #123).
  * Days before the archive start cost nothing: the answer is known without
@@ -35,7 +43,12 @@
  * a couple of minutes after midnight) so they get 5 minutes.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { readSeriesDays, SERIES_ARCHIVE_START } from "@/lib/blue-hood/poller";
+import {
+  readSeriesDays,
+  seriesCoverage,
+  SERIES_ARCHIVE_START,
+  type SeriesCoverage,
+} from "@/lib/blue-hood/poller";
 import { yyyymmdd } from "@/lib/blue-hood/kv-keys";
 
 export const runtime = "nodejs";
@@ -122,9 +135,26 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Absence is ambiguous at the HOUR level too, and the day-level guard above
+  // does nothing about it: a missing hour is a cron that never ran, an hour
+  // where nothing priced, or a KV error the writer refused to write over. We
+  // cannot say which — but leaving the hour silently out of `points` is what
+  // lets a chart join 03:00 to 09:00 and render six unobserved hours as fact.
+  const now = new Date();
+  const coverage = new Map<string, SeriesCoverage>();
+  for (const r of reads) {
+    if (r.status === "hit") coverage.set(r.day, seriesCoverage(r.day, r.value.points, now));
+  }
+
   const days = reads.map((r) =>
     r.status === "hit"
-      ? { day: r.day, status: r.status, v: r.value.v, points: r.value.points }
+      ? {
+          day: r.day,
+          status: r.status,
+          v: r.value.v,
+          coverage: coverage.get(r.day)!,
+          points: r.value.points,
+        }
       : r.status === "error"
         ? { day: r.day, status: r.status, message: r.message }
         : { day: r.day, status: r.status },
@@ -137,6 +167,22 @@ export async function GET(req: NextRequest) {
       n + (r.status === "hit" ? r.value.points.reduce((m, p) => m + p.rows.length, 0) : 0),
     0,
   );
+
+  const absentHours = [...coverage.values()].flatMap((c) => c.hours_absent);
+  // A `miss` only counts as a gap when it sits BETWEEN two days that do hold
+  // data. Asking for 31 days when the archive is a week old would otherwise
+  // report three weeks of "gap" for days the recorder was never alive for —
+  // an alarm on the expected, which is how a signal gets tuned out.
+  const hitDays = hits.map((r) => r.day);
+  const missedDays =
+    hitDays.length > 0
+      ? reads
+          .filter(
+            (r) =>
+              r.status === "miss" && r.day > hitDays[0] && r.day < hitDays[hitDays.length - 1],
+          )
+          .map((r) => r.day)
+      : [];
 
   const yesterday = yyyymmdd(new Date(todayMs - DAY_MS));
   const mutable = requested.some((d) => d >= yesterday);
@@ -155,6 +201,13 @@ export async function GET(req: NextRequest) {
       // or it will plot a hole it cannot see.
       complete: unreadable.length === 0,
       unreadable,
+      // `complete` answers "could we read every day?"; `contiguous` answers
+      // "does what we read have holes?". A window can be perfectly readable
+      // and still be missing nine hours, and the two failures call for
+      // opposite reactions — retry the read, versus accept the hole is
+      // permanent. Collapsing them into one boolean loses that.
+      contiguous: absentHours.length === 0 && missedDays.length === 0,
+      gaps: { days: missedDays, hours: absentHours },
       requested,
       totals: { days_requested: requested.length, days_with_data: hits.length, points, rows },
       days,
@@ -163,6 +216,10 @@ export async function GET(req: NextRequest) {
         miss: "we were recording; this day holds no hour where anything priced",
         error: "KV could not be read — contents UNKNOWN, not empty",
         before_archive: `earlier than ${SERIES_ARCHIVE_START}, when recording began — no backfill exists or ever will`,
+        coverage:
+          "hours_absent = hours inside expected_from..expected_to with no point. WHY they are absent is UNKNOWN — cron did not run, nothing priced, or a KV error blocked the write. The future and the hours before recording began are excluded, so they are not listed",
+        contiguous:
+          "false when a readable day still has holes — distinct from `complete`, which is only about whether the days could be read at all",
       },
     },
     { headers: { "Cache-Control": cache } },
