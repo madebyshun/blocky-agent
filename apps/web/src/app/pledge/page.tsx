@@ -24,6 +24,7 @@ import {
   CHAIN_KEYS,
 } from "@/lib/pledge/config";
 import PledgeClient, { CopyAddress } from "./PledgeClient";
+import SaleBatches from "./SaleBatches";
 
 export const metadata: Metadata = {
   title: "Token migration pledge — Blue Agent",
@@ -203,6 +204,14 @@ export default function PledgePage() {
         <section className="max-w-5xl mx-auto px-6 pb-16">
           <PledgeClient />
         </section>
+
+        {/*
+          * ══ Sale batches ═════════════════════════════════════════════════
+          * Renders nothing until the first batch is sold, so this is invisible
+          * while the pledge window is open. Below the ledger deliberately: what
+          * came in is the fact, what was sold out of it is the consequence.
+          */}
+        <SaleBatches />
 
         {/* ══ Footer ════════════════════════════════════════════════════════ */}
         <section className="max-w-3xl mx-auto px-6 pb-24 border-t border-[#1A1A2E] pt-10">
