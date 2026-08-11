@@ -103,6 +103,48 @@ its job and something else caught the call.
 
 ---
 
+### The page, in a browser, against that same anvil deployment
+
+The script above drives the contract through the page's ABI. This leg drives it
+through the page itself — a production build (`NEXT_PUBLIC_CLAIM_LIVE=true`,
+chain 31337, pointed at the distributor above), served by `next start`, loaded
+in a real browser.
+
+What rendered, read live from anvil and not from any env var:
+
+| Field on the page | Value | Where it came from |
+|---|---|---|
+| Distributor | `0x610178da211fef7d417bc0e6fed39f05609ad788` | env, echoed in full |
+| Merkle root | `0x21c91829…12890a` | `merkleRoot()` on chain |
+| $NEW token | `0x8A791620dd6260079BF849Dc5567aDC3F2FdC318` | `token()` on chain |
+| Sweep deadline | "Never — no deadline was set, so unclaimed $NEW stays claimable" | `claimDeadline()` on chain |
+| Table | 10 wallets, 13,541,576.83 $NEW, csv sha256 `d3f5…026e` | `proofs.json` |
+
+The deadline line is the one that cannot be faked by configuration: that
+sentence exists nowhere in the environment or in `proofs.json`, so rendering it
+means the `uint256` max sentinel was fetched from the contract and decoded.
+Console was clean — no errors, no warnings.
+
+**The root-mismatch interlock was fired on purpose.** It is the page's only
+safety interlock and until now nothing had ever tripped it, so it was asserted
+but not tested. One hex digit of `proofs.json`'s root was flipped — everything
+else byte-identical, so the root comparison is the only thing that can react —
+and the page reloaded into:
+
+> THE CONTRACT AND THE ALLOCATION TABLE DO NOT MATCH
+>
+> The merkle root deployed at the claim contract is not the root of the
+> allocation table this page loaded. That means one of the two is stale. No
+> claim is offered until they agree […]
+
+with both roots printed side by side, and **no Connect button anywhere on the
+page**. The file was then restored and verified back to sha256
+`d2c599c801f716c317bbec92b53f4f7839c1c02bd3a90343b52eb4ba8cbe3ec7`, and the
+claim UI came back. This is the check RUNBOOK step 4 tells the operator to
+stop on; it now has evidence behind it rather than an assertion.
+
+---
+
 ## Run 2 — Base Sepolia (chain 84532)
 
 > **Pending.** Waiting on testnet ETH for the throwaway deployer
@@ -138,7 +180,11 @@ plain 18-decimal ERC-20 with a public `mint`. Nothing about the distributor
 depends on which ERC-20 it pays out, and using the test's mock means the dry run
 cannot drift away from what the Foundry tests exercise.
 
-**One caveat this run does not cover.** Everything here is transport-level:
-viem signing and sending. The browser wallet path — connect, network switch to
-Robinhood Chain, the confirm dialog — needs a human with a wallet extension and
-is checked on the preview deployment at RUNBOOK step 4, not here.
+**One caveat this run does not cover.** The browser leg above exercised the
+page's *read* half — the contract reads, the proof file, the root comparison,
+the refusal. The *write* half is still uncovered: connecting a wallet
+extension, the network switch to Robinhood Chain, the confirm dialog, and the
+signature itself. That needs a human with a wallet and is checked on the
+preview deployment at RUNBOOK step 4, not here. Nothing in this document should
+be read as evidence that a wallet has ever signed a claim through the UI —
+the two claims above were signed by viem, not by a browser.
