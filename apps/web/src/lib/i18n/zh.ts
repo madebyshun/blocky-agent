@@ -7,9 +7,9 @@ export const zh: Dict = {
   // ─── Marketing (blueagent.dev) ──────────────────────────────────────────────
   home: {
     badge: "构建于 Base · x402 原生",
-    hero_title: "Base 上的构建者操作系统",
+    hero_title: "链上智能体操作系统",
     hero_subtitle:
-      "与一个会读链上数据的智能体对话 —— 实时 Base 数据、74 个真实工具，以及在对话中直接完成的链上操作。从构思到融资：idea → build → audit → ship → raise。",
+      "与一个会读链上数据的智能体对话 —— 实时 Base 数据、{{TOOLS}} 个真实工具，以及在对话中直接完成的链上操作。从构思到融资：idea → build → audit → ship → raise。",
     cta_open_chat: "打开 Blue Chat →",
     cta_browse_hub: "浏览中心",
     cta_token: "$BLUEAGENT ↗",
@@ -28,13 +28,15 @@ export const zh: Dict = {
     stack_chat_label: "Blue Chat",
     stack_chat_desc: "直接对话 —— 无需钱包即可开始。多模型：Kimi K2、DeepSeek、Claude、Grok。",
     stack_hub_label: "Blue Hub",
-    stack_hub_desc: "74 个 x402 工具，任何智能体都能调用。在 Base 上按次用 USDC 付费。",
+    stack_hub_desc: "{{TOOLS}} 个 x402 工具，任何智能体都能调用。在 Base 上按次用 USDC 付费。",
     stack_mcp_label: "Blue MCP",
     stack_mcp_desc: "在 Claude Code、Cursor 和 Claude Desktop 中运行整套工具。",
     stack_conn_label: "Blue Connector",
     stack_conn_desc: "接入任意外部 MCP 服务器，在对话中直接使用它的工具。",
-    stack_bank_label: "BlueBank",
-    stack_bank_desc: "Base 上的非托管支付 —— 扫码即付。",
+    stack_hood_label: "Blue Hood",
+    stack_hood_desc: "Robinhood Chain 的 24/7 非托管副驾 —— Chainlink 对比 DEX 价差、箭头信号、审核-签名交易。",
+    // stack_bank_* removed 2026-07-24 (Blue Bank archived; middleware
+    // redirects /bank + /pay → /chat).
     stack_image_label: "Blue Image",
     stack_image_desc: "在对话中生成图像 —— 链上原生，按次付费。",
     stack_video_label: "Blue Video",
@@ -45,7 +47,7 @@ export const zh: Dict = {
     s_why_kicker: "为什么选 Blue Chat",
     s_why_title: "大多数聊天机器人在猜测加密数据。Blue Chat 直接读取它。",
     s_why_sub:
-      "通用 AI 会编造代币数据、看不到钱包、也无法执行操作。Blue Chat 连接实时 Base 数据和 74 个真实工具 —— 每个数字都有来源，而非猜测。",
+      "通用 AI 会编造代币数据、看不到钱包、也无法执行操作。Blue Chat 连接实时 Base 数据和 {{TOOLS}} 个真实工具 —— 每个数字都有来源，而非猜测。",
 
     // 3 · 如何使用 Blue（模态标签）
     s_chat_kicker: "如何使用",
@@ -65,12 +67,12 @@ export const zh: Dict = {
 
     // 4 · 中心
     s_hub_kicker: "中心",
-    s_hub_title: "74 个工具，在对话中直接调用。",
+    s_hub_title: "{{TOOLS}} 个工具，在对话中直接调用。",
     s_hub_sub:
       "Base 智能体的情报层。原始数据、安全检查、alpha 信号 —— 全部 x402 原生。无需 API 密钥，无需订阅。",
-    hub_browse_all: "浏览全部 74 个 →",
+    hub_browse_all: "浏览全部 {{TOOLS}} 个 →",
     hub_browse_sub: "9 个分类 · 实时数据",
-    hub_pricing_line: "低至 $0.01/次 · 使用 USDC 或 $BLUEAGENT 支付",
+    hub_pricing_line: "低至 $0.01/次 · 在 Base 上用 USDC 支付",
 
     // 5 · 两种接入方式
     s_ways_kicker: "接入",
@@ -82,28 +84,36 @@ export const zh: Dict = {
     ways_api_label: "面向智能体",
     ways_api_desc: "通过 x402 / MCP 调用任意工具。在 Base 上按次用 USDC 付费 —— 无需注册。",
 
-    // 6 · 定价
+    // 6 · 定价 —— 两条轨道（对话额度 + x402 工具）
     s_pricing_kicker: "定价",
-    s_pricing_title: "持有 $BLUEAGENT，免费对话。",
+    s_pricing_title: "两条轨道。无需订阅。",
     s_pricing_sub:
-      "额度每天刷新。无需订阅。只需持有 $BLUEAGENT 即可构建。",
-    pricing_x402_line: "x402：$0.01–$0.20/次 · USDC 或 $BLUEAGENT · 无需注册",
-    pricing_hold_line: "持有的 $BLUEAGENT 越多，免费构建的越多。",
-    buy_token: "购买 $BLUEAGENT →",
-    stake_now: "立即质押 →",
+      "Blue Chat 使用每日免费额度。中心工具在 Base 上按次用 USDC 付费。按需选择即可。",
+    pricing_chat_label: "Blue Chat",
+    pricing_chat_price: "免费开始",
+    pricing_chat_desc: "每日免费额度，无需钱包。连接任意钱包获得更多，或用 USDC 充值。",
+    pricing_hub_label: "中心工具",
+    pricing_hub_price: "$0.01–$1.00",
+    pricing_hub_desc: "在 Base 上按次用 USDC 付费。无需订阅，无需 API 密钥。",
+    pricing_mcp_label: "MCP 服务器",
+    pricing_mcp_price: "免费",
+    pricing_mcp_desc: "在 Claude Code、Cursor 和 Claude Desktop 中使用全套工具。无需密钥。",
+    pricing_footnote: "x402：$0.01–$1.00/次 · 在 Base 上用 USDC · 无需注册",
 
     final_title: "今天就在 Base 上开始构建",
     final_open_chat: "打开 Blue Chat →",
-    final_browse_hub: "浏览 74 个中心工具 →",
+    final_browse_hub: "浏览 {{TOOLS}} 个中心工具 →",
     final_install_mcp: "安装 MCP →",
     final_read_docs: "阅读文档 →",
 
-    footer_tagline: "Base 上的链上智能体",
-    footer_powered: "由 Bankr · Venice AI 提供支持 · x402 原生 · Base",
+    footer_tagline: "链上智能体",
+    footer_powered: "由 Venice AI 提供支持 · x402 原生 · Base",
   },
   nav_marketing: {
     about: "关于",
-    skills: "技能包",
+    // `soul`（原 `skills`，2026-08）—— /soul 上的 SOUL.md 身份页。
+    // “技能”现在专指应用内已安装的技能目录，营销导航不再使用该词。
+    soul: "灵魂",
     docs: "文档",
     github: "GitHub",
     launch_app: "启动应用 →",
@@ -116,11 +126,22 @@ export const zh: Dict = {
     feed: "动态",
     bank: "银行",
     launches: "发行",
+    hood: "Hood",
     b20: "B20",
-    dashboard: "账户",
+    dashboard: "概览",
     profile: "个人资料",
     docs: "文档",
     home: "首页",
+    // AgentOS 控制页（从 Blue Chat 标签页提升而来）。
+    skills: "技能",
+    connectors: "连接器",
+    cron: "定时任务",
+    usage: "用量",
+    plans: "套餐",
+    // 侧边栏分组标题。
+    group_workspace: "工作区",
+    group_control: "控制台",
+    group_account: "账户",
   },
   chat: {
     placeholder: "向 BlueAgent 发送消息...",

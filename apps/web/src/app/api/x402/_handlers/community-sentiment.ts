@@ -6,11 +6,12 @@
 // Price: $0.25
 
 import { getAeonOutput, formatAeonForLLM } from "@/app/api/_lib/aeon-kv";
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
 
-// Venice — live web search so sentiment is read from real posts, not model guesses.
+// No live web search (Virtuals-only). Sentiment is an estimate from Aeon
+// narrative context (when present) + model knowledge — never real posts.
 async function llm(system: string, user: string, temp = 0, tokens = 1000): Promise<string> {
-  return callVeniceLLM({ system, user, temperature: temp, maxTokens: tokens });
+  return (await callLLM({ system, user, temperature: temp, maxTokens: tokens })).text;
 }
 const DISCLAIMER = "AI estimate of likely community sentiment generated from model knowledge — NOT measured from live social posts. Treat scores as directional, not data.";
 function parseJson(t: string): Record<string, unknown> | null {
@@ -70,7 +71,7 @@ Schema: {
     const resultRaw = await llm(`${NARRATIVE_CTX}
 
 You are Blue Agent — community sentiment analyzer.
-Search the web NOW for current community sentiment about this project/token on X/Twitter, Farcaster, and Telegram. Base your read on real posts/signals you find — not model estimates. If you genuinely find no data, state that clearly in the summary rather than inventing sentiment.
+You do NOT have live web or social-media access. Do NOT claim to have searched X/Twitter, Farcaster, or Telegram. Base your read ONLY on the Aeon narrative context provided above (if any) plus general model knowledge, and treat it as a directional estimate — not measured data. Where you lack a verified signal, say "insufficient data" in the summary rather than inventing sentiment.
 CRITICAL: Return ONLY raw JSON.
 Schema: {
   "sentiment_score": <0-100>,
@@ -104,6 +105,7 @@ Schema: {
       timestamp: new Date().toISOString(),
       data_source: "AI estimate (no live social data — model-generated, not measured)",
       disclaimer: DISCLAIMER,
+      confidence_note: STATIC_KNOWLEDGE_DISCLAIMER,
       project,
       miroshark: consensus,
       ...result,
@@ -115,6 +117,7 @@ Schema: {
       timestamp: new Date().toISOString(),
       data_source: "AI estimate (no live social data — model-generated, not measured)",
       disclaimer: DISCLAIMER,
+      confidence_note: STATIC_KNOWLEDGE_DISCLAIMER,
       degraded: true,
       note: "Estimate unavailable this run — please retry.",
       message: (e as Error).message,

@@ -37,7 +37,7 @@ export default async function Image() {
           {count} tools · pay per call · x402 USDC · no signup
         </div>
         <div style={{ display: "flex", gap: 16, marginTop: 40 }}>
-          {([["Blue Chat", C.cyan], ["74 Tools", C.violet], ["B20 Launch", C.green]] as [string, string][]).map(([label, color]) => (
+          {([["Blue Chat", C.cyan], [`${count} Tools`, C.violet], ["B20 Launch", C.green]] as [string, string][]).map(([label, color]) => (
             <div key={label} style={{ display: "flex", alignItems: "center", fontFamily: f.mono, fontSize: 25, color, border: `2px solid ${color}55`, borderRadius: 999, padding: "8px 22px" }}>
               {label}
             </div>

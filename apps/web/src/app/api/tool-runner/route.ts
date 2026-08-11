@@ -3,7 +3,7 @@ import {
   runAeonSkill,
   runMiroSharkSkill,
   runBlueSkill,
-  callBankrLLM,
+  callLLM,
 } from "@/app/api/_lib/llm";
 import { AGENT_TOOLS, type AgentTool } from "@/lib/agent-tools";
 
@@ -35,11 +35,15 @@ async function runSingleTool(tool: AgentTool, userInput: string): Promise<string
       maxTokens: 900,
     })) ?? "No result from Blue Agent";
   }
-  return await callBankrLLM({
+  // Bankr was banned 2026-07-18 — route through the shared Virtuals →
+  // Venice → Bankr chain instead of calling Bankr directly. Return the
+  // text field to preserve this function's `Promise<string>` contract.
+  const r = await callLLM({
     system: `You are an AI agent assistant. Run the "${tool.name}" skill. ${tool.description}`,
     messages: [{ role: "user", content: userInput }],
     maxTokens: 800,
   });
+  return r.text;
 }
 
 async function runCompositeTool(tool: AgentTool, userInput: string): Promise<string> {

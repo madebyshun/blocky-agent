@@ -21,16 +21,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kvGet, kvSet } from "@/lib/kv";
 import { setAeonOutput } from "@/app/api/_lib/aeon-kv";
+import { callLLM as callSharedLLM } from "@/app/api/_lib/llm";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const BANKR_API_KEY      = process.env.BANKR_API_KEY ?? "";
-const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY ?? "";
-const BANKR_LLM          = "https://llm.bankr.bot/v1/messages";
-const ANTHROPIC_LLM      = "https://api.anthropic.com/v1/messages";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const TELEGRAM_CHAT_ID   = process.env.TELEGRAM_CHAT_ID ?? "";
 const CRON_SECRET        = process.env.CRON_SECRET ?? "";
@@ -81,54 +78,18 @@ async function saveSignals(signals: Signal[]): Promise<void> {
   await kvSet(KV_KEY_HISTORY, updated, KV_TTL_HISTORY);
 }
 
-// ─── LLM call (Bankr → Anthropic fallback) ───────────────────────────────────
+// ─── LLM call ────────────────────────────────────────────────────────────────
+// Routes through the shared callLLM (Virtuals). The old Bankr-first /
+// Anthropic-fallback path was dead: llm.bankr.bot was 403-banned 2026-07-20 and
+// the Anthropic direct key is usually out of credit. Local signature kept so
+// the call sites below are unchanged.
 
 async function callLLM(system: string, prompt: string): Promise<string> {
-  const body = JSON.stringify({
-    model:      "claude-haiku-4-5",
-    max_tokens: 1500,
+  return (await callSharedLLM({
     system,
     messages: [{ role: "user", content: prompt }],
-  });
-
-  if (BANKR_API_KEY) {
-    const res = await fetch(BANKR_LLM, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BANKR_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body,
-      signal: AbortSignal.timeout(60000),
-    });
-    if (res.ok) {
-      const data = await res.json() as { content?: { text?: string }[] };
-      return data.content?.[0]?.text ?? "";
-    }
-  }
-
-  if (!ANTHROPIC_API_KEY) throw new Error("No LLM available");
-
-  const res = await fetch(ANTHROPIC_LLM, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5",
-      max_tokens: 1500,
-      system,
-      messages: [{ role: "user", content: prompt }],
-    }),
-    signal: AbortSignal.timeout(60000),
-  });
-
-  if (!res.ok) throw new Error(`LLM error: ${res.status}`);
-  const data = await res.json() as { content?: { text?: string }[] };
-  return data.content?.[0]?.text ?? "";
+    maxTokens: 1500,
+  })).text;
 }
 
 // ─── Research prompt ──────────────────────────────────────────────────────────

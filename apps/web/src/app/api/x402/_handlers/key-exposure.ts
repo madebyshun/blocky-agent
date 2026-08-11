@@ -4,33 +4,23 @@
 // never fabricate the exposed/txCount facts.
 
 import { getWalletSnapshot } from "@/lib/onchain";
+import { callLLM } from "@/app/api/_lib/llm";
 
 type BankrMessage = { role: string; content: string };
 
+// Bankr LLM (llm.bankr.bot) was 403-banned 2026-07-20 → route this local
+// helper through callLLM (Virtuals). Signature kept so call sites are
+// unchanged; the original 0.5 temperature default is preserved.
 async function callBankrLLM(opts: {
   model?: string; system: string; messages: BankrMessage[];
   temperature?: number; maxTokens?: number;
 }): Promise<string> {
-  const res = await fetch("https://llm.bankr.bot/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": process.env.LLM_API_KEY ?? process.env.BANKR_API_KEY ?? "",
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: opts.model ?? "claude-haiku-4-5",
-      system: opts.system,
-      messages: opts.messages,
-      temperature: opts.temperature ?? 0.5,
-      max_tokens: opts.maxTokens ?? 1000,
-    }),
-  });
-  if (!res.ok) throw new Error(`Bankr LLM ${res.status}: ${await res.text()}`);
-  const d = await res.json() as { content?: { text: string }[]; text?: string };
-  if (d.content?.length) return d.content[0].text;
-  if (d.text) return d.text;
-  throw new Error("Invalid Bankr LLM response");
+  return (await callLLM({
+    system: opts.system,
+    messages: opts.messages,
+    temperature: opts.temperature ?? 0.5,
+    maxTokens: opts.maxTokens ?? 1000,
+  })).text;
 }
 
 function extractJsonObject(text: string): Record<string, unknown> | null {

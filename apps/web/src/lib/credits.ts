@@ -1,34 +1,20 @@
 /**
- * Blue Agent Credit System — Balance-based daily refresh
+ * Blue Agent Credit System — token-free daily allowance
  *
- * Credits are granted daily based on $BLUEAGENT balance.
- * No purchase needed — just hold BLUE.
+ * Chat credits are decoupled from $BLUEAGENT. Everyone gets a free daily
+ * bucket — no token to hold, nothing to stake:
+ *   Guest  (no wallet):     100 cr/day  (session/device — enough to feel it)
+ *   Member (any wallet):    500 cr/day  (connect any wallet, no token needed)
  *
- * Tiers (at $BLUEAGENT $0.000001/token):
- *   Guest    (no wallet):     100 cr/day  (≈10 free Fast messages — growth tier)
- *   Starter  (500K BLUE):     500 cr/day  (~$0.50)
- *   Pro      (2M BLUE):     2,000 cr/day  (~$2)
- *   Max      (10M BLUE):   10,000 cr/day  (~$10)
- *
- * Tiers scale linearly (~1,000 BLUE held/staked = 1 credit/day). Max is a high
- * but FINITE allowance — it is metered like every other tier, not unlimited.
+ * The daily allowance is use-it-or-lose-it and refreshes every 24h. Need more
+ * than the daily bucket? Buy a credit pack in USDC on Base (x402) — that tops
+ * up a cumulative pool the ledger drains after the daily bucket is spent.
+ * Hub tools stay pay-per-call in USDC; there is no token discount anymore.
  */
 
 export const BLUE_TOKEN     = "0xf895783b2931c919955e18b5e3343e7c7c456ba3";
 export const BASE_RPC       = "https://mainnet.base.org";
 export const STAKING_ADDRESS = "0x69e539684EE48F71eCDAd58618d8e8a2423E279d";
-
-// Multiple public Base RPCs tried in order. mainnet.base.org alone is flaky
-// under burst (a chat turn fires several balance reads in seconds) — a single
-// timeout there used to return 0, silently DOWNGRADING a Max holder to a paying
-// tier mid-turn and triggering a false "insufficient credits". Falling back
-// across endpoints makes the tier read reliable so that can't happen.
-const BASE_RPCS = [
-  "https://mainnet.base.org",
-  "https://base-rpc.publicnode.com",
-  "https://base.llamarpc.com",
-  "https://base.drpc.org",
-];
 
 const REFRESH_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -38,7 +24,10 @@ const dailyKey = (a?: string) => a ? `blue_cr_daily_${a.toLowerCase()}` : "blue_
 
 // ── Tiers ─────────────────────────────────────────────────────────────────────
 
-export type HolderTier = "Guest" | "Starter" | "Pro" | "Max";
+// "Member" = any connected wallet (token-free). "Guest" = no wallet.
+// "Starter" | "Pro" | "Max" are retained only so older persisted/default
+// values still type-check — getTierInfo no longer produces them.
+export type HolderTier = "Guest" | "Member" | "Starter" | "Pro" | "Max";
 
 export interface TierInfo {
   tier:        HolderTier;
@@ -49,48 +38,23 @@ export interface TierInfo {
   nextTier?:   { name: string; need: number; dailyCr: number };
 }
 
-const TIERS: { min: number; tier: HolderTier; dailyCr: number; discount: number; color: string }[] = [
-  { min: 10_000_000, tier: "Max",     dailyCr: 10_000, discount: 0.40, color: "#F59E0B" },
-  { min:  2_000_000, tier: "Pro",     dailyCr: 2_000, discount: 0.20, color: "#A78BFA" },
-  { min:    500_000, tier: "Starter", dailyCr:   500, discount: 0,    color: "#4FC3F7" },
-];
-
-/**
- * Guest = no wallet connected. 100 cr/day ≈ 10 Fast messages — enough to chat
- * and feel the product. Tool usage (400–500 cr each) intentionally needs a
- * tier: hold $BLUEAGENT to step up (500K → Starter 500/day, 2M → Pro 2,000/day,
- * 10M → Max 10,000/day). The token bar is cheap, so "hold to use tools" is a
- * low-friction ask that still gives the token real utility.
- */
-export const GUEST_DAILY = 100;
+// Flat daily allowances — no token thresholds. Guest = no wallet (session/
+// device bucket); Member = any connected wallet. These are the ONLY knobs for
+// the free daily bucket now; bump them to tune the free tier.
+export const GUEST_DAILY  = 100;   // no wallet — keyed by session/device id
+export const WALLET_DAILY = 500;   // any connected wallet, no token required
 
 export function getTierInfo(blueBalance: number): TierInfo {
-  const idx = TIERS.findIndex((t) => blueBalance >= t.min);
-
-  // Wallet connected but balance below Starter threshold — show as Guest+ with next-tier hint
-  if (idx === -1) {
-    const lowestTier = TIERS[TIERS.length - 1]; // Starter (500K)
-    return {
-      tier:        "Starter",
-      blueBalance,
-      dailyCr:     GUEST_DAILY,  // same as Guest until threshold reached
-      discount:    0,
-      color:       "#475569",
-      nextTier:    { name: lowestTier.tier, need: Math.ceil(lowestTier.min - blueBalance), dailyCr: lowestTier.dailyCr },
-    };
-  }
-
-  const t    = TIERS[idx];
-  const next = TIERS[idx - 1];
+  // Token-free: every connected wallet gets the same flat daily allowance and
+  // zero Hub-tool discount. `blueBalance` is ignored for tier selection (echoed
+  // back only so callers that still read the field keep working). Guests get
+  // GUEST_DAILY via getDailyCr(tier, hasWallet=false), below.
   return {
-    tier:        t.tier,
+    tier:        "Member",
     blueBalance,
-    dailyCr:     t.dailyCr,
-    discount:    t.discount,
-    color:       t.color,
-    nextTier:    next
-      ? { name: next.tier, need: Math.ceil(next.min - blueBalance), dailyCr: next.dailyCr }
-      : undefined,
+    dailyCr:     WALLET_DAILY,
+    discount:    0,
+    color:       "#4FC3F7",
   };
 }
 
@@ -102,7 +66,17 @@ export function getDailyCr(tier: TierInfo, hasWallet: boolean): number {
 // ── Credit costs ──────────────────────────────────────────────────────────────
 
 export const BASE_COST: Record<string, number> = {
-  // Bankr (Anthropic + DeepSeek via Bankr gateway)
+  // V1 Virtuals catalog-driven presets (2026-07-24 spec). These are the
+  // stable ids saved to localStorage; server resolves them → Virtuals
+  // model ids via `VIRTUALS_PRESETS` in `_lib/llm.ts`. Cost per preset
+  // matches the "chốt preset" chart shared in chat.
+  balanced:               50,  // anthropic-claude-sonnet-5 · 200k ctx
+  deep:                  200,  // anthropic-claude-opus-4-8 · 200k ctx · heavy reason
+  private:                30,  // e2ee-deepseek-v4-flash · E2EE, no logs
+  grok:                   60,  // x-ai-grok-4-20 · 2M ctx · optional
+  // Bankr-legacy tier ids kept for localStorage compatibility. `fast`
+  // in the V1 spec (deepseek-flash) shares an id with the legacy fast
+  // tier — happy coincidence, no rename needed.
   fast:                   10,
   pro:                    50,
   max:                   200,
@@ -217,64 +191,16 @@ export function refreshCreditsIfNeeded(
   return { credits: Math.max(0, current), refreshed: false, daily };
 }
 
-// ── BLUE balance via Base RPC ─────────────────────────────────────────────────
-
-/** Convert wei (18 decimals) hex string to BLUE units with 2-decimal precision */
-function weiHexToBlue(hex: string | undefined): number {
-  if (!hex || hex === "0x") return 0;
-  try {
-    const raw = BigInt(hex);
-    return Math.floor(Number(raw / BigInt(10 ** 16))) / 100;
-  } catch {
-    return 0;
-  }
-}
+// ── BLUE balance (token-free stub) ────────────────────────────────────────────
 
 /**
- * Returns EFFECTIVE BLUE balance = wallet ERC-20 balanceOf + staked amount.
- * Stakers count toward tier (e.g., Starter tier at 500K BLUE staked OR held).
+ * Token-free build: chat credits no longer depend on any on-chain balance, so
+ * we no longer read $BLUEAGENT holdings or the staking contract. Kept as a
+ * 0-returning async to preserve the import surface — callers still feed the
+ * result into `getTierInfo`, which now ignores it. (The old multi-RPC
+ * balanceOf + stakeInfo reader lived here; removed with the token tiers.)
  */
 export async function fetchBlueBalance(address: string): Promise<number> {
-  // ERC-20 balanceOf(address) — selector 0x70a08231
-  const balanceOfData = "0x70a08231" + address.slice(2).padStart(64, "0");
-  // BlueMarketStaking.stakeInfo(address) — selector 0x1601e641
-  // (Returns tuple (amount, stakedAt, dailyCredits, cooldown, pendingUsdc) — we only read amount = first 32 bytes of result)
-  const stakeInfoData = "0x1601e641" + address.slice(2).padStart(64, "0");
-
-  // Try each RPC in turn; only accept a response where the balanceOf result is
-  // a well-formed hex word (66 chars). A genuine zero balance is "0x000…0"
-  // (still 66 chars) so it passes; an RPC error / empty "0x" / undefined does
-  // NOT, so we fall through to the next endpoint instead of reporting a false
-  // zero that would downgrade the holder's tier.
-  for (const rpc of BASE_RPCS) {
-    try {
-      const res = await fetch(rpc, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify([
-          { jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: BLUE_TOKEN,     data: balanceOfData }, "latest"] },
-          { jsonrpc: "2.0", id: 2, method: "eth_call", params: [{ to: STAKING_ADDRESS, data: stakeInfoData }, "latest"] },
-        ]),
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!res.ok) continue;
-      const json = await res.json() as { id: number; result?: string }[];
-      const walletHex = json.find(r => r.id === 1)?.result;
-      const stakeHex  = json.find(r => r.id === 2)?.result;
-
-      // balanceOf must be a full 32-byte word to trust this endpoint's answer.
-      if (typeof walletHex !== "string" || walletHex.length < 66) continue;
-
-      const wallet = weiHexToBlue(walletHex);
-      // stakeInfo returns 5 uint256 values — amount is the first 32 bytes (after 0x prefix).
-      const stakedAmountHex = stakeHex && stakeHex.length >= 66 ? "0x" + stakeHex.slice(2, 66) : undefined;
-      const staked = weiHexToBlue(stakedAmountHex);
-
-      return wallet + staked;
-    } catch {
-      // network error / timeout on this endpoint — try the next one
-    }
-  }
-  // Every endpoint failed — report 0 (callers degrade gracefully).
+  void address; // kept for the import surface; balance no longer affects credits
   return 0;
 }

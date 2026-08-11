@@ -7,10 +7,10 @@
 // Price: $0.75
 
 import { findBaseProtocol, protocolToPrompt, type BaseProtocol } from "@/lib/market-data";
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM, STATIC_KNOWLEDGE_DISCLAIMER } from "@/app/api/_lib/llm";
 
 async function llm(system: string, user: string, temp = 0.3, tokens = 1300): Promise<string> {
-  return callVeniceLLM({ system, user, temperature: temp, maxTokens: tokens });
+  return (await callLLM({ system, user, temperature: temp, maxTokens: tokens })).text;
 }
 function parseJson(t: string): Record<string, unknown> | null {
   let s = t.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
@@ -46,8 +46,8 @@ export default async function handler(req: Request): Promise<Response> {
       : "No named competitors matched a Base protocol on DefiLlama — reason about the competitive set qualitatively from known fundamentals.";
 
     const system = `You are Blue Agent — competitive intelligence engine for Base builders (chain 8453).
-Search the web for REAL competitors of this project right now. Name specific projects, their URLs, funding, and market position. Do NOT say "no competitors found" — always search and return real, current results.
-${matched.length ? "You are also given REAL DefiLlama TVL/change/category for the matched competitors. Use those exact numbers; NEVER invent TVL. Anchor each competitor's threat_level on its real TVL + 7d trend." : "No DefiLlama metrics were pre-matched — rely on your web search and label any unverifiable score as an estimate."}
+You do NOT have live web access. Do NOT fabricate competitor URLs, funding rounds, valuations, or "current" market positions — you cannot verify them. Reason about the competitive set from the REAL data provided plus general fundamentals only.
+${matched.length ? "You are given REAL DefiLlama TVL/change/category for the matched competitors. Use those exact numbers; NEVER invent TVL. Anchor each competitor's threat_level on its real TVL + 7d trend." : "No DefiLlama metrics were pre-matched — reason qualitatively from known fundamentals and mark any figure you cannot verify as \"[data unavailable]\" rather than guessing."}
 The subject project is described in text only (likely pre-launch / no live metric), so its score is a qualitative judgement, not a measurement.
 Return ONLY raw JSON. No markdown.
 Schema: {
@@ -84,6 +84,9 @@ Schema: {
       tool: "competitor-scan",
       timestamp: new Date().toISOString(),
       data_source: matched.length ? "DefiLlama (live Base TVL for matched competitors) + analysis" : "advisory (no competitors matched on DefiLlama)",
+      // When nothing matched a live DefiLlama protocol, the competitive read is
+      // pure static-knowledge — flag it as low-confidence.
+      ...(matched.length ? {} : { confidence_note: STATIC_KNOWLEDGE_DISCLAIMER }),
       project,
       competitors_requested: competitors,
       competitors_matched: matched.map((r) => r.name),

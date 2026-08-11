@@ -4,11 +4,12 @@
 // Fully self-contained
 
 import { getAeonOutput, formatAeonForLLM } from "@/app/api/_lib/aeon-kv";
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM } from "@/app/api/_lib/llm";
 
-// Venice — live web search so market/metric figures are grounded, not invented.
+// Virtuals-only synthesis (no web search). Market/metric framing is
+// model-generated — grounded facts come from the Aeon narrative context, not live search.
 async function llm(system: string, user: string, temp = 0.4, tokens = 1000): Promise<string> {
-  return callVeniceLLM({ system, user, temperature: temp, maxTokens: tokens });
+  return (await callLLM({ system, user, temperature: temp, maxTokens: tokens })).text;
 }
 function parseJson(t: string): Record<string, unknown> | null {
   let s = t.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");

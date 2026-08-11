@@ -33,8 +33,8 @@ $ blue doctor`}</CodeBlock>
           A full-screen menu — arrow keys to browse and run every command without memorizing flags.
         </Card>
       </CardGrid>
-      <Callout color="#34D399" title="No install? Use the browser terminal">
-        <a href="/terminal" className="text-[#34D399] underline">blueagent.dev/terminal</a> runs the same commands in your browser — tab-autocomplete and full history, nothing to install.
+      <Callout color="#34D399" title="No install? Use Blue Chat">
+        <a href="/app/chat" className="text-[#34D399] underline">Blue Chat</a> runs the same commands in your browser — slash commands and live Hub tools, nothing to install.
       </Callout>
 
       <H2 id="setup">First-run setup</H2>

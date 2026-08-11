@@ -1,0 +1,61 @@
+name: Blue Hood — Poll (backup)
+
+# Backup cron scheduler for Blue Hood.
+#
+# WHY THIS EXISTS: Vercel Cron sat silent for 2 days after the merge
+# because `vercel.json` was at the repo root but the project's Root
+# Directory is `apps/web` (monorepo layout). The file was moved to
+# `apps/web/vercel.json` in the same PR that added this workflow,
+# but Vercel Cron has proven soft on schedule adherence in the past
+# (Pro plan) — a GitHub Actions ping is a cheap, observable safety
+# net that keeps the engine ticking regardless.
+#
+# The route is idempotent — it takes a KV lock on entry (bh:poll:lock,
+# TTL 5 min) so overlapping calls from Vercel Cron + this Action can't
+# double-poll → double-burst GT. Extra ticks safely no-op.
+#
+# CADENCE: Vercel Cron (`apps/web/vercel.json`, */5) is the PRIMARY,
+# native scheduler. This Action is a MANUAL rescue lever — run it from
+# the Actions tab (workflow_dispatch) if Vercel Cron goes silent again.
+# The `schedule:` trigger was removed so the two schedulers don't both
+# fire every 5 min and burn 2× the KV ops on lock-skip no-ops.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: blue-hood-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Ping /api/cron/blue-hood/poll
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repo secret is not set — cannot ping the poll route."
+            exit 1
+          fi
+          echo "Pinging poll…"
+          # Follow redirects, HTTP timeout 240s (poll cycle is ~250s on
+          # busy hours; lock-skip path returns 202 quickly).
+          # `-w` prints http status on its own line at the end so we can
+          # grep it below. Body streamed to stdout for the operator.
+          curl -sS -L --max-time 240 \
+            -w '\nHTTP_STATUS=%{http_code}\n' \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -X POST 'https://blueagent.dev/api/cron/blue-hood/poll' \
+            | tee poll_response.txt
+          status=$(grep -oE 'HTTP_STATUS=[0-9]+' poll_response.txt | tail -1 | cut -d= -f2)
+          # 200 = cycle ran, 202 = lock-skipped (previous cycle still running,
+          # which is FINE — an overlap-safety no-op). Anything else = alert.
+          if [ "$status" = "200" ] || [ "$status" = "202" ]; then
+            echo "OK http=$status"
+          else
+            echo "::error::Poll returned http=$status"
+            exit 1
+          fi

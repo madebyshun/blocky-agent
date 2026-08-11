@@ -12,33 +12,26 @@
 // Price: $0.20
 
 import { getBaseTrending, getBaseNewPools, type Pool } from "@/lib/market-data";
+import { callLLM } from "@/app/api/_lib/llm";
 
 type BankrMessage = { role: string; content: string };
 
+// Delegates to the shared Virtuals → Venice → Bankr chain. Bankr was
+// banned 2026-07-18; the direct-Bankr fetch this used to do is dead
+// on prod. `callLLM` retries providers in order and returns text +
+// provenance. Name/signature preserved so all call sites stay identical.
 async function callBankrLLM(opts: {
   model?: string; system: string; messages: BankrMessage[];
   temperature?: number; maxTokens?: number;
 }): Promise<string> {
-  const res = await fetch("https://llm.bankr.bot/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": process.env.LLM_API_KEY ?? process.env.BANKR_API_KEY ?? "",
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: opts.model ?? "claude-haiku-4-5",
-      system: opts.system,
-      messages: opts.messages,
-      temperature: opts.temperature ?? 0.4,
-      max_tokens: opts.maxTokens ?? 800,
-    }),
+  const r = await callLLM({
+    system: opts.system,
+    messages: opts.messages,
+    temperature: opts.temperature,
+    maxTokens: opts.maxTokens,
+    model: opts.model,
   });
-  if (!res.ok) throw new Error(`Bankr LLM ${res.status}: ${await res.text()}`);
-  const d = await res.json() as { content?: { text: string }[]; text?: string };
-  if (d.content?.length) return d.content[0].text;
-  if (d.text) return d.text;
-  throw new Error("Invalid Bankr LLM response");
+  return r.text;
 }
 
 function extractJsonObject(text: string): Record<string, unknown> | null {
@@ -51,8 +44,8 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
 }
 
 // ── Quality thresholds (FIX 1) ───────────────────────────────────────────────
-const MIN_LIQ = 50_000; // loại thanh khoản mỏng
-const MIN_VOL = 20_000; // loại token chết
+const MIN_LIQ = 50_000; // filter out thin liquidity
+const MIN_VOL = 20_000; // filter out dead tokens
 
 // Denominator / blue-chip assets are NOT "picks" — they appear as the base
 // symbol of quote pairs (e.g. WETH/USDC) and would always top a liquidity-

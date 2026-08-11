@@ -219,6 +219,48 @@ async function bestPoolForPair(
   return live.reduce<LivePool>((best, p) => (p.liquidity > best.liquidity ? p : best), live[0]);
 }
 
+/**
+ * Non-mutating V3-executability probe. Returns the same route kind that
+ * `buildTokenToTokenSwapCalldata` would resolve, WITHOUT building the
+ * calldata. Used by the quote handler (`rh-stock-swap-quote`) so it can
+ * be honest about whether the swap the user is quoting will actually be
+ * executable — before the fix, GT told the quote "direct pool exists"
+ * (V3 OR V4), but prepare only executes V3, so V4-only tokens like SNDK
+ * would get a green quote then a red prepare error. Now the quote can
+ * refuse "direct" cleanly. See rh-stock-swap-prepare for the mirror.
+ */
+export async function checkTokenToTokenRoute(
+  tokenIn: `0x${string}`,
+  tokenOut: `0x${string}`,
+): Promise<
+  | { route: "direct" | "weth-hopped"; direct?: { address: `0x${string}`; fee: number } }
+  | { route: null; reason: string }
+> {
+  const weth = ROBINHOOD_MAINNET_VERIFIED_WETH9 as `0x${string}`;
+  const wethLower = weth.toLowerCase();
+  const inLower = tokenIn.toLowerCase();
+  const outLower = tokenOut.toLowerCase();
+  if (inLower === outLower) return { route: null, reason: "tokenIn and tokenOut are the same" };
+
+  const direct = await bestPoolForPair(tokenIn, tokenOut);
+  if (direct) return { route: "direct", direct: { address: direct.address, fee: direct.fee } };
+
+  // If either side already IS WETH, hopping through WETH is the same as
+  // the direct we just tried — bail. Same short-circuit as the real
+  // calldata builder.
+  if (inLower === wethLower || outLower === wethLower) {
+    return { route: null, reason: "no direct V3 pool for this pair (WETH side of pair)" };
+  }
+  const [legIn, legOut] = await Promise.all([
+    bestPoolForPair(tokenIn, weth),
+    bestPoolForPair(weth, tokenOut),
+  ]);
+  if (!legIn || !legOut) {
+    return { route: null, reason: "no V3 route: neither a direct pool nor a WETH-hopped route exists" };
+  }
+  return { route: "weth-hopped" };
+}
+
 export interface TokenToTokenCalldataResult {
   /** "direct" = one single-hop tx. "multi-hop" = two sequential single-hop txs via WETH. null = no route. */
   route: "direct" | "multi-hop" | null;

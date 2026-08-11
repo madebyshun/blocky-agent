@@ -156,7 +156,7 @@ export default function RobinhoodRouterClient() {
         <button
           onClick={deployRouter}
           disabled={!isConnected || deployStep === "sending" || deployStep === "polling"}
-          className="px-4 py-2 rounded bg-[#00C805] text-black font-bold disabled:opacity-40"
+          className="px-4 py-2 rounded bg-[#34D399] text-black font-bold disabled:opacity-40"
         >
           {deployStep === "sending" ? "Confirm in wallet…" : deployStep === "polling" ? "Waiting for confirmation…" : "Deploy router"}
         </button>
@@ -166,7 +166,7 @@ export default function RobinhoodRouterClient() {
           </p>
         )}
         {routerAddress && (
-          <p className="mt-2 text-[#00C805]">
+          <p className="mt-2 text-[#34D399]">
             Deployed: <a className="underline" href={`${EXPLORER}/address/${routerAddress}`} target="_blank" rel="noopener noreferrer">{routerAddress}</a>
             <br />
             <span className="text-slate-500 text-xs">
@@ -215,7 +215,7 @@ export default function RobinhoodRouterClient() {
           {swapStep === "sending" ? "Confirm in wallet…" : "Run test swap"}
         </button>
         {swapTxHash && (
-          <p className="mt-3 text-[#00C805]">
+          <p className="mt-3 text-[#34D399]">
             tx: <a className="underline" href={`${EXPLORER}/tx/${swapTxHash}`} target="_blank" rel="noopener noreferrer">{swapTxHash}</a>
           </p>
         )}

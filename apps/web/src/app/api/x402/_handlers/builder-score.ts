@@ -4,14 +4,15 @@
 //     stars, languages, account age.
 //   • GitHub repo activity if a repo slug is supplied (lib/github).
 //   • On-chain wallet activity on Base if an address is supplied (lib/onchain).
-// Synthesis runs on Venice (live web search) so CT/Farcaster presence is grounded
+// No live web search (Virtuals-only): score is grounded in GitHub + on-chain
+// data; CT/Farcaster presence cannot be verified and is reported [data unavailable]
 // in real results, not guessed from the handle name. The LLM never invents the
 // grounded numbers; missing data is labelled "unavailable". Resilient: never 500.
 // Price: $0.35
 
 import { fetchRepo, slugifyRepo, scoreRepoActivity, repoFactsPrompt, type RepoData } from "@/lib/github";
 import { getWalletSnapshot, snapshotToPrompt, normalizeAddress } from "@/lib/onchain";
-import { callVeniceLLM, extractJsonObject } from "@/app/api/_lib/llm";
+import { callLLM, extractJsonObject } from "@/app/api/_lib/llm";
 
 // ─── GitHub profile + repos by handle (public API, no key) ───────────────────
 type GhUser = { login: string; name?: string | null; public_repos: number; followers: number; created_at: string };
@@ -83,12 +84,12 @@ export default async function handler(req: Request): Promise<Response> {
         : "",
       !githubGrounded ? `github: unavailable — no GitHub data found for "${handle || repo || "(none)"}". Do NOT infer GitHub activity, shipping history, or technical skill from the handle NAME.` : "",
       onchainGrounded ? `REAL on-chain activity:\n${snapshotToPrompt(snap!)}` : "onchain: unavailable — no wallet address supplied. Do NOT infer on-chain activity.",
-      `Builder X/Twitter handle: @${handle || "(unknown)"}. Use web search to check real CT / Farcaster presence; if nothing verifiable is found, write "[data unavailable]" rather than guessing.`,
+      `Builder X/Twitter handle: @${handle || "(unknown)"}. No live web/social access — you cannot verify CT / Farcaster presence, so write "[data unavailable]" for community/CT signals rather than guessing.`,
     ].filter(Boolean).join("\n\n");
 
     const system = `You are Blue Agent — builder reputation analyst for Base (chain 8453).
 You are given REAL signals where available (GitHub profile/repo activity, on-chain wallet activity). Anchor shipping_history + technical_credibility on the GitHub data and onchain_activity on the wallet data — reference the real numbers, never invent them.
-CRITICAL: Never infer skill, output, or reputation from the handle's NAME or vibe. If a dimension has no real data, set it to "unknown" and say so. For community/CT presence, search the web; if nothing is found, write "[data unavailable]".
+CRITICAL: Never infer skill, output, or reputation from the handle's NAME or vibe. If a dimension has no real data, set it to "unknown" and say so. There is NO live web/social access, so community/CT presence cannot be verified — write "[data unavailable]" for it, never a guess.
 Return ONLY raw JSON. No markdown.
 Schema: {
   "score": <0-100 or null if no data>,
@@ -104,7 +105,7 @@ Schema: {
 
     let blue: Record<string, unknown> | null = null;
     for (let attempt = 0; attempt < 2 && !blue; attempt++) {
-      try { blue = parseJson(await callVeniceLLM({ system, user: realCtx, temperature: 0.3, maxTokens: 900 })); } catch { /* retry */ }
+      try { blue = parseJson((await callLLM({ system, user: realCtx, temperature: 0.3, maxTokens: 900 })).text); } catch { /* retry */ }
     }
     if (!blue) blue = { score: null, tier: "unknown", onchain_activity: "unknown", shipping_history: "unknown", technical_credibility: "unknown", base_ecosystem_score: null, known_projects: [], community: { score: null, ct_presence: "unknown", verdict: "Estimate unavailable this run." }, blue_assessment: "Synthesis briefly unavailable — see github/onchain data below, or re-run.", degraded: true };
 
@@ -119,7 +120,7 @@ Schema: {
         repoScored ? "GitHub repo (live)" : "",
         gh ? "GitHub profile (live)" : "",
         onchainGrounded ? "Base RPC/Basescan (live)" : "",
-        "Venice web search (CT/community)",
+        "CT/community: [data unavailable] (no live web access)",
       ].filter(Boolean).join(" + "),
       handle: handle || null,
       url: handle ? `https://x.com/${handle}` : null,

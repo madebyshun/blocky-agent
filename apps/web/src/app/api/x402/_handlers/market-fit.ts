@@ -7,11 +7,16 @@
 // Price: $0.35
 
 import { getBaseTvl, getBaseTrending, tvlToPrompt, poolsToPrompt } from "@/lib/market-data";
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM } from "@/app/api/_lib/llm";
 
 type BankrMessage = { role: string; content: string };
+// Delegates to the shared Virtuals → Venice → Bankr chain. Bankr was
+// banned 2026-07-18; the direct-Bankr fetch this used to do is dead
+// on prod. `callLLM` retries providers in order and returns text +
+// provenance. Name/signature preserved so all call sites stay identical.
 async function callBankrLLM(opts: { system: string; messages: BankrMessage[]; temperature?: number; maxTokens?: number }): Promise<string> {
-  return callVeniceLLM({ system: opts.system, messages: opts.messages, temperature: opts.temperature, maxTokens: opts.maxTokens });
+  const r = await callLLM({ system: opts.system, messages: opts.messages, temperature: opts.temperature, maxTokens: opts.maxTokens });
+  return r.text;
 }
 function extractJsonObject(text: string): Record<string, unknown> | null {
   let raw = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "");

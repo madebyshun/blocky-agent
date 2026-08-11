@@ -73,7 +73,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         {/* bottom: footer */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
           <div style={{ display: "flex", fontFamily: f.mono, fontSize: 22, color: "#7A8FAE" }}>blueagent.dev</div>
-          <div style={{ display: "flex", fontFamily: f.mono, fontSize: 22, color: "#7A8FAE" }}>Powered by Bankr · Venice AI</div>
+          <div style={{ display: "flex", fontFamily: f.mono, fontSize: 22, color: "#7A8FAE" }}>Powered by Venice AI</div>
         </div>
       </div>
     ),

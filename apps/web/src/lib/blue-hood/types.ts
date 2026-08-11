@@ -1,0 +1,410 @@
+/**
+ * Blue Hood — shared type definitions.
+ *
+ * The poller writes normalized snapshots + arrows into KV; /hood + the
+ * alert delivery layer read from KV. This file is the single source of
+ * truth for those shapes so every reader/writer stays honest.
+ */
+
+// ── Snapshot ──────────────────────────────────────────────────────────────
+// One row per registry ticker per poll cycle. The M5 arb tool already
+// gives us most of what /hood needs — verdict, market clock, drift %,
+// pool metadata. We only re-shape it (drop noisy nested fields), never
+// re-derive numbers here.
+
+export type M5Verdict =
+  | "ALIGNED"
+  | "LONG_DEX"
+  | "SHORT_DEX"
+  | "FROZEN_ALIGNED"
+  | "PREMARKET_DRIFT"
+  | "AFTERHOURS_DRIFT"
+  | "INSUFFICIENT_DATA";
+
+export type MarketSession = "regular" | "premarket" | "afterhours" | "weekend" | "holiday";
+
+export interface TickerSnapshot {
+  /** Ticker symbol, uppercase. */
+  ticker: string;
+  /** Human-readable name from registry. */
+  name: string;
+  /** ERC-20 contract on Robinhood Chain. */
+  contract: string;
+  /** M5 verdict, or "ERROR" if the poll failed for this row. */
+  verdict: M5Verdict | "ERROR";
+  /** Chainlink oracle price, USD. Null on error. */
+  oracle_usd: number | null;
+  /** Deepest DEX pool spot price, USD. Null on error. */
+  dex_usd: number | null;
+  /** Primary pool TVL (USD) — the pool selected by `resolvePrimaryPool`
+   *  (USDG-quoted preferred, then deepest). This is the pool the swap
+   *  path uses, so it's the honest "how much liquidity is at the price
+   *  frame you'll actually trade at" number. NOT for dust gating —
+   *  bankr-robinhood WETH pools regularly dwarf this. See `total_tvl_usd`. */
+  tvl_usd: number | null;
+  /** Sum of `reserve_usd` across EVERY pool for this token on RH Chain.
+   *  This is the number the dust gate must use — a token with a $21M
+   *  WETH pool but a $850k USDG pool is objectively deep even if its
+   *  primary pool is thin. The old dust check on `tvl_usd` would
+   *  blackhole those tokens. See `rule-engine.ts` MIN_TVL_USD. */
+  total_tvl_usd: number | null;
+  /** 24h volume in the primary pool — same dust-floor gate. */
+  volume_24h_usd: number | null;
+  /** dex/oracle drift as a percentage. Positive = DEX above oracle. */
+  drift_pct: number | null;
+  /** Reference to the primary pool (address or v4 pool id). */
+  pool_ref: string | null;
+  /** Whether pool_ref is a Uniswap v4 poolId (bytes32) vs a v3 pool address. */
+  is_v4_pool_id: boolean;
+  /** Market clock at time of snapshot (open + session). */
+  market: {
+    is_open: boolean;
+    session: MarketSession;
+    ny_time_iso: string;
+  };
+  /** Warnings surfaced verbatim from M5 (feed_abnormally_stale, thin_dex_pool, etc.). */
+  warnings: string[];
+  /** Error message if `verdict === "ERROR"`. */
+  error?: string;
+  /** Wall-clock ms since cycle start when this row was polled. Used by the
+   *  UI to compute per-row freshness (`age_s = now - snap.started_at - polled_at_ms`). */
+  polled_at_ms: number;
+  /** How stale the GT pool response was when reshaped (seconds). Null on
+   *  cold fetch, a number when memo-served. Reviewer T1(d): "any token
+   *  served from stale cache MUST be surfaced". */
+  data_age_s: number | null;
+  /** T-B1 — hourly close prices (up to 24 points, oldest first) served
+   *  from `bh:spark:{ticker}`. Populated by the `sparkline-refresh` cron;
+   *  the main 72s poll only reads cache, never fetches. `null` on cold
+   *  start; the UI hides the sparkline entirely when < 6 candles. */
+  sparkline: number[] | null;
+  /** T-B.1 #4 — when this row has no DEX data, WHY. `null` when we do
+   *  have data (verdict is a real M5 verdict + dex_usd is populated).
+   *  Otherwise:
+   *    • `"no_pool"` — M5 reached GT, GT responded, but no valid RWA
+   *      pool exists for this token. Persistent absence is expected.
+   *    • `"fetch_failed"` — either the tool call itself errored or M5
+   *      couldn't read GT (rate-limit, timeout, upstream error). If we
+   *      see the same ticker `fetch_failed` many cycles in a row, that's
+   *      a throttle-tail signal that needs looking at. */
+  no_data_reason: "no_pool" | "fetch_failed" | null;
+}
+
+export interface HoodSnapshot {
+  /** Monotonic snapshot id. Also used as ring-buffer key. */
+  cycle_id: number;
+  /** ISO timestamp the poll cycle started. */
+  started_at: string;
+  /** ISO timestamp the poll cycle finished. */
+  finished_at: string;
+  /** Wall-clock duration in ms. */
+  duration_ms: number;
+  /** One row per token watched this cycle. */
+  tickers: TickerSnapshot[];
+  /** Aggregated metrics for the /hood header strip. Denominators are HONEST:
+   *  `registry_total` is the RWA candidate set (stocks + ETFs, not the whole
+   *  registry — utility WETH/USDG are plumbing, not positions to watch). */
+  metrics: {
+    /** Every stock + ETF in the RWA registry. The UI shows "N/registry_total". */
+    registry_total: number;
+    /** Rows this cycle actually polled (registry_total minus no-Chainlink drops). */
+    tokens_watched: number;
+    /** Registry rows dropped this cycle because they lack a Chainlink feed. */
+    tokens_no_feed: number;
+    /** Rows polled but whose M5 call errored. Subset of tokens_watched. */
+    tokens_errored: number;
+    tvl_scanned_usd: number;
+    market_is_open: boolean;
+    market_session: MarketSession;
+  };
+}
+
+// ── Permanent price series ────────────────────────────────────────────────
+// A deliberately small, PERMANENT subset of the snapshot, written hourly to
+// `bh:series:day:YYYYMMDD`. `HoodSnapshot` is the rich shape and expires
+// after 25h; this is the thin shape that never expires.
+//
+// WHY IT IS SEPARATE rather than "just keep snapshots longer": a snapshot
+// carries per-row sparklines, warnings, pool refs and freshness telemetry —
+// all of it useful for 24h of debugging and none of it worth storing for a
+// year. What IS worth storing forever is the answer to one question we
+// cannot ask retroactively: where was the DEX trading while the oracle was
+// frozen? That needs five numbers per ticker per hour, and it needs to
+// survive a weekend (48–65h), which the 25h ring buffer cannot do.
+
+/** One ticker's prices at one hour. Field names are spelled out rather than
+ *  golfed to one letter: this record outlives the code that wrote it, so it
+ *  has to be readable without a decoder ring. */
+export interface SeriesRow {
+  /** Ticker symbol, uppercase. */
+  ticker: string;
+  /** Chainlink oracle price, USD. Null when the feed didn't read this cycle. */
+  oracle_usd: number | null;
+  /** Deepest DEX pool spot price, USD. Null when no pool resolved. */
+  dex_usd: number | null;
+  /** dex/oracle drift %, positive = DEX above oracle. Copied from the
+   *  snapshot, never recomputed here — one definition of drift, upstream. */
+  drift_pct: number | null;
+  /** Total TVL across every pool for this token, USD. Kept because "the DEX
+   *  disagreed with the oracle" means nothing without knowing how much
+   *  depth was standing behind the disagreement. */
+  total_tvl_usd: number | null;
+}
+
+/** One hour bucket within a day. */
+export interface SeriesPoint {
+  /** `YYYYMMDDHH` UTC — the dedup key within the day. */
+  hour: string;
+  /** ISO start time of the cycle that produced this point. The `hour` bucket
+   *  is truncated; this is the real instant the prices were read. */
+  at: string;
+  /** Market clock at capture. The entire point of this series is comparing
+   *  DEX behaviour across the open/closed boundary, so the boundary itself
+   *  must be recorded — not re-derived later from the timestamp, which would
+   *  silently get holidays and half-days wrong. */
+  is_open: boolean;
+  session: MarketSession;
+  /** Only tickers that actually priced. A ticker that failed is absent
+   *  rather than present-with-nulls: absence is honest, a null row would
+   *  read as "the market had no price". */
+  rows: SeriesRow[];
+}
+
+/** One UTC day of hourly points — the value stored at `bh:series:day:YYYYMMDD`. */
+export interface SeriesDay {
+  /** `YYYYMMDD` UTC. Redundant with the key on purpose, so an exported blob
+   *  can still identify itself once separated from the key. */
+  day: string;
+  /** Schema version. This record is permanent, so a future shape change has
+   *  to be *distinguishable* from today's rather than silently reinterpreted. */
+  v: number;
+  /** Hourly points, oldest first. At most 24. */
+  points: SeriesPoint[];
+}
+
+// ── Arrow ──────────────────────────────────────────────────────────────────
+// An arrow is a graded signal fired by the rule engine (Block 1.2). This
+// file only declares the type; the engine + grader land in a follow-up
+// commit so /hood can still render "no arrows yet" without them.
+
+export type ArrowType = "drift" | "arb" | "flow" | "whale";
+
+export type ArrowStatus = "open" | "graded" | "informational";
+
+/**
+ * P0.1 (2026-07-24) — added `"void"`. Arrows graded during a closed
+ * market cycle produce fake MISSes because the DEX↔oracle gap CANNOT
+ * close while Chainlink is frozen. Those arrows are marked VOID and
+ * excluded from hit rate. See grader.ts backfillVoidGrades().
+ */
+export type ArrowOutcome = "hit" | "miss" | "void" | "informational" | null;
+
+export interface Arrow {
+  /** UUID or ULID for uniqueness. */
+  id: string;
+  /** Aesthetic serial: `#0001`, `#0002` — monotonic per-project. */
+  serial: string;
+  /** Ticker this arrow is about. */
+  ticker: string;
+  /** Arrow type — determines grading rule. */
+  type: ArrowType;
+  /** Which direction the arrow expects the DEX price to move. */
+  expected_direction: "up" | "down" | null;
+  /** How many hours we wait before grading. */
+  grading_window_h: number;
+  /** DEX price at fire time (used as the grading baseline). */
+  reference_price: number;
+  /** Free-form snapshot ids we can cross-reference at grade time. */
+  snapshot_refs: number[];
+  /** ISO timestamp fired. */
+  fired_at: string;
+  /** Current lifecycle status. */
+  status: ArrowStatus;
+  /** Outcome once graded. Null until then. */
+  outcome: ArrowOutcome;
+  /** ISO timestamp graded, null until then. */
+  graded_at: string | null;
+  /** Free-form detail — e.g. "gap closed 62%", "price moved +1.7% opposite in 3h". */
+  outcome_detail: string | null;
+  /** Where the arrow was born. Only `"engine"` arrows are eligible for the
+   *  public feed + hit-rate + arrows_today counters — a `"seeded"` arrow
+   *  is a hand-crafted dev/QA fixture and can never taint the track
+   *  record. Older records without this field are back-compat treated as
+   *  `"engine"` (see `/api/hood/arrows`), but every arrow written going
+   *  forward carries an explicit tag.
+   *
+   *  Reviewer T-A #1: "seed-test-arrow MUST set origin='seeded' every
+   *  time, even when real=1". Guaranteed by construction — the seed
+   *  route hard-codes it. */
+  origin: "engine" | "seeded";
+  /** DEPRECATED. Kept for legacy read of arrows persisted before `origin`
+   *  landed. New writers use `origin: "seeded"` instead. Filter treats
+   *  `test === true` as "hide" identically. */
+  test?: boolean;
+  /** Human-language "why" attached by A4 (`rh-stock-agent-brief`) at fire
+   *  time. Populated once, cached forever on the arrow record. Null when
+   *  the A4 call failed or was skipped — the arrow still fires either way. */
+  brief?: ArrowBrief | null;
+  /** T-E — user actions taken against this arrow. Every time a user
+   *  signs a swap from the Review & Sign panel, we append an entry
+   *  here. Purely a display / receipt-tracking field; DELIBERATELY
+   *  excluded from hit-rate math (hit-rate is the SIGNAL's track
+   *  record, not "did anyone trade this"). Multiple users can trade
+   *  the same arrow — every action appends. */
+  user_actions?: UserAction[];
+  /** Pre-merge task #8 — snapshot of the exact numeric facts at fire
+   *  time. In the old sync flow A4 was called AT fire time so its
+   *  `facts_at_fire` block genuinely captured fire-time state. In the
+   *  new async flow the brief attaches ~1-2 minutes later, and A4
+   *  re-reads M5 at THAT time — so the persisted `brief.facts_at_fire`
+   *  was really `facts_at_attach`. Bug caught with arrow #0008 PLTR
+   *  (fired session=regular but brief claimed "Market CLOSED
+   *  premarket"). Fix: capture the row's numeric fields on the arrow
+   *  itself when fireArrow runs. brief-worker overrides the persisted
+   *  brief's facts_at_fire with this so the UI's facts strip is
+   *  always accurate to fire time. */
+  snapshot_at_fire?: {
+    dex_price_usd: number | null;
+    oracle_price_usd: number | null;
+    /** Primary pool TVL at fire time — this is the pool the swap route
+     *  uses. Kept because the brief writer references "pool depth"
+     *  meaning the swap-side pool. See `dex_total_tvl_usd` for the honest
+     *  cross-pool number. */
+    dex_tvl_usd: number | null;
+    /** SUM across every pool for this token at fire time. Populated
+     *  alongside `dex_tvl_usd` so the brief can say "token has $X in
+     *  aggregate across N pools" without re-hitting M5. Null on rows
+     *  that predate this field (safe to omit — brief falls back to
+     *  `dex_tvl_usd`). */
+    dex_total_tvl_usd?: number | null;
+    dex_volume_24h_usd: number | null;
+    /** Reserved — poll rows don't currently carry 24h change; kept null
+     *  for schema parity with `ArrowBrief.facts_at_fire`. */
+    dex_change_24h_pct: number | null;
+    /** Chainlink oracle age in seconds at fire time. Reserved — poll
+     *  rows don't currently expose this cleanly. Null for now; brief
+     *  worker falls back to A4's read if this is null. */
+    chainlink_age_seconds: number | null;
+  } | null;
+  /** Pre-merge task #8 — market clock captured at fire time. Same
+   *  motive as `snapshot_at_fire`: brief-worker uses this to detect
+   *  when A4's one_line_context contradicts the fire-time state (e.g.
+   *  "market closed" said for an arrow that fired during regular
+   *  session). Populated verbatim from the poll cycle's row. */
+  market_at_fire?: {
+    is_open: boolean;
+    session: MarketSession;
+    ny_time_iso: string;
+  } | null;
+  /** Async-brief lifecycle (T-D refactor). Older records without this
+   *  field are back-compat treated as `"attached"` when `brief != null`
+   *  or `"skipped"` when both `brief == null` and `origin == "seeded"`.
+   *   - `pending`  — arrow persisted, brief worker hasn't run yet
+   *   - `attached` — brief.verdict_note populated
+   *   - `failed`   — worker gave up (A4 returned null or crashed)
+   *   - `skipped`  — brief intentionally not fetched (test / seeded)
+   *
+   *  Chat card + push fan-out fire from the worker AFTER status flips to
+   *  `attached`/`failed`, never from `fireArrow` directly, so the chat
+   *  headline + notification body always reflect the final state. */
+  brief_status?: "pending" | "attached" | "failed" | "skipped";
+  /** When the worker last touched this arrow (queue attempt or attach).
+   *  Kept so the worker can skip records it just processed if the queue
+   *  is re-enqueued by a bug. */
+  brief_worker_at?: string | null;
+}
+
+export interface ArrowBrief {
+  /** Deterministic 1-sentence "why" hard-mapped from A4's verdict (never
+   *  LLM-picked). Always populated when the A4 call succeeded. */
+  verdict_note: string;
+  /** LLM-generated 1-liner context. Null if the LLM chain failed;
+   *  `verdict_note` still carries the deterministic why. */
+  one_line_context: string | null;
+  /** Warnings from A4 verbatim — feed_abnormally_stale, thin_dex_pool,
+   *  llm_context_unavailable, etc. Never edited. */
+  warnings: string[];
+  /** Which LLM served the context (virtuals / venice / bankr / null). */
+  llm_provider: string | null;
+  /** Full attempts trace — verifiable proof the Virtuals→Venice→Bankr
+   *  chain played correctly. Reviewer T-A #2: on prod attempts[0] must
+   *  show `provider: virtuals status: success`; local it's fine to see
+   *  attempts[0]={virtuals, error, "VIRTUALS_API_KEY not set"} because
+   *  the key is intentionally absent in .env.local. Stored on the arrow
+   *  so a track-record reader can audit the chain later. */
+  llm_attempts: Array<{
+    provider: string;
+    status: "success" | "error";
+    duration_ms: number;
+    error?: string;
+  }>;
+  /** Snapshot of the numeric facts A4 was given at fire time. Reviewer
+   *  T-A verify concern: brief claimed "1.57% 24h decline" but the
+   *  current snapshot showed -1.42% — was it legit drift or an LLM
+   *  fabrication? With `facts_at_fire` a reader can settle it in one
+   *  glance. Populated verbatim from A4's `facts` block. */
+  facts_at_fire: {
+    dex_price_usd: number | null;
+    oracle_price_usd: number | null;
+    dex_tvl_usd: number | null;
+    dex_volume_24h_usd: number | null;
+    dex_change_24h_pct: number | null;
+    chainlink_age_seconds: number | null;
+  };
+  /** ISO timestamp when the brief was fetched. */
+  fetched_at: string;
+}
+
+/**
+ * T-E — a single user's trade against an arrow, recorded for display
+ * only. This is a RECEIPT, not an audit: `wallet` is what the client
+ * self-reported at the moment of the successful sign, and we ONLY
+ * accept it after the tx hash lands on-chain. Kept anonymous — no
+ * balances, no strategy signal.
+ *
+ * DELIBERATELY excluded from hit-rate: the signal is the arrow, not
+ * "did anyone trade this". `/api/hood/arrows` reports these fields
+ * verbatim so a viewer sees "you traded this arrow · 0x1234…↗" but
+ * the hit_rate math never touches user_actions.
+ */
+export interface UserAction {
+  /** ISO timestamp we accepted the action. */
+  ts: string;
+  /** 0x-prefixed connected wallet at sign time. Lowercased. */
+  wallet: string;
+  /** 0x-prefixed swap tx hash (approve is not recorded — only the
+   *  final swap). Lowercased. */
+  tx_hash: string;
+  /** Side chosen — matches the arrow's expected direction most of the
+   *  time; recorded verbatim so contrarian trades ("this signal is
+   *  wrong, going the other way") stay honest. */
+  side: "buy" | "sell";
+  /** Human amount the user typed in. */
+  amount: number;
+  /** Quote denom at sign time (USDG or WETH). */
+  denom: "USDG" | "WETH";
+  /** min_out shown at sign time — snapshotted so the receipt stays
+   *  honest even if the pool moves. */
+  min_out: number | null;
+  /**
+   * v3 (2026-07-24): decoupled from broadcast — status ONLY becomes
+   * `success` when a receipt with `status: "success"` (blockchain status
+   * = 1) is observed. Otherwise:
+   *   - `broadcast` — tx submitted, receipt not yet observed
+   *   - `success`   — receipt confirmed with success bit
+   *   - `reverted`  — receipt confirmed with revert bit (0)
+   *   - `unknown`   — waited past timeout, receipt never observed
+   *
+   * Prior code used `pending` for the pre-receipt phase and let it
+   * decay into `success` by omission, which meant "revert rate" was
+   * structurally always 0. Renamed + new `unknown` bucket so the
+   * indicator is honest. Legacy `pending` still accepted on the API
+   * for backwards compat with in-flight client sessions.
+   */
+  status: "broadcast" | "success" | "reverted" | "unknown" | "pending";
+  /** Revert reason if `status === "reverted"` and we could decode it.
+   *  Free-form string (e.g. "STF" for Uniswap slippage). Nullable. */
+  revert_reason?: string | null;
+  /** Block number of the confirmed receipt if we have one. */
+  block_number?: number | null;
+}

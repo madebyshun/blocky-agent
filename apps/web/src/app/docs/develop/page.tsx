@@ -47,7 +47,7 @@ $ npm install @blueagent/agentkit    # Coinbase AgentKit plugin`}</CodeBlock>
       </div>
 
       <Callout title="Hard rules for contributors">
-        Base chain only (8453). Use Bankr LLM for all AI calls. Never hallucinate contract addresses — verify on Basescan.
+        Base chain only (8453). Use the Virtuals / Venice LLM gateway for all AI calls. Never hallucinate contract addresses — verify on Basescan.
         Business logic lives in <code className="text-slate-300">packages/</code>, not the app.
       </Callout>
 

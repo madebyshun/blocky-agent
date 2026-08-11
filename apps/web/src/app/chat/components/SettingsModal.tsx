@@ -4,14 +4,18 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import SettingsPanel, { type SettingsSection } from "./SettingsPanel";
 
-// Mobile-only quick links — Models/Tools/Skills/Docs live here (out of the nav
-// drawer) so the mobile drawer stays focused. Tapping jumps to the chat tab and
-// closes the modal; Docs navigates to /docs/blue-chat. Hidden on desktop (lg:hidden), so
-// the web Settings experience is unchanged.
-type JumpTab = "models" | "skills";
+// Mobile-only quick links — kept out of the nav drawer so the drawer stays
+// focused. Hidden on desktop (lg:hidden), so the web Settings experience is
+// unchanged. Only Models is a tab jump now: Skills was promoted to its own
+// shell page (/skills), so it navigates like Docs instead of switching a chat
+// tab — otherwise the same catalog would sit behind two different controls.
+type JumpTab = "models";
 const QUICK_LINKS: { id: JumpTab; label: string; icon: string }[] = [
   { id: "models", label: "Models", icon: "🤖" },
-  { id: "skills", label: "Skills", icon: "⚡" },
+];
+const QUICK_ROUTES: { href: string; label: string; icon: string }[] = [
+  { href: "/skills", label: "Skills", icon: "⚡" },
+  { href: "/docs/blue-chat", label: "Docs", icon: "📄" },
 ];
 
 /**
@@ -141,8 +145,8 @@ export default function SettingsModal({
 
           {/* Right content pane */}
           <div className="flex-1 min-h-0 overflow-y-auto">
-            {/* Mobile-only quick links (Models/Tools/Skills/Docs) — desktop has
-                these in the chat sidebar, so this is hidden on lg+. */}
+            {/* Mobile-only quick links (Models tab + Skills/Docs routes) —
+                desktop has these in the chat sidebar / shell nav, so hidden lg+. */}
             <div className="lg:hidden px-5 pt-5">
               <p className="font-mono text-[10px] text-slate-500 tracking-widest mb-2">BLUE CHAT</p>
               <div className="grid grid-cols-2 gap-2">
@@ -156,14 +160,17 @@ export default function SettingsModal({
                     <span className="font-mono text-[13px] text-slate-200">{q.label}</span>
                   </button>
                 ))}
-                <Link
-                  href="/docs/blue-chat"
-                  onClick={onClose}
-                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-[#1A1A2E] bg-[#0A0A12] hover:bg-[#ffffff06] transition-colors"
-                >
-                  <span className="text-sm leading-none shrink-0">📄</span>
-                  <span className="font-mono text-[13px] text-slate-200">Docs</span>
-                </Link>
+                {QUICK_ROUTES.map(r => (
+                  <Link
+                    key={r.href}
+                    href={r.href}
+                    onClick={onClose}
+                    className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-[#1A1A2E] bg-[#0A0A12] hover:bg-[#ffffff06] transition-colors"
+                  >
+                    <span className="text-sm leading-none shrink-0">{r.icon}</span>
+                    <span className="font-mono text-[13px] text-slate-200">{r.label}</span>
+                  </Link>
+                ))}
               </div>
               <div className="border-t border-[#1A1A2E] mt-5" />
             </div>

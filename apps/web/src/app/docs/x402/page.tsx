@@ -1,5 +1,6 @@
 import { DocHeader, H2, P, CardGrid, PrevNext, Callout } from "../_ui";
 import { X402_SUITE, CORE_COMMANDS } from "../_data";
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 export const metadata = { title: "x402 Tools — Blue Agent Docs" };
 
@@ -44,7 +45,7 @@ export default function X402Doc() {
       </CardGrid>
 
       <Callout color="#fbbf24" title="Full catalog">
-        68 tools total. Discover the live catalog with <code className="text-[#4FC3F7]">blue-registry</code> or browse the OpenAPI spec at{" "}
+        {TOOL_COUNT} tools total. Discover the live catalog with <code className="text-[#4FC3F7]">blue-registry</code> or browse the OpenAPI spec at{" "}
         <a href="https://api.blueagent.dev/docs" className="text-[#fbbf24] underline">api.blueagent.dev/docs</a>.
       </Callout>
 

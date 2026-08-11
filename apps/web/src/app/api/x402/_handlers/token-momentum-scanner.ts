@@ -5,18 +5,23 @@
 // Price: $0.25
 
 import { getBaseTrending, getBaseNewPools, poolsToPrompt, type Pool } from "@/lib/market-data";
+import { callLLM } from "@/app/api/_lib/llm";
 
-type Msg = { role: string; content: string };
+// Delegates to the shared Virtuals → Venice → Bankr chain. Bankr was
+// banned 2026-07-18; the direct-Bankr fetch this used to do is dead
+// on prod. `callLLM` retries providers in order and returns text +
+// provenance. The old direct-Bankr call used an assistant `{` prefill
+// to force raw-JSON start — `callLLM`'s Virtuals/Venice providers use
+// OpenAI-style completions which don't accept assistant prefill the
+// same way, and Bankr's own path in `callLLM` auto-enables prefill
+// when it sees "Return ONLY raw JSON" in the system. The prefill is
+// preserved by prepending `{` back onto the response, matching the
+// prior contract.
 async function llm(system: string, user: string, temp = 0.3, tokens = 1100): Promise<string> {
-  const r = await fetch("https://llm.bankr.bot/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": process.env.LLM_API_KEY ?? process.env.BANKR_API_KEY ?? "", "Content-Type": "application/json", "anthropic-version": "2023-06-01" },
-    // Assistant prefill "{" forces a raw-JSON start — the #1 fix for parse failures.
-    body: JSON.stringify({ model: "claude-haiku-4-5", system, messages: [{ role: "user", content: user }, { role: "assistant", content: "{" }] as Msg[], temperature: temp, max_tokens: tokens }),
-  });
-  if (!r.ok) throw new Error(`LLM ${r.status}: ${await r.text()}`);
-  const d = await r.json() as { content?: { text: string }[] };
-  return "{" + (d.content?.[0]?.text ?? "");
+  const r = await callLLM({ system, user, temperature: temp, maxTokens: tokens });
+  const text = r.text;
+  // Only re-add the leading brace if the provider didn't already return it.
+  return text.trimStart().startsWith("{") ? text : "{" + text;
 }
 function parseJson(t: string): Record<string, unknown> | null {
   let s = t.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");

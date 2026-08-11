@@ -19,17 +19,111 @@ const APP_PUBLIC = new Set(["pay", "share", "badge"]);
 const APP_SEGMENTS = new Set([
   "alerts",
   "b20",
-  "bank",
+  // `bank` removed 2026-07-24 — BlueAgent Relaunch ("onchain Agent OS"
+  // positioning) hides Blue Bank. Bank + /pay/[address] now hard-redirect to /chat
+  // via ARCHIVED_REDIRECTS below (b20 and launches stay accessible via
+  // direct URL because task #78 B20HUB is still WIP; only their nav entry
+  // was removed in AppShell.tsx).
   "chat",
   "dashboard",
   "feed",
+  "hood",
   "hub",
   "launches",
-  "profile",
-  "rewards",
+  // AgentOS Control pages (2026-08) — promoted from Blue Chat tabs to
+  // first-class /app pages, each backed by REAL data (installed skills, the
+  // connector store, the wallet's crons, the credit ledger, CREDIT_PACKS).
+  // Promotion is one-way: these are NO LONGER chat tabs, so this set is their
+  // only home (see ChatClient's TAB_META + AppSidebar's ACTION_ORDER).
+  // `skills` is unambiguous — the marketing SOUL.md page that used to own
+  // /skills moved to /soul, and /skills 301s there on the main host.
+  "skills",       // installed agent-skills catalog (SkillsPanel)
+  "connectors",   // MCP servers / integrations gallery (ConnectorsPanel)
+  "cron",         // the wallet's scheduled tasks (CronPanel)
+  "usage",        // credit balance + ledger activity (getBalance)
+  "plans",        // pricing comparison → TopUpModal (CREDIT_PACKS)
   "robinhood-router",
-  "terminal",
+  // `profile`, `rewards`, `terminal` removed 2026-07 (0.1 route
+  // consolidation) — all three now 301 to their canonical home via
+  // culledRedirect() below (profile → dashboard, rewards → dashboard?tab=stake,
+  // terminal → chat), so they intentionally do NOT rewrite into /app/* here.
+  // Their src/app/**/{profile,rewards,terminal} page stubs are kept as dead
+  // code (smaller diff, mirrors the /bank precedent).
+  //
+  // Reserved product URLs (0.1) — clean paths that resolve today to an
+  // in-shell "coming soon" panel (src/app/app/<seg>/page.tsx, noindex) so the
+  // canonical URL is stable before its provider ships:
+  //   radar  → WatchlistProvider (drift/arb discovery)
+  //   wallet → WalletProvider (balances, $BLUE tier)
+  //   trade  → ExecutionProvider (guarded swap engine; absorbs robinhood-router)
+  //   bridge → bridge-flow entry (shares Wallet's bridge component)
+  //   tasks  → automation (DCA / TP-SL / recurring via scoped session keys)
+  "radar",
+  "wallet",
+  "trade",
+  "bridge",
+  "tasks",
 ]);
+
+/**
+ * BlueAgent Relaunch archived routes. On EITHER host these 301 to the app
+ * home so:
+ *   - Sidebar nav entry stays consistent with the redirect (no way to arrive
+ *     at Bank UI accidentally).
+ *   - Any external share link (/pay/<address> QR codes generated earlier)
+ *     lands the visitor at Blue Chat instead of a 404.
+ * Runs BEFORE host-specific rewrites so the semantic is identical on
+ * blueagent.dev and app.blueagent.dev.
+ */
+function archivedRedirect(pathname: string, search: string): NextResponse | null {
+  const isBank =
+    pathname === "/bank" || pathname.startsWith("/bank/") ||
+    pathname === "/app/bank" || pathname.startsWith("/app/bank/");
+  const isPay =
+    pathname === "/pay" || pathname.startsWith("/pay/");
+  if (!isBank && !isPay) return null;
+  return NextResponse.redirect(
+    `https://${APP_HOST}/chat${search}`,
+    { status: 301 },
+  );
+}
+
+/**
+ * BlueAgent Relaunch route consolidation (0.1). Dead top-level surfaces that
+ * now live inside a canonical product tab. 301 on EITHER host (runs before the
+ * host reshuffle, like archivedRedirect) so the redirect is identical on
+ * blueagent.dev and app.blueagent.dev — and so external / legacy deep links
+ * never 404 (the non-negotiable of 0.1). Files are kept as dead code rather
+ * than deleted (smaller diff, mirrors the /bank precedent); only routing is cut.
+ *   /code[/…]     → marketing /docs        (the code console folded into docs)
+ *   /micro[/…]    → app Hub                (micro-apps were the ancestors of Hub tools)
+ *   /terminal[/…] → Blue Chat              (the browser terminal folded into /chat)
+ *   /profile[/…]  → app dashboard          (self-management folded into the dashboard)
+ *   /rewards[/…]  → dashboard?tab=stake    (staking is the dashboard's Stake tab)
+ *
+ * profile + rewards used to 307 from a page-level redirect() (temporary, and a
+ * 2-hop chain through /app/dashboard). Handling them here makes them a single
+ * permanent 301 straight to the app host — the "every cull = 301, collapse the
+ * double-hop" contract of 0.1.
+ */
+function culledRedirect(pathname: string): NextResponse | null {
+  if (pathname === "/code" || pathname.startsWith("/code/")) {
+    return NextResponse.redirect(`https://${MAIN_HOST}/docs`, { status: 301 });
+  }
+  if (pathname === "/micro" || pathname.startsWith("/micro/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/hub`, { status: 301 });
+  }
+  if (pathname === "/terminal" || pathname.startsWith("/terminal/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/chat`, { status: 301 });
+  }
+  if (pathname === "/profile" || pathname.startsWith("/profile/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/dashboard`, { status: 301 });
+  }
+  if (pathname === "/rewards" || pathname.startsWith("/rewards/")) {
+    return NextResponse.redirect(`https://${APP_HOST}/dashboard?tab=stake`, { status: 301 });
+  }
+  return null;
+}
 
 // BlueBank private preview gate. BlueBank and its public /pay payment surface
 // aren't GA yet — on production they stay blocked EXCEPT for someone holding the
@@ -74,6 +168,19 @@ export function middleware(request: NextRequest) {
   const host = request.headers.get("host") || "";
   const { pathname } = request.nextUrl;
 
+  // BlueAgent Relaunch: archived routes (Blue Bank + /pay) → /chat, same
+  // semantic on both hosts. Runs first so bankGate (below) is dead code —
+  // kept for now to avoid a bigger diff, will remove in the About/Docs
+  // follow-up PR.
+  const archived = archivedRedirect(pathname, request.nextUrl.search);
+  if (archived) return archived;
+
+  // BlueAgent Relaunch 0.1: culled top-level routes (/code, /micro, /terminal)
+  // → their canonical tab, same semantic on both hosts. Runs early so it beats
+  // the host reshuffle and the non-prod passthrough below.
+  const culled = culledRedirect(pathname);
+  if (culled) return culled;
+
   // Redirect docs subdomain → Mintlify
   if (host.startsWith("docs.blueagent.dev")) {
     const url = request.nextUrl.clone();
@@ -90,12 +197,34 @@ export function middleware(request: NextRequest) {
   // blueagent-web-new-git-dev-*.vercel.app/app/robinhood-router bounces off to
   // app.blueagent.dev (prod) which doesn't have the branch's code and 404s.
   const isProdHost = host === MAIN_HOST || host === APP_HOST;
+  const firstSeg = pathname.split("/")[1] || "";
+
   if (!isProdHost) {
+    // Localhost + Vercel preview serve marketing AND the app from ONE origin,
+    // so there's no host to key the reshuffle off. Apply the same APP_SEGMENTS
+    // rewrite the app host uses, so every clean in-app URL (/chat, /skills,
+    // /cron, /usage, /plans, /hood, /hub, …) resolves to its /app/* twin and a
+    // reviewer verifies the exact URL that ships to prod.
+    //
+    // This was a hardcoded /hood + /hub exception until 2026-08, which meant
+    // every OTHER clean sidebar link was broken off-prod: /cron, /usage,
+    // /plans, /connectors, /dashboard 404'd (no root route), and /skills
+    // silently rendered the marketing SOUL page. Driving the rewrite off the
+    // same set the app host uses means the two can no longer drift — adding a
+    // segment above fixes both hosts at once. /skills is unambiguous now that
+    // the marketing page moved to /soul.
+    //
+    // API routes, framework internals and static files are never rewritten:
+    // their first segment isn't in APP_SEGMENTS, so they fall through.
+    if (APP_SEGMENTS.has(firstSeg)) {
+      const url = request.nextUrl.clone();
+      url.pathname = `/app${pathname}`;
+      return NextResponse.rewrite(url);
+    }
     return NextResponse.next();
   }
 
   const isAppHost = host.startsWith(APP_HOST);
-  const firstSeg = pathname.split("/")[1] || "";
 
   // ── app.blueagent.dev ──────────────────────────────────────────────────────
   // Serve the in-app surface from a clean, /app-less URL on the subdomain.
@@ -146,7 +275,9 @@ export function middleware(request: NextRequest) {
     }
 
     // Everything else is marketing — its canonical home is the main host. 301 it
-    // over so the subdomain never duplicates /docs, /about, /skills, etc.
+    // over so the subdomain never duplicates /docs, /about, etc. (/soul lands
+    // here and bounces to blueagent.dev/soul; /skills does NOT, because it's an
+    // APP segment above and renders the installed-skill catalog on this host.)
     return NextResponse.redirect(
       `https://${MAIN_HOST}${pathname}${request.nextUrl.search}`,
       { status: 301 }
@@ -154,6 +285,21 @@ export function middleware(request: NextRequest) {
   }
 
   // ── blueagent.dev (main host) ───────────────────────────────────────────────
+
+  // /skills → /soul (2026-08 rename). The SOUL.md identity page lived at
+  // /skills, but "Skills" now means the app's installed-skill catalog on the
+  // app host. Renaming freed the word AND unblocked localhost/preview, where a
+  // single origin can only give /skills to one of the two pages. 301 (not a
+  // silent rewrite) so the old URL's SEO transfers to the canonical /soul —
+  // it's the only public marketing path being renamed, and the sitemap now
+  // advertises /soul only.
+  if (pathname === "/skills" || pathname.startsWith("/skills/")) {
+    return NextResponse.redirect(
+      `https://${MAIN_HOST}${pathname.replace(/^\/skills/, "/soul")}${request.nextUrl.search}`,
+      { status: 301 },
+    );
+  }
+
   // Move the in-app surface to the subdomain; keep old deep links alive via 301.
   if (pathname === "/app" || pathname.startsWith("/app/")) {
     const clean = pathname.replace(/^\/app/, "") || "/";
@@ -163,11 +309,29 @@ export function middleware(request: NextRequest) {
     );
   }
 
-  // Public /hub → app Hub on the subdomain (preserve query, e.g. ?tool=blue-idea).
-  if (pathname === "/hub" || pathname === "/hub/") {
+  // Public /hub[/…] → app Hub on the subdomain. Whole sub-tree (mirrors /hood
+  // below): the 0.1 Hub unify makes app.blueagent.dev the canonical Hub host, so
+  // every marketing /hub path 301s over (preserves query, e.g. ?tool=blue-idea).
+  // The APP_SEGMENTS rewrite on the app host finishes the job into /app/hub/*.
+  // Same-path hop keeps share permalinks intact — /hub/tool/<slug>,
+  // /hub/builders/<addr>, /hub/registry/<handle> each have an /app/hub/* twin,
+  // so no 404s.
+  if (pathname === "/hub" || pathname.startsWith("/hub/")) {
     return NextResponse.redirect(
-      `https://${APP_HOST}/hub${request.nextUrl.search}`,
+      `https://${APP_HOST}${pathname}${request.nextUrl.search}`,
       { status: 301 }
+    );
+  }
+
+  // Blue Hood public share URLs — main host redirects EVERY /hood[/…] path
+  // to the app subdomain. Unlike /hub above (exact match only), Blue Hood
+  // has share-able sub-paths like /hood/arrows, /hood/arrows/<serial>, so
+  // we honor the whole sub-tree. The app-host rewrite in APP_SEGMENTS
+  // above finishes the job.
+  if (pathname === "/hood" || pathname.startsWith("/hood/")) {
+    return NextResponse.redirect(
+      `https://${APP_HOST}${pathname}${request.nextUrl.search}`,
+      { status: 301 },
     );
   }
 

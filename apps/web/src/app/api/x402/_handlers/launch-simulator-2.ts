@@ -1,33 +1,26 @@
 // x402/launch-simulator-2 — Launch Simulator Tier 2: Deep Signal with live DexScreener data
 import { getAeonOutput, formatAeonForLLM } from "@/app/api/_lib/aeon-kv";
+import { callLLM } from "@/app/api/_lib/llm";
 // Price: $0.35 — Fully self-contained, no external workspace imports
 
 type BankrMessage = { role: string; content: string };
 
+// Delegates to the shared Virtuals → Venice → Bankr chain. Bankr was
+// banned 2026-07-18; the direct-Bankr fetch this used to do is dead
+// on prod. `callLLM` retries providers in order and returns text +
+// provenance. Name/signature preserved so all call sites stay identical.
 async function callBankrLLM(opts: {
   model?: string; system: string; messages: BankrMessage[];
   temperature?: number; maxTokens?: number;
 }): Promise<string> {
-  const res = await fetch("https://llm.bankr.bot/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": process.env.LLM_API_KEY ?? process.env.BANKR_API_KEY ?? "",
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: opts.model ?? "claude-haiku-4-5",
-      system: opts.system,
-      messages: opts.messages,
-      temperature: opts.temperature ?? 0.7,
-      max_tokens: opts.maxTokens ?? 800,
-    }),
+  const r = await callLLM({
+    system: opts.system,
+    messages: opts.messages,
+    temperature: opts.temperature,
+    maxTokens: opts.maxTokens,
+    model: opts.model,
   });
-  if (!res.ok) throw new Error(`Bankr LLM ${res.status}: ${await res.text()}`);
-  const d = await res.json() as { content?: { text: string }[]; text?: string };
-  if (d.content?.length) return d.content[0].text;
-  if (d.text) return d.text;
-  throw new Error("Invalid Bankr LLM response");
+  return r.text;
 }
 
 function extractJsonObject(text: string): Record<string, unknown> | null {

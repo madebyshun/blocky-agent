@@ -38,7 +38,11 @@ export async function generateMetadata(
 
   const title = `${meta.name}${meta.price ? ` — ${meta.price}` : ""} · Blue Hub`;
   const description = meta.description;
-  const canonical = `https://blueagent.dev/hub/tool/${slug}`;
+  // Canonical is the app host: the 0.1 Hub unify 301s this marketing permalink
+  // to app.blueagent.dev/hub/tool/<slug> (see middleware). This page normally
+  // never renders (middleware intercepts first); the app-host canonical here is
+  // defensive so the signal stays correct if the redirect is ever bypassed.
+  const canonical = `https://app.blueagent.dev/hub/tool/${slug}`;
 
   // Shared result (?s=<id>) → dynamic OG image (verdict + confidence). Otherwise
   // fall back to the creator's logo (if they supplied one); else the default card.

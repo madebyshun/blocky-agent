@@ -6,10 +6,10 @@
 import { slugifyRepo, fetchRepo, scoreRepoActivity, repoFactsPrompt } from "@/lib/github";
 
 import { getAeonOutput, formatAeonForLLM } from "@/app/api/_lib/aeon-kv";
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM } from "@/app/api/_lib/llm";
 
 async function llm(system: string, user: string, temp = 0, tokens = 1000, model = "claude-haiku-4-5"): Promise<string> {
-  return callVeniceLLM({ system, user, temperature: temp, maxTokens: tokens });
+  return (await callLLM({ system, user, temperature: temp, maxTokens: tokens })).text;
 }
 function parseJson(t: string): Record<string, unknown> | null {
   let s = t.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
@@ -109,7 +109,7 @@ Schema: {
       `Target: ${target}\nType: ${type}\nProject: ${projectResearch ?? target}\nAudit: ${JSON.stringify(audit)}\nAnalyst: ${JSON.stringify(analyst)}`,  0, 1500, "claude-sonnet-4-5");
 
     let result = parseJson(resultRaw);
-    // HARDMAP verdict từ dd_score (tất định, hết LLM lật)
+    // HARDMAP verdict from dd_score (deterministic, no LLM flip)
     if (result && typeof result.dd_score === "number") {
       const v = result.dd_score;
       result.verdict = v >= 80 ? "STRONG_BUY" : v >= 60 ? "BUY" : v >= 40 ? "WATCH" : v >= 20 ? "PASS" : "RED_FLAG";

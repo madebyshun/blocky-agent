@@ -6,16 +6,27 @@
 // and route to inspectB20 — never fabricate analysis for them via LLM.
 
 import { getBasescanSource } from "@/lib/moralis";
-import { callVeniceLLM } from "@/app/api/_lib/llm";
+import { callLLM } from "@/app/api/_lib/llm";
 import { inspectB20 } from "@/lib/b20/inspect";
 
 type BankrMessage = { role: string; content: string };
 
+// Delegates to the shared Virtuals → Venice → Bankr chain. Bankr was
+// banned 2026-07-18; the direct-Bankr fetch this used to do is dead
+// on prod. `callLLM` retries providers in order and returns text +
+// provenance. Name/signature preserved so all call sites stay identical.
 async function callBankrLLM(opts: {
   model?: string; system: string; messages: BankrMessage[];
   temperature?: number; maxTokens?: number;
 }): Promise<string> {
-  return callVeniceLLM({ system: opts.system, messages: opts.messages, temperature: opts.temperature, maxTokens: opts.maxTokens });
+  const r = await callLLM({
+    system: opts.system,
+    messages: opts.messages,
+    temperature: opts.temperature,
+    maxTokens: opts.maxTokens,
+    model: opts.model,
+  });
+  return r.text;
 }
 
 function extractJsonObject(text: string): Record<string, unknown> | null {

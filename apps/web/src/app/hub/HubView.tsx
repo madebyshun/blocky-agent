@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { AGENT_TOOLS } from "@/lib/agent-tools";
-import { useAccount, useSignTypedData, useReadContract } from "wagmi";
+import { useAccount, useSignTypedData, useReadContract, useChainId, useSwitchChain } from "wagmi";
 import { ConnectButton } from "@/components/ConnectModal";
 import AppPageHeader from "@/components/app/AppPageHeader";
 import HubHome from "./_components/HubHome";
@@ -580,6 +580,8 @@ function ToolRunner({ tool, onBack, cached, onResult }: {
 
   const { address, isConnected } = useAccount();
   const { signTypedDataAsync }   = useSignTypedData();
+  const walletChainId            = useChainId();
+  const { switchChainAsync }     = useSwitchChain();
 
   const { data: usdcBalRaw } = useReadContract({
     address: USDC_ADDRESS,
@@ -653,6 +655,20 @@ function ToolRunner({ tool, onBack, cached, onResult }: {
         if (usdcBalance != null && usdcBalance < priceVal) {
           setErr(`Insufficient USDC — you have $${usdcBalance.toFixed(2)}, need ${tool.price}. Top up your wallet on Base.`);
           return;
+        }
+
+        // Hub x402 payments are USDC on Base (chainId 8453). If the connected
+        // wallet is on another chain (e.g. user switched to Robinhood 4663 for
+        // bridge/swap testing), signTypedData rejects with "Provided chainId
+        // '8453' must match the active chainId '4663'". Auto-switch before sign.
+        if (walletChainId !== 8453) {
+          try {
+            await switchChainAsync({ chainId: 8453 });
+          } catch (e) {
+            setErr(`Switch your wallet to Base (chainId 8453) to sign USDC payment. Currently on chainId ${walletChainId}. (${(e as Error).message})`);
+            setStep("error");
+            return;
+          }
         }
 
         setStep("signing");

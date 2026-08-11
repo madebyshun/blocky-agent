@@ -17,6 +17,15 @@
   --font-body:    'JetBrains Mono', monospace;
   --font-sans:    'DM Sans', system-ui, sans-serif;
   --font-mono:    'JetBrains Mono', monospace;
+
+  /* Blue Hood type system (T-V1) — MONO-FIRST. Terminal-real: every text
+     node in the Hood section runs through ONE of these two tokens. Never
+     mix families to build hierarchy — size + weight + tracking + color
+     do that job; family stays the same across labels/data/tickers/titles.
+     Prose token is reserved for ≥2-sentence copy (empty states, help
+     text) where mono readability degrades. */
+  --font-hood-mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-hood-prose: 'DM Sans', system-ui, sans-serif;
 }
 
 * {
@@ -106,6 +115,125 @@ code, pre, .font-mono {
     background: #4FC3F7;
     box-shadow: 0 0 8px #4FC3F7, 0 0 16px rgba(79,195,247,0.5);
   }
+}
+
+/* ── Blue Hood section — T-V (typography + terminal polish) ──────────
+ * All rules below apply ONLY under `.hood-section` (or its children) so
+ * they never leak into the rest of the app. The scope wrapper is added
+ * by the /hood layout so /hood, /hood/inbox, /hood/arrows all inherit.
+ */
+.hood-section {
+  font-family: var(--font-hood-mono);
+  /* Explicitly re-declare so children inherit even when the surrounding
+     app-shell tries to force a family further down. */
+  font-feature-settings: "tnum" on, "zero" on; /* tabular numerals — number columns align */
+}
+
+/* T-V1 opt-out: a paragraph tagged `.hood-prose` becomes sans (for
+ * empty-state copy, help text — any run of ≥2 sentences). */
+.hood-section .hood-prose,
+.hood-section [data-hood-prose] {
+  font-family: var(--font-hood-prose);
+  font-feature-settings: normal;
+}
+
+/* T-V2 #4 — selection color for terminal green. Whoever highlights
+ * a number to copy gets a distinct affordance. */
+.hood-section ::selection { background: rgba(0, 200, 5, 0.28); color: #ffffff; }
+
+/* T-V2 #1 — LIVE PULSE. 2s ease-in-out, subtle so it doesn't distract
+ * on a screen already showing 24 rows of tickers. Reduced motion opts
+ * out entirely (still shows the dot, just doesn't pulse). */
+@keyframes hood-live-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.86); }
+}
+.hood-section .hood-live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #00C805;
+  box-shadow: 0 0 6px rgba(0, 200, 5, 0.6);
+  animation: hood-live-pulse 2s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hood-section .hood-live-dot { animation: none; }
+}
+
+/* T-V2 #2 — ROW HOVER. Terminal-cursor style border-left. Uses a
+ * transparent 2px border always present so hover DOESN'T shift layout.
+ * Keep the transition short (120ms) — Bloomberg terminals feel snappy,
+ * not swooshy. */
+.hood-section .hood-row {
+  border-left: 2px solid transparent;
+  transition: border-left-color 120ms linear, background-color 120ms linear;
+}
+.hood-section .hood-row:hover {
+  border-left-color: #00C805;
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* T-V4 — SCROLLBAR VISIBILITY. Firefox/WebKit both hide scrollbars on
+ * dark scrollable regions by default; user reported "no scroll on hood,
+ * content below the fold unreadable" (2026-07-23). A subtle always-on
+ * rail + a thicker track on hover tells the reader there IS scroll
+ * available. */
+.hood-section .hood-scroll { scrollbar-width: thin; scrollbar-color: #1A1A2E transparent; }
+.hood-section .hood-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.hood-section .hood-scroll::-webkit-scrollbar-track { background: transparent; }
+.hood-section .hood-scroll::-webkit-scrollbar-thumb {
+  background: #1A1A2E;
+  border-radius: 6px;
+  border: 2px solid #050508;
+  transition: background 160ms linear;
+}
+.hood-section .hood-scroll::-webkit-scrollbar-thumb:hover { background: #2a2f4a; }
+
+/* T-V4 — MODAL enter animation. Used by ReviewSignPanel to open;
+ * fade + slight scale-up 180ms for a native, non-jarring feel. */
+@keyframes hood-modal-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1);    }
+}
+.hood-section .hood-modal-in { animation: hood-modal-in 180ms ease-out; }
+@keyframes hood-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.hood-section .hood-fade-in { animation: hood-fade-in 180ms ease-out; }
+/* P2.4 flash — used when the PositionsStrip's [Sell] button scrolls
+ * the drift-board row into view; briefly highlights the row so the
+ * user's eye lands on it. Non-destructive: applied via a class the
+ * strip toggles on/off in JS after 1.6s. */
+@keyframes hood-row-flash {
+  0%   { background-color: rgba(245, 179, 66, 0.16); }
+  100% { background-color: transparent; }
+}
+.hood-row-flash { animation: hood-row-flash 1600ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .hood-section .hood-modal-in,
+  .hood-section .hood-fade-in,
+  .hood-row-flash { animation: none; }
+}
+
+/* T-V2 #3 — PRICE FLASH. Bg flash green/red for 400ms then off. Attach
+ * on the number cell whenever `prev !== curr`. Compositor-only props
+ * (background-color) so no layout jank. Reduced motion → no flash. */
+@keyframes hood-flash-up {
+  0%   { background-color: rgba(0, 200, 5, 0.22); }
+  100% { background-color: rgba(0, 200, 5, 0);    }
+}
+@keyframes hood-flash-down {
+  0%   { background-color: rgba(239, 68, 68, 0.22); }
+  100% { background-color: rgba(239, 68, 68, 0);    }
+}
+.hood-section .hood-flash-up   { animation: hood-flash-up   400ms ease-out; }
+.hood-section .hood-flash-down { animation: hood-flash-down 400ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .hood-section .hood-flash-up,
+  .hood-section .hood-flash-down { animation: none; }
 }
 
 /* Typing indicator */

@@ -6,6 +6,7 @@ import { ToolResultCard } from "./ToolCards";
 import ArtifactCard from "./ArtifactCard";
 import { isArtifactCardLang } from "../artifacts";
 import { useLang } from "@/lib/i18n/context";
+import TopUpModal from "@/components/TopUpModal";
 
 // B20 education starters — shown ONLY in the empty state when the UI language is
 // Chinese (zh). These send a plain question that the chat's B20 Education Mode
@@ -355,9 +356,20 @@ export function MarkdownRenderer({ content }: { content: string }) {
 
 // ── Model label / color maps ───────────────────────────────────────────────────
 
+// Pre-merge task #4 — label bug. Bankr was banned 2026-07-18; every
+// non-venice tier now routes to Virtuals with model
+// `anthropic-claude-sonnet-5` (server-side `VIRTUALS_CHAT_DEFAULT_MODEL`
+// env, default sonnet-5). The old map showed "Claude Haiku 4.5" for
+// `fast` tier while the request was actually served by Sonnet 5 via
+// Virtuals — pure lie. Every non-venice tier now points at the ACTUAL
+// runtime label so the footer + system-prompt `modelLine` agree.
+// When Virtuals tiers diverge (fast → haiku on Virtuals, etc.) update
+// this map to match — or better, drive it from an SSE `model_used`
+// event the server emits per-message (follow-up).
+const NON_VENICE_LABEL = "Sonnet 5 · Virtuals";
 const MODEL_LABELS: Record<string, string> = {
-  fast: "Claude Haiku 4.5", pro: "Claude Sonnet 4.6", max: "Claude Opus 4.7",
-  deepseek: "DeepSeek V4",
+  fast: NON_VENICE_LABEL, pro: NON_VENICE_LABEL, max: NON_VENICE_LABEL,
+  deepseek: NON_VENICE_LABEL,
   "venice-deepseek": "DeepSeek V4 Flash", "venice-deepseek-pro": "DeepSeek V4 Pro",
   "venice-kimi": "Kimi K2", "venice-claude": "Claude Opus 4",
   "venice-grok": "Grok 4", "venice-qwen": "Qwen3 235B",
@@ -470,7 +482,13 @@ const PERSONA_EMPTY: Record<string, EmptyState> = {
 export default function ChatMessages() {
   const {
     activeTask, streaming, outOfCredits, send, setInput, chatTier, personaId,
+    triggerWalletRefresh,
   } = useChat();
+
+  // Top-up modal — a single instance lifted to the component root so the inline
+  // "credits low" notice (rendered per-message in the map below) can open it
+  // without spawning one modal per message.
+  const [topUpOpen, setTopUpOpen] = useState(false);
 
   const bottomRef  = useRef<HTMLDivElement>(null);
   const messages   = activeTask?.messages ?? [];
@@ -586,7 +604,7 @@ export default function ChatMessages() {
           )}
 
           {outOfCredits && (
-            <p className="font-mono text-[10px] text-red-400 mt-2">Out of credits — stake $BLUEAGENT to refill</p>
+            <p className="font-mono text-[10px] text-red-400 mt-2">Out of credits — resets daily · connect a wallet for 500/day</p>
           )}
         </div>
       ) : (
@@ -799,10 +817,11 @@ export default function ChatMessages() {
                       )}
 
                       {/* Insufficient-credits notice — rendered inline when the
-                          chat or tool ledger debit hit an empty balance. The
-                          actual top-up modal lands in Week 3; for now this is
-                          a deep-link prompt to the dashboard's stake/top-up
-                          surface so users still have a path forward. */}
+                          chat or tool ledger debit hit an empty balance. Credits
+                          reset daily and connecting any wallet raises the daily
+                          allowance; the USDC credit-pack top-up lands next. The
+                          link points at the credits doc so users have a path
+                          forward. */}
                       {msg.insufficientCredits && (
                         <div className="mt-2 rounded-xl border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] px-3 py-2.5">
                           <div className="flex items-start gap-2.5">
@@ -816,13 +835,18 @@ export default function ChatMessages() {
                                   <>Need <span className="text-white font-medium">{msg.insufficientCredits.needed}</span> cr · have <span className="text-white font-medium">{msg.insufficientCredits.balance}</span></>
                                 )}
                               </p>
-                              <div className="flex gap-2 mt-2 flex-wrap">
-                                <Link href="/dashboard?tab=stake"
+                              <div className="flex gap-2 mt-2 flex-wrap items-center">
+                                <button onClick={() => setTopUpOpen(true)}
+                                  className="inline-flex items-center gap-1 font-mono text-[10px] font-bold px-2.5 py-1 rounded-md border transition-opacity hover:opacity-90"
+                                  style={{ background: "#4FC3F7", color: "#050508", borderColor: "#4FC3F7" }}>
+                                  Top up with USDC
+                                </button>
+                                <Link href="/docs/credits"
                                   className="inline-flex items-center gap-1 font-mono text-[10px] font-bold px-2.5 py-1 rounded-md bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/40 hover:bg-[#F59E0B]/25 transition-colors">
-                                  Stake more BLUE →
+                                  How credits work →
                                 </Link>
                                 <span className="font-mono text-[10px] text-slate-700 self-center">
-                                  Top-up via USDC coming next
+                                  Resets daily · connect a wallet for 500/day
                                 </span>
                               </div>
                             </div>
@@ -875,6 +899,15 @@ export default function ChatMessages() {
           <div ref={bottomRef} />
         </div>
       )}
+
+      {/* Non-custodial USDC top-up — opened by the inline "credits low" notice.
+          Single instance for the whole message list; refresh the balance on a
+          successful credit so the header count updates without a reload. */}
+      <TopUpModal
+        open={topUpOpen}
+        onClose={() => setTopUpOpen(false)}
+        onCredited={triggerWalletRefresh}
+      />
     </div>
   );
 }

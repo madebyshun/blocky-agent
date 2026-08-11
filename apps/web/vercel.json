@@ -1,0 +1,29 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/feed/daily",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/research-loop",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/blue-hood/poll",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/blue-hood/sparkline-refresh",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/blue-hood/brief-worker",
+      "schedule": "*/3 * * * *"
+    },
+    {
+      "path": "/api/cron/blue-hood/alert-drain",
+      "schedule": "*/2 * * * *"
+    }
+  ]
+}
+

@@ -53,7 +53,11 @@ export interface ConnectorPreset {
   url: string;
   auth: ConnectorAuth;
   category: string;          // grouping label shown on the card
-  icon: string;              // emoji glyph for recognizability
+  /** Key into BRANDS (components/BrandMark.tsx) — renders the real logo.
+   *  Emoji stand-ins were replaced 2026-08: they render differently per OS and
+   *  carry zero brand recognition in an integrations gallery. */
+  brand: string;
+  icon: string;              // emoji fallback, kept for non-visual surfaces
   description: string;       // one-line card copy
   authHeader?: string;       // bearer only — header to send the token in
   authPlaceholder?: string;  // bearer only — input hint
@@ -67,6 +71,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://blueagent.dev/api/mcp",
     auth: "none",
     category: "Base",
+    brand: "blue-agent",
     icon: "🔵",
     description: "Blue Agent's own toolset — idea·build·audit·ship·raise plus on-chain Base intel. No key needed.",
     docsUrl: "https://blueagent.dev/hub",
@@ -81,6 +86,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://docs.base.org/mcp",
     auth: "none",
     category: "Base",
+    brand: "base",
     icon: "🔵",
     description: "Search Base documentation live — contracts, RPC, deploy guides, MCP plugins. No key needed.",
     docsUrl: "https://docs.base.org",
@@ -91,6 +97,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://mcp.deepwiki.com/mcp",
     auth: "none",
     category: "Docs",
+    brand: "deepwiki",
     icon: "📖",
     description: "Ask anything about a public GitHub repo — structure, docs, deep Q&A. By Devin / Cognition.",
     docsUrl: "https://deepwiki.com",
@@ -101,6 +108,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://mcp.context7.com/mcp",
     auth: "none",
     category: "Docs",
+    brand: "context7",
     icon: "📚",
     description: "Version-accurate library & framework docs, injected on demand. By Upstash.",
     docsUrl: "https://context7.com",
@@ -111,6 +119,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://huggingface.co/mcp",
     auth: "none",
     category: "AI",
+    brand: "huggingface",
     icon: "🤗",
     description: "Search models, datasets, Spaces & papers on the HF Hub. Public search needs no key.",
     docsUrl: "https://huggingface.co/settings/mcp",
@@ -121,6 +130,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://api.githubcopilot.com/mcp/",
     auth: "bearer",
     category: "Dev",
+    brand: "github",
     icon: "🐙",
     description: "Repos, issues, PRs, code search. Needs a GitHub personal access token.",
     authHeader: "Authorization",
@@ -133,6 +143,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://mcp.notion.com/mcp",
     auth: "oauth",
     category: "Product",
+    brand: "notion",
     icon: "📝",
     description: "Search workspace content, update pages, automate Notion workflows.",
     docsUrl: "https://developers.notion.com",
@@ -143,6 +154,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://mcp.linear.app/mcp",
     auth: "oauth",
     category: "Dev",
+    brand: "linear",
     icon: "📐",
     description: "Issues, projects & cycles — manage your Linear workspace from chat.",
     docsUrl: "https://linear.app",
@@ -153,6 +165,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://mcp.sentry.dev/mcp",
     auth: "oauth",
     category: "Dev",
+    brand: "sentry",
     icon: "🛡️",
     description: "Query errors, issues & performance across your Sentry projects.",
     docsUrl: "https://mcp.sentry.dev",
@@ -163,6 +176,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     url: "https://mcp.stripe.com",
     auth: "oauth",
     category: "Product",
+    brand: "stripe",
     icon: "💳",
     description: "Payments, customers & invoices — read and manage Stripe data.",
     docsUrl: "https://docs.stripe.com/mcp",
@@ -172,6 +186,16 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
 /** Normalize an MCP url for equality checks (drop trailing slashes + case). */
 function normalizeUrl(u: string): string {
   return u.trim().toLowerCase().replace(/\/+$/, "");
+}
+
+/** Resolve the BrandMark key for an already-attached connector by matching its
+ *  endpoint back to the preset catalog. Doing it by URL (rather than storing
+ *  `brand` on the row) means connectors saved to localStorage before this field
+ *  existed still get their logo — localStorage rows are never migrated. Custom
+ *  servers return undefined and correctly fall back to the neutral tile. */
+export function brandForUrl(url: string): string | undefined {
+  const target = normalizeUrl(url);
+  return CONNECTOR_PRESETS.find(p => normalizeUrl(p.url) === target)?.brand;
 }
 
 /** True if a connector with this preset's endpoint is already attached. */

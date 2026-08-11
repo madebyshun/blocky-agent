@@ -20,11 +20,23 @@ They take precedence over speed.
 
 ## NON-NEGOTIABLE: verify before claiming done
 
-- After ANY code change, run **`npx next build`** and confirm it compiles. Do NOT say "done", "fixed", or
-  "works" until the build is green. **`npx tsx` running a file is NOT proof** — tsx skips TypeScript strict
-  checks; `next build` is what production runs and what catches real errors.
+- After ANY code change, run **`npx tsc --noEmit && npm run verify:build`** (from `apps/web/`) and confirm
+  both are green. **`npx tsx` running a file is NOT proof** — tsx skips TypeScript strict checks; the full
+  Next build is what production runs and what catches real errors.
   *(Real bug: a bulk patch changed a function signature but not its callers — tsx ran fine, next build failed,
   production deploy broke.)*
+- **Use `npm run verify:build`, NOT `npm run build`.** verify:build writes to `.next-verify/` via
+  `NEXT_DIST_DIR`, so the running dev server's `.next/` never gets wiped. Running `next build` while
+  `next dev` is up corrupts the shared `.next/` and turns the browser into a giant fullscreen logomark
+  (real bug, seen 4 times). The `verify:build` script is defined in `apps/web/package.json`.
+- **Never `rm -rf .next` while `next dev` is running.** Same fullscreen-logomark corruption as above
+  via a different vector — the dev server keeps its file handles into `.next/`, and once you delete
+  the dir out from under it, the browser starts getting a fallback page. If you need to clear a stale
+  `.next/types/` (e.g. after a branch switch that dropped some routes), either (a) stop the dev
+  server first, then `rm -rf .next && npm run dev`, or (b) `rm -rf .next/types` alone — that subfolder
+  is regenerated on the next request and doesn't corrupt live handles. If `verify:build`'s type errors
+  are complaining about missing `.js` companions, that's the *stale-types* case, not a real error —
+  restart is the fix, not editing anything.
 - When testing a handler locally via tsx, import through `index.ts` and call via `HANDLERS[id]`, not the file's
   default export — tsx wraps named exports under `.default`, so direct calls fail misleadingly.
 - **Distinguish test noise from real bugs BEFORE fixing.** Half of apparent failures are wrong input fixtures

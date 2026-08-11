@@ -2,266 +2,289 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AppChromeProvider, useAppChrome } from "./AppChrome";
 import LanguageToggle from "@/components/LanguageToggle";
 import { useLang } from "@/lib/i18n/context";
 
-// ── Nav items ─────────────────────────────────────────────────────────────────
+// T-D D1 — small self-contained client component. Polls
+// `/api/hood/inbox/unread-count` every 30s and shows a red dot with the count
+// on the Hood nav item. Only mounted for the Hood item so other nav items don't
+// trigger the fetch.
+function HoodNavBadge() {
+  const [n, setN] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/hood/inbox/unread-count", { cache: "no-store" });
+        if (!r.ok) return;
+        const body = (await r.json()) as { unread?: number };
+        if (alive && typeof body.unread === "number") setN(body.unread);
+      } catch { /* offline is fine */ }
+    };
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  if (!n) return null;
+  const label = n > 99 ? "99+" : String(n);
+  return (
+    <span
+      className="absolute -top-1 -right-2 min-w-[14px] h-[14px] px-1 rounded-full flex items-center justify-center font-mono text-[9px] font-bold"
+      style={{ backgroundColor: "#ef4444", color: "#fff", boxShadow: "0 0 0 2px #050508" }}
+      aria-label={`${n} unread`}
+    >
+      {label}
+    </span>
+  );
+}
 
-const APP_NAV = [
+// ── Icons (Heroicons outline · 18px · strokeWidth 1.5) ──────────────────────────
+const S = { width: 18, height: 18 } as const;
+const svg = (d: ReactNode) => (
+  <svg style={S} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>{d}</svg>
+);
+
+const IconChat = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M8.625 9.75a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 0 1 .778-.332 48.294 48.294 0 0 0 5.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />);
+const IconHub = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />);
+const IconHood = svg(<><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m0 0-6-6m6 6-6 6" /><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.5v15" /></>);
+// Overview — chart-pie (distinct from Hub's grid).
+const IconOverview = svg(<><path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6a7.5 7.5 0 1 0 7.5 7.5h-7.5V6Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 10.5H21A7.5 7.5 0 0 0 13.5 3v7.5Z" /></>);
+// Skills — sparkles.
+const IconSkills = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />);
+// Connectors — squares-plus.
+const IconConnectors = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 10.5 18v-2.25a2.25 2.25 0 0 0-2.25-2.25H6a2.25 2.25 0 0 0-2.25 2.25V18A2.25 2.25 0 0 0 6 20.25Zm9.75-9.75H18a2.25 2.25 0 0 0 2.25-2.25V6A2.25 2.25 0 0 0 18 3.75h-2.25A2.25 2.25 0 0 0 13.5 6v2.25a2.25 2.25 0 0 0 2.25 2.25Z" />);
+// Cron — clock.
+const IconCron = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />);
+// Usage — chart-bar.
+const IconUsage = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />);
+// Plans — credit-card.
+const IconPlans = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" />);
+// Docs — document.
+const IconDocs = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />);
+const IconHome = (
+  <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+  </svg>
+);
+
+// ── Nav model ───────────────────────────────────────────────────────────────────
+// Grouped sidebar (AgentOS Control). Every destination is backed by REAL data —
+// no fabricated Health / Sessions / Agents pages. The three groups mirror the
+// mental model: Workspace = where you work, Control = manage the agent, Account
+// = billing + help.
+type NavItem = { id: string; href: string; icon: ReactNode; badge?: "hood" };
+type NavGroup = { id: string; items: NavItem[] };
+
+const NAV_GROUPS: NavGroup[] = [
   {
-    id: "chat",
-    label: "Chat",
-    href: "/chat",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M8.625 9.75a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 0 1 .778-.332 48.294 48.294 0 0 0 5.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
-      </svg>
-    ),
+    id: "group_workspace",
+    items: [
+      { id: "chat", href: "/chat", icon: IconChat },
+      { id: "hub", href: "/hub", icon: IconHub },
+      { id: "hood", href: "/hood", icon: IconHood, badge: "hood" },
+    ],
   },
   {
-    id: "hub",
-    label: "Hub",
-    href: "/hub",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
-      </svg>
-    ),
-  },
-  // Feed nav item removed — Blue Feed is hidden while it's rebuilt (route /feed
-  // returns 404 + noindex). Restore this entry when the feed relaunches.
-  {
-    id: "bank",
-    label: "Bank",
-    href: "/bank",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0 0 12 9.75c-2.551 0-5.056.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75Z" />
-      </svg>
-    ),
+    id: "group_control",
+    // Overview (/dashboard hosts Overview + Stake + Alerts tabs) · Skills ·
+    // Connectors · Scheduled · Usage — the last four are the Blue Chat tabs
+    // promoted to first-class pages (see src/app/app/{skills,connectors,cron,usage}).
+    items: [
+      { id: "dashboard", href: "/dashboard", icon: IconOverview },
+      { id: "skills", href: "/skills", icon: IconSkills },
+      { id: "connectors", href: "/connectors", icon: IconConnectors },
+      { id: "cron", href: "/cron", icon: IconCron },
+      { id: "usage", href: "/usage", icon: IconUsage },
+    ],
   },
   {
-    id: "launches",
-    label: "Launches",
-    href: "/launches",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M15.59 14.37a6 6 0 0 1-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 0 0 6.16-12.12A14.98 14.98 0 0 0 9.631 8.41m5.96 5.96a14.926 14.926 0 0 1-5.841 2.58m-.119-8.54a6 6 0 0 0-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 0 0-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 0 1-2.448-2.448 14.9 14.9 0 0 1 .06-.312m-2.24 2.39a4.493 4.493 0 0 0-1.757 4.306 4.493 4.493 0 0 0 4.306-1.758M16.5 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" />
-      </svg>
-    ),
-  },
-  {
-    id: "b20",
-    label: "B20 Hub",
-    href: "/b20",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
-      </svg>
-    ),
-  },
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    // Dashboard now hosts Overview + Stake + Alerts as tabs; the standalone
-    // /app/rewards and /app/alerts entries are gone from the sidebar (they
-    // redirect into the right tab for anyone hitting old links).
-    href: "/dashboard",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
-      </svg>
-    ),
+    id: "group_account",
+    items: [
+      { id: "plans", href: "/plans", icon: IconPlans },
+      { id: "docs", href: "/docs/blue-chat", icon: IconDocs },
+    ],
   },
 ];
 
-const APP_BOTTOM = [
-  // Profile is back as its own page — identity (bio, avatar, social links)
-  // is distinct from the dashboard's wallet snapshot. /app/dashboard is for
-  // "what do I hold + manage", /app/profile is for "who am I".
-  {
-    id: "profile",
-    label: "Profile",
-    href: "/profile",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M17.982 18.725A7.488 7.488 0 0 0 12 15.75a7.488 7.488 0 0 0-5.982 2.975m11.963 0a9 9 0 1 0-11.963 0m11.963 0A8.966 8.966 0 0 1 12 21a8.966 8.966 0 0 1-5.982-2.275M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-      </svg>
-    ),
-  },
-  {
-    id: "docs",
-    label: "Docs",
-    href: "/docs/blue-chat",
-    icon: (
-      <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-      </svg>
-    ),
-  },
-];
+const ALL_ITEMS = NAV_GROUPS.flatMap((g) => g.items);
 
-// ── Sidebar ────────────────────────────────────────────────────────────────────
+// The app surface is served on app.blueagent.dev under clean, /app-less URLs
+// (middleware rewrites /chat → /app/chat), so on prod usePathname() already
+// returns the clean path. On localhost/preview you visit /app/chat directly, so
+// strip a leading /app here too — that keeps the active highlight correct in
+// BOTH environments. The app root ("/") is Blue Chat, so map it to /chat.
+function cleanPath(pathname: string): string {
+  const p = pathname.replace(/^\/app(?=\/|$)/, "") || "/";
+  return p === "/" ? "/chat" : p;
+}
+
+// Returns the nav id for the current path so the mobile title can be translated
+// via t(`nav.${id}`); falls back to null (→ generic "Blue Agent" brand label).
+function navIdForPath(pathname: string): string | null {
+  const clean = cleanPath(pathname);
+  const match = ALL_ITEMS.find((i) => clean === i.href || clean.startsWith(i.href + "/"));
+  return match?.id ?? null;
+}
+
+// ── Desktop sidebar (grouped · collapsible) ─────────────────────────────────────
+
+const COLLAPSE_KEY = "blue.sidebar.collapsed";
 
 function AppSideNav() {
   const pathname = usePathname();
   const { t } = useLang();
+  const clean = cleanPath(pathname);
+  const isActive = (href: string) => clean === href || clean.startsWith(href + "/");
 
-  // The app surface is served on app.blueagent.dev under clean, /app-less URLs
-  // (middleware rewrites /chat → /app/chat internally), so usePathname() returns
-  // the clean path here — compare nav hrefs against that, not against /app/*.
-  const isActive = (href: string) => {
-    return pathname === href || pathname.startsWith(href + "/");
+  // Collapse state persists across sessions. Default expanded; hydrate from
+  // localStorage after mount (avoids an SSR/client mismatch).
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try { setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1"); } catch { /* ignore */ }
+  }, []);
+  const toggle = () =>
+    setCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+
+  const renderItem = (item: NavItem) => {
+    const active = isActive(item.href);
+    return (
+      <Link
+        key={item.id}
+        href={item.href}
+        title={collapsed ? t(`nav.${item.id}`) : undefined}
+        className={`group relative flex items-center rounded-lg h-9 transition-colors ${
+          collapsed ? "justify-center" : "gap-3 px-3"
+        }`}
+        style={active ? { background: "#4FC3F712" } : undefined}
+      >
+        {active && (
+          <span
+            className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-r-full bg-[#4FC3F7]"
+            style={{ boxShadow: "0 0 6px #4FC3F780" }}
+          />
+        )}
+        <span
+          className="relative shrink-0 transition-colors"
+          style={{ color: active ? "#4FC3F7" : "#64748b" }}
+        >
+          {item.icon}
+          {item.badge === "hood" && <HoodNavBadge />}
+        </span>
+        {!collapsed && (
+          <span
+            className="font-mono text-[12px] tracking-wide truncate transition-colors"
+            style={{ color: active ? "#4FC3F7" : "#cbd5e1" }}
+          >
+            {t(`nav.${item.id}`)}
+          </span>
+        )}
+      </Link>
+    );
   };
 
   return (
-    <aside className="hidden md:flex flex-col w-[72px] shrink-0 border-r border-[#1A1A2E] h-full bg-[#050508]">
-
-      {/* Logo */}
-      <div className="flex items-center justify-center h-14 border-b border-[#1A1A2E] shrink-0">
-        <a href="https://blueagent.dev" title="blueagent.dev">
+    <aside
+      className="hidden md:flex flex-col shrink-0 border-r border-[#1A1A2E] h-full bg-[#050508] transition-[width] duration-200 ease-out"
+      style={{ width: collapsed ? 64 : 212 }}
+    >
+      {/* Logo / wordmark */}
+      <div
+        className={`flex items-center h-14 border-b border-[#1A1A2E] shrink-0 ${
+          collapsed ? "justify-center" : "px-3"
+        }`}
+      >
+        <a
+          href="https://blueagent.dev"
+          title="blueagent.dev"
+          className="flex items-center gap-2 min-w-0"
+        >
           <img
             src="/logomark.svg"
             alt="Blue Agent"
-            className="h-7 w-7 rounded-lg hover:opacity-75 transition-opacity"
+            className="h-7 w-7 rounded-lg shrink-0 hover:opacity-75 transition-opacity"
           />
+          {!collapsed && (
+            <span className="font-mono text-[12px] text-white tracking-wide truncate">
+              BLUE<span className="text-[#4FC3F7]">AGENT</span>
+            </span>
+          )}
         </a>
       </div>
 
-      {/* Primary nav */}
-      <nav className="flex flex-col items-center gap-0.5 pt-2 flex-1 px-2">
-        {NAV_ITEMS.map((item) => {
-          const active = isActive(item.href);
-          const isExt = !!(item as { external?: boolean }).external;
-          const navCls = "group relative flex flex-col items-center justify-center gap-0.5 w-full h-[50px] rounded-xl transition-all";
-          const navInner = (
-            <>
-              <span className="group-hover:text-slate-300 transition-colors">
-                {item.icon}
-              </span>
-              <span
-                className="font-mono text-[7px] tracking-wide transition-colors group-hover:text-slate-400 truncate max-w-[56px] text-center"
-                style={{ color: active ? "#4FC3F7" : undefined }}
-              >
-                {t(`nav.${item.id}`)}
-              </span>
-              {/* Active left-bar indicator */}
-              {active && (
-                <span className="absolute -left-2 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-r-full bg-[#4FC3F7]"
-                  style={{ boxShadow: "0 0 6px #4FC3F780" }} />
+      {/* Grouped nav */}
+      <nav className="flex-1 overflow-y-auto py-2">
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.id} className={gi > 0 ? "mt-1" : ""}>
+            {collapsed
+              ? gi > 0 && <div className="mx-auto my-2 w-6 h-px bg-[#1A1A2E]" />
+              : (
+                <p className="px-3 pt-4 pb-1 font-mono text-[9px] text-slate-600 tracking-widest uppercase">
+                  {t(`nav.${group.id}`)}
+                </p>
               )}
-            </>
-          );
-          if (isExt) {
-            return (
-              <a key={item.id} href={item.href} target="_blank" rel="noopener noreferrer"
-                className={navCls} style={{ color: "#334155" }}>
-                {navInner}
-              </a>
-            );
-          }
-          return (
-            <Link
-              key={item.id}
-              href={item.href}
-              className={navCls}
-              style={
-                active
-                  ? { color: "#4FC3F7", background: "#4FC3F712", boxShadow: "0 0 0 1px #4FC3F720" }
-                  : { color: "#334155" }
-              }
-            >
-              {navInner}
-            </Link>
-          );
-        })}
+            <div className="flex flex-col gap-0.5 px-2">
+              {group.items.map(renderItem)}
+            </div>
+          </div>
+        ))}
       </nav>
 
-      {/* Bottom items */}
-      <div className="flex flex-col items-center gap-0.5 pb-3 px-2">
-
-        {APP_BOTTOM.map((item) => {
-          const active = isActive(item.href);
-          return (
-            <Link
-              key={item.id}
-              href={item.href}
-              className="group relative flex flex-col items-center justify-center gap-0.5 w-full h-[46px] rounded-xl transition-all"
-              style={
-                active
-                  ? { color: "#4FC3F7", background: "#4FC3F712" }
-                  : { color: "#334155" }
-              }
-            >
-              <span className="group-hover:text-slate-400 transition-colors">
-                {item.icon}
-              </span>
-              <span className="font-mono text-[7px] tracking-wide text-slate-700 group-hover:text-slate-500 transition-colors">
-                {t(`nav.${item.id}`)}
-              </span>
-            </Link>
-          );
-        })}
-
-        {/* Divider */}
-        <div className="w-8 h-px bg-[#1A1A2E] my-0.5" />
-
-        {/* Language toggle — EN / 中文 (vertical to fit the 72px rail) */}
-        <div className="px-1 w-full">
-          <LanguageToggle vertical />
-        </div>
-
-        {/* Back to marketing site */}
+      {/* Footer — Home · language · collapse toggle */}
+      <div className="border-t border-[#1A1A2E] shrink-0 flex flex-col gap-1 py-2 px-2">
         <a
           href="https://blueagent.dev"
-          className="group relative flex flex-col items-center justify-center gap-0.5 w-full h-[46px] rounded-xl text-[#283040] hover:text-slate-500 transition-colors"
+          title={collapsed ? t("nav.home") : undefined}
+          className={`group flex items-center rounded-lg h-9 text-[#283040] hover:text-slate-400 transition-colors ${
+            collapsed ? "justify-center" : "gap-3 px-3"
+          }`}
         >
-          <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round"
-              d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-          </svg>
-          <span className="font-mono text-[7px] tracking-wide text-slate-700 group-hover:text-slate-500 transition-colors">
-            {t("nav.home")}
-          </span>
+          <span className="shrink-0">{IconHome}</span>
+          {!collapsed && (
+            <span className="font-mono text-[12px] tracking-wide text-slate-500 group-hover:text-slate-300 transition-colors">
+              {t("nav.home")}
+            </span>
+          )}
         </a>
+
+        <div className={collapsed ? "flex justify-center" : "px-1"}>
+          <LanguageToggle vertical={collapsed} />
+        </div>
+
+        <button
+          onClick={toggle}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className={`group flex items-center rounded-lg h-9 text-slate-600 hover:text-slate-300 hover:bg-[#ffffff06] transition-colors ${
+            collapsed ? "justify-center" : "gap-3 px-3"
+          }`}
+        >
+          <span
+            className="shrink-0 transition-transform"
+            style={{ transform: collapsed ? "rotate(180deg)" : undefined }}
+          >
+            <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+            </svg>
+          </span>
+          {!collapsed && (
+            <span className="font-mono text-[11px] tracking-wide">Collapse</span>
+          )}
+        </button>
       </div>
     </aside>
   );
 }
 
 // ── Mobile chrome (top bar + drawer) ────────────────────────────────────────────
-// Replaces the old bottom tab bar. Claude-style: a hamburger top bar opens a
-// slide-out drawer that holds BOTH the product destinations and (when a page
-// registers it) that page's contextual sub-nav — e.g. Blue Chat's Models /
-// Tools / Skills / Scheduled and recent conversations. Shown below lg so the
-// tablet gap (md rail, no chat sidebar) keeps full nav access.
-
-// BlueBank is live — show in sidebar on all environments.
-// Access is gated by BANK_PREVIEW_TOKEN cookie in middleware.
-const NAV_ITEMS = APP_NAV;
-
-const PRODUCTS = [...NAV_ITEMS, ...APP_BOTTOM];
-
-// Mobile drawer products — Profile is surfaced at the very top, Docs lives in
-// Settings (mobile), so both are dropped from the drawer's product list.
-const DRAWER_PRODUCTS = PRODUCTS.filter(i => i.id !== "profile" && i.id !== "docs");
-
-// Returns the nav id for the current path so the title can be translated via
-// t(`nav.${id}`); falls back to null (→ generic "Blue Agent" brand label).
-function navIdForPath(pathname: string): string | null {
-  const match = PRODUCTS.find(i => pathname === i.href || pathname.startsWith(i.href + "/"));
-  return match?.id ?? null;
-}
+// A hamburger top bar opens a slide-out drawer holding BOTH the product
+// destinations (same three groups as desktop) and — when a page registers it —
+// that page's contextual sub-nav (e.g. Blue Chat's recents / New chat).
 
 function MobileTopBar() {
   const { setDrawerOpen, contextual } = useAppChrome();
@@ -284,9 +307,7 @@ function MobileTopBar() {
       <span className="font-mono text-[11px] text-[#4FC3F7] tracking-widest truncate flex-1">
         // {title.toUpperCase()}
       </span>
-      {/* Language toggle — EN | 中文 */}
       <LanguageToggle />
-      {/* One-tap New chat (compose) — ChatGPT-style, no need to open the drawer. */}
       {contextual?.newChat && (
         <button
           aria-label="New chat"
@@ -306,6 +327,7 @@ function MobileDrawer() {
   const { drawerOpen, setDrawerOpen, contextual } = useAppChrome();
   const pathname = usePathname();
   const { t } = useLang();
+  const clean = cleanPath(pathname);
 
   // Close the drawer whenever the route changes (e.g. after tapping a product).
   useEffect(() => { setDrawerOpen(false); }, [pathname, setDrawerOpen]);
@@ -347,22 +369,6 @@ function MobileDrawer() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-2">
-          {/* Profile — surfaced at the very top (ChatGPT-style account entry). */}
-          <div className="px-2">
-            <Link
-              href="/profile"
-              onClick={() => setDrawerOpen(false)}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-[#ffffff06]"
-            >
-              <span className="w-7 h-7 rounded-full bg-[#15151f] border border-[#1A1A2E] flex items-center justify-center shrink-0">
-                <svg className="w-4 h-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-              </span>
-              <span className="font-mono text-[13px] text-slate-200">{t("nav.profile")}</span>
-            </Link>
-          </div>
-
           {/* New chat — primary action, prominent + easy to tap. */}
           {contextual?.newChat && (
             <div className="px-2 pt-1 pb-2">
@@ -379,10 +385,10 @@ function MobileDrawer() {
             </div>
           )}
 
-          {/* Contextual utilities (Scheduled · Settings) + recents */}
+          {/* Contextual utilities + recents (chat sub-nav, etc.) */}
           {hasContextual && (
             <div className="px-2 pb-2 border-t border-[#13131f] pt-2">
-              {contextual!.items.map(item => (
+              {contextual!.items.map((item) => (
                 <button
                   key={item.id}
                   onClick={() => { item.onSelect(); setDrawerOpen(false); }}
@@ -399,7 +405,7 @@ function MobileDrawer() {
               {contextual!.recents && contextual!.recents.length > 0 && (
                 <>
                   <p className="px-3 pt-3 pb-1 font-mono text-[9px] text-slate-600 tracking-widest uppercase">Recents</p>
-                  {contextual!.recents.map(r => (
+                  {contextual!.recents.map((r) => (
                     <button
                       key={r.id}
                       onClick={() => { r.onSelect(); setDrawerOpen(false); }}
@@ -416,41 +422,44 @@ function MobileDrawer() {
             </div>
           )}
 
-          {/* Products group */}
-          <div className="px-2 pt-1 border-t border-[#13131f] mt-1">
-            <p className="px-3 pt-3 pb-1 font-mono text-[9px] text-slate-600 tracking-widest uppercase">Products</p>
-            {DRAWER_PRODUCTS.map(item => {
-              const active = pathname === item.href || pathname.startsWith(item.href + "/");
-              const isExt = !!(item as { external?: boolean }).external;
-              const drawerCls = "w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-[#ffffff06]";
-              const drawerInner = (
-                <>
-                  <span className="shrink-0" style={{ color: active ? "#4FC3F7" : "#64748b" }}>{item.icon}</span>
-                  <span className="font-mono text-[13px]" style={{ color: active ? "#4FC3F7" : "#cbd5e1" }}>{t(`nav.${item.id}`)}</span>
-                  {isExt && <span className="ml-auto font-mono text-[9px] text-slate-600">↗</span>}
-                </>
-              );
-              if (isExt) {
+          {/* Product groups — same three groups as desktop. */}
+          {NAV_GROUPS.map((group) => (
+            <div key={group.id} className="px-2 pt-1 border-t border-[#13131f] mt-1">
+              <p className="px-3 pt-3 pb-1 font-mono text-[9px] text-slate-600 tracking-widest uppercase">
+                {t(`nav.${group.id}`)}
+              </p>
+              {group.items.map((item) => {
+                const active = clean === item.href || clean.startsWith(item.href + "/");
                 return (
-                  <a key={item.id} href={item.href} target="_blank" rel="noopener noreferrer"
+                  <Link
+                    key={item.id}
+                    href={item.href}
                     onClick={() => setDrawerOpen(false)}
-                    className={drawerCls}>
-                    {drawerInner}
-                  </a>
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-[#ffffff06]"
+                    style={active ? { background: "#4FC3F712" } : undefined}
+                  >
+                    <span className="relative shrink-0" style={{ color: active ? "#4FC3F7" : "#64748b" }}>
+                      {item.icon}
+                      {item.badge === "hood" && <HoodNavBadge />}
+                    </span>
+                    <span className="font-mono text-[13px]" style={{ color: active ? "#4FC3F7" : "#cbd5e1" }}>
+                      {t(`nav.${item.id}`)}
+                    </span>
+                  </Link>
                 );
-              }
-              return (
-                <Link
-                  key={item.id}
-                  href={item.href}
-                  onClick={() => setDrawerOpen(false)}
-                  className={drawerCls}
-                  style={active ? { background: "#4FC3F712" } : undefined}
-                >
-                  {drawerInner}
-                </Link>
-              );
-            })}
+              })}
+            </div>
+          ))}
+
+          {/* Back to marketing */}
+          <div className="px-2 pt-1 border-t border-[#13131f] mt-1">
+            <a
+              href="https://blueagent.dev"
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-[#ffffff06] text-slate-500"
+            >
+              <span className="shrink-0">{IconHome}</span>
+              <span className="font-mono text-[13px]">{t("nav.home")}</span>
+            </a>
           </div>
         </div>
       </aside>

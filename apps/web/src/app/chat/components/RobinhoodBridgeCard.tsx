@@ -29,7 +29,7 @@ const CHAINS = {
   robinhood: {
     id:       4663,
     label:    "Robinhood",
-    accent:   "#00C805",
+    accent:   "#34D399",
     explorer: "https://robinhoodchain.blockscout.com",
   },
 } as const;
@@ -384,20 +384,20 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
       </div>
 
       {step === "filled" ? (
-        <div className="rounded-lg border p-3" style={{ borderColor: "#00C80540", background: "#00C80508" }}>
-          <div className="font-bold mb-1" style={{ color: "#00C805" }}>
+        <div className="rounded-lg border p-3" style={{ borderColor: "#34D39940", background: "#34D39908" }}>
+          <div className="font-bold mb-1" style={{ color: "#34D399" }}>
             Bridged {fmtAmount(initialAmt, 18)} {symbol} to {toCfg.label}
           </div>
           <div className="flex gap-2 flex-wrap mt-1">
             {txHash && (
               <a href={`${fromCfg.explorer}/tx/${txHash}`} target="_blank" rel="noopener noreferrer"
-                className="text-[10px] px-2 py-1 rounded-lg border border-[#00C80540] text-[#00C805] inline-block">
+                className="text-[10px] px-2 py-1 rounded-lg border border-[#34D39940] text-[#34D399] inline-block">
                 Source tx ↗
               </a>
             )}
             {prep?.meta?.trackerUrl && (
               <a href={prep.meta.trackerUrl} target="_blank" rel="noopener noreferrer"
-                className="text-[10px] px-2 py-1 rounded-lg border border-[#00C80540] text-[#00C805] inline-block">
+                className="text-[10px] px-2 py-1 rounded-lg border border-[#34D39940] text-[#34D399] inline-block">
                 Relay tracker ↗
               </a>
             )}
@@ -513,7 +513,7 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
             }
             disabled={!isConnected ? false : (wrongChain ? busy : (!canSign || busy))}
             className="w-full text-[12px] font-bold py-2.5 rounded-lg transition-all disabled:opacity-50"
-            style={{ background: "#00C80515", color: "#00C805", border: "1px solid #00C80540" }}
+            style={{ background: "#34D39915", color: "#34D399", border: "1px solid #34D39940" }}
           >
             {!isConnected ? "Connect your wallet"
               : loading   ? "Fetching quote…"

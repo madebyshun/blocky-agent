@@ -11,6 +11,7 @@
  * Tools run via the internal x402 bypass (X-Blue-Internal + X-Blue-Service).
  */
 import { kvGet, kvSet }              from "@/lib/kv";
+import { internalX402Headers, hasInternalKey } from "@/lib/x402-internal";
 // PendingPick is written here and read by picks-check.ts handler (same schema).
 type PendingPick = {
   symbol:          string;
@@ -21,7 +22,6 @@ type PendingPick = {
   liquidity_usd:   number | null;
 };
 
-const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY ?? "";
 const CRON_SECRET          = process.env.CRON_SECRET ?? "";
 const BASE_URL             = "https://blueagent.dev/api/x402";
 const HOUR_MS              = 3_600_000;
@@ -277,7 +277,7 @@ async function callTool(job: Job, cycleId: number): Promise<FeedItem | null> {
   try {
     const res = await fetch(`${BASE_URL}/${job.tool}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Blue-Internal": INTERNAL_SERVICE_KEY, "X-Blue-Service": "internal" },
+      headers: internalX402Headers(),
       body: JSON.stringify(job.body),
       signal: AbortSignal.timeout(45000),
     });
@@ -416,7 +416,7 @@ export function authError(req: Request): { status: number; body: Record<string, 
   if (CRON_SECRET && authHeader !== `Bearer ${CRON_SECRET}` && secretParam !== CRON_SECRET) {
     return { status: 401, body: { error: "Unauthorized" } };
   }
-  if (!INTERNAL_SERVICE_KEY) {
+  if (!hasInternalKey()) {
     return { status: 500, body: { error: "INTERNAL_SERVICE_KEY not configured" } };
   }
   return null;

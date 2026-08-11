@@ -26,15 +26,12 @@ $ blue idea "DeFi protocol for Base"
 $ blue doctor`}</CodeBlock>
 
       <H2 id="ways-in">2 · Other ways in</H2>
-      <CardGrid cols={3}>
+      <CardGrid cols={2}>
         <Card title="Interactive TUI" color="#A78BFA">
           Run <code className="text-slate-300">blueagent</code> for an arrow-key menu over every command.
         </Card>
-        <Card title="Browser terminal" color="#34D399" href="/terminal">
-          No install — <code className="text-slate-300">blueagent.dev/terminal</code> with tab-autocomplete + history.
-        </Card>
         <Card title="Blue Chat" color="#4FC3F7" href="/app/chat">
-          The fastest way in. Slash commands + live Hub tools, right in the conversation.
+          No install — the fastest way in. Slash commands + live Hub tools, right in your browser.
         </Card>
       </CardGrid>
 

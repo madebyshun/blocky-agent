@@ -44,6 +44,34 @@ const fallback = {
     memStore.set(key, { value: val, expiresAt: entry?.expiresAt });
     return val;
   },
+  // Set ops backed by a string[] stored under the key (acts as a Set). We keep
+  // the array de-duped so `sadd` is idempotent and `srem` never leaves a ghost.
+  async sadd(key: string, ...members: string[]): Promise<number> {
+    memClean(key);
+    const entry = memStore.get(key);
+    const set = new Set<string>((entry?.value as string[]) ?? []);
+    let added = 0;
+    for (const m of members) if (!set.has(m)) { set.add(m); added++; }
+    memStore.set(key, { value: [...set], expiresAt: entry?.expiresAt });
+    return added;
+  },
+  async srem(key: string, ...members: string[]): Promise<number> {
+    if (memClean(key)) return 0;
+    const entry = memStore.get(key);
+    if (!entry) return 0;
+    const set = new Set<string>((entry.value as string[]) ?? []);
+    let removed = 0;
+    for (const m of members) if (set.delete(m)) removed++;
+    // Drop the key entirely when the set empties — mirrors Redis, where an
+    // empty set stops existing, so an emptied reverse index reads as `miss`.
+    if (set.size === 0) memStore.delete(key);
+    else memStore.set(key, { value: [...set], expiresAt: entry.expiresAt });
+    return removed;
+  },
+  async smembers(key: string): Promise<string[]> {
+    if (memClean(key)) return [];
+    return ((memStore.get(key)?.value as string[]) ?? []);
+  },
 };
 
 // ─── Upstash Redis client ─────────────────────────────────────────────────────
@@ -53,6 +81,9 @@ type KVClient = {
   del(...keys: string[]): Promise<void>;
   incr(key: string): Promise<number>;
   incrby(key: string, by: number): Promise<number>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  srem(key: string, ...members: string[]): Promise<number>;
+  smembers(key: string): Promise<string[]>;
 };
 
 // Resolve Upstash REST credentials from either env var convention:
@@ -82,6 +113,15 @@ function getKV(): KVClient {
       del:  (...keys: string[]) => redis.del(...keys),
       incr: (key: string) => redis.incr(key),
       incrby: (key: string, by: number) => redis.incrby(key, by),
+      // Native Redis set ops — atomic + idempotent. SREM is the primitive that
+      // makes the watchlist reverse index (bh:watch:ticker:*) orphan-proof: it
+      // removes a member with no read-modify-write race, and an emptied set
+      // ceases to exist. See lib/blue-hood/watchlist.ts.
+      sadd: (key: string, ...members: string[]) =>
+              redis.sadd(key, ...(members as [string, ...string[]])),
+      srem: (key: string, ...members: string[]) =>
+              redis.srem(key, ...(members as [string, ...string[]])),
+      smembers: (key: string) => redis.smembers(key) as Promise<string[]>,
     };
   }
 
@@ -93,23 +133,80 @@ export const kv = getKV();
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export async function kvGet<T>(key: string): Promise<T | null> {
-  try { return await kv.get<T>(key); } catch { return null; }
-}
-
-export async function kvSet(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
-  try { await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined); } catch {}
-}
-
-export async function kvDel(...keys: string[]): Promise<void> {
-  try { await kv.del(...keys); } catch {}
+  try { return await kv.get<T>(key); } catch (e) { console.error(`[kv:get] ${key}: ${(e as Error).message}`); return null; }
 }
 
 /**
- * Atomic SET if-not-exists with TTL.
- * Returns true if the key was set (lock acquired), false if it already existed.
- * Uses Redis SET NX EX — single atomic op, no race condition.
+ * Result of a KV read that DISTINGUISHES the three outcomes `kvGet` collapses:
+ *   • hit   — key present, here's the value
+ *   • miss  — key genuinely absent (client returned null, no error)
+ *   • error — the KV command THREW (throttle / plan-cap / network)
+ *
+ * `kvGet` catches the throw and returns null, so a throttle looks identical to
+ * an empty key — which is exactly how the 2026-07-27 Upstash-cap outage read
+ * as "poller never ran" and went unnoticed. Callers that need to tell those
+ * apart (the engine health probe) MUST use this, not `kvGet`.
  */
-export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
+export type KvProbe<T> =
+  | { status: "hit"; value: T }
+  | { status: "miss" }
+  | { status: "error"; message: string };
+
+/**
+ * Non-swallowing single-key read. The ONE place we deliberately surface a KV
+ * error instead of degrading to null. Never throws — it converts the throw
+ * into `{status:"error"}` so the caller decides what the error MEANS, rather
+ * than the primitive silently pretending the key was empty.
+ */
+export async function kvGetProbe<T>(key: string): Promise<KvProbe<T>> {
+  try {
+    const value = await kv.get<T>(key);
+    return value === null || value === undefined ? { status: "miss" } : { status: "hit", value };
+  } catch (e) {
+    return { status: "error", message: (e as Error).message };
+  }
+}
+
+export async function kvSet(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
+  try { await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined); } catch (e) { console.error(`[kv:set] ${key}: ${(e as Error).message}`); }
+}
+
+export async function kvDel(...keys: string[]): Promise<void> {
+  try { await kv.del(...keys); } catch (e) { console.error(`[kv:del] ${keys.join(",")}: ${(e as Error).message}`); }
+}
+
+/**
+ * Durable write — the counterpart to `kvSet` that does NOT swallow failures.
+ *
+ * `kvSet` catches, logs and returns normally, so a throttled/failed write is
+ * indistinguishable from a successful one. That's fine for caches; it is NOT
+ * fine on the money path — a swallowed `kvSet` in the credit ledger lets
+ * `topup()` report "credited" while nothing persisted, and the purchase route
+ * then writes its `processed` marker, making the credits unrecoverable.
+ * Callers that must know the write landed use this and let it throw.
+ */
+export async function kvSetOrThrow(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
+  await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined);
+}
+
+/**
+ * Outcome of an atomic SET-NX. Distinguishes the two cases `kvSetNX` collapses
+ * into `false`:
+ *   • acquired — the key was free, we own it until the TTL expires
+ *   • held     — someone else owns it (real contention)
+ *   • error    — the KV command THREW; we learned nothing about the key
+ *
+ * A lock caller MUST tell `held` from `error`: retrying is correct for `held`
+ * but pointless for `error`, and treating `error` as `held` means one KV blip
+ * blocks every writer. Same reasoning as `kvGetProbe` above.
+ */
+export type LockAttempt = "acquired" | "held" | "error";
+
+/**
+ * Atomic SET if-not-exists with TTL, reporting which of the three things
+ * happened. `kvSetNX` is the boolean sugar over this.
+ */
+export async function kvTryLock(key: string, value: unknown, ttlSeconds: number): Promise<LockAttempt> {
   try {
     const creds = kvCreds();
     if (creds) {
@@ -118,17 +215,48 @@ export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): 
       const redis  = new Redis({ url: creds.url, token: creds.token });
       // SET key value NX EX ttl — atomic, returns "OK" or null
       const result = await redis.set(key, value, { nx: true, ex: ttlSeconds });
-      return result === "OK";
+      return result === "OK" ? "acquired" : "held";
     }
     // In-memory fallback: check expiry + set atomically
     const existing = memStore.get(key);
     const expired  = existing?.expiresAt ? Date.now() > existing.expiresAt : false;
-    if (existing && !expired) return false;
+    if (existing && !expired) return "held";
     memStore.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
-    return true;
-  } catch {
-    return false;
+    return "acquired";
+  } catch (e) {
+    console.error(`[kv:setNX] ${key}: ${(e as Error).message}`);
+    return "error";
   }
+}
+
+/**
+ * Atomic SET if-not-exists with TTL.
+ * Returns true if the key was set (lock acquired), false if it already existed
+ * — or if the KV command failed. Use `kvTryLock` when those differ to you.
+ * Uses Redis SET NX EX — single atomic op, no race condition.
+ */
+export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
+  return (await kvTryLock(key, value, ttlSeconds)) === "acquired";
+}
+
+/**
+ * Set helpers — thin, fault-tolerant wrappers over Redis SADD/SREM/SMEMBERS.
+ * A KV set is the right primitive for a "who's subscribed to X" list: adds are
+ * idempotent, removes never leave orphans, and membership reads are one call —
+ * no whole-array read-modify-write (the race-prone shape Sentinel's global
+ * `sentinel:watches` array has). Never throw: a failed set op logs and no-ops,
+ * so a KV blip degrades one alert route, it doesn't 500 the caller.
+ */
+export async function kvSAdd(key: string, ...members: string[]): Promise<void> {
+  if (members.length === 0) return;
+  try { await kv.sadd(key, ...members); } catch (e) { console.error(`[kv:sadd] ${key}: ${(e as Error).message}`); }
+}
+export async function kvSRem(key: string, ...members: string[]): Promise<void> {
+  if (members.length === 0) return;
+  try { await kv.srem(key, ...members); } catch (e) { console.error(`[kv:srem] ${key}: ${(e as Error).message}`); }
+}
+export async function kvSMembers(key: string): Promise<string[]> {
+  try { return (await kv.smembers(key)) ?? []; } catch (e) { console.error(`[kv:smembers] ${key}: ${(e as Error).message}`); return []; }
 }
 
 export const isKVEnabled = (): boolean => kvCreds() !== null;
@@ -161,7 +289,8 @@ export async function kvScan(match: string, max = 10000): Promise<string[]> {
       cursor = next;
     } while (cursor !== "0" && keys.length < max);
     return keys.slice(0, max);
-  } catch {
+  } catch (e) {
+    console.error(`[kv:scan] ${match}: ${(e as Error).message}`);
     return [];
   }
 }

@@ -81,6 +81,44 @@ import hBaseTokenScan  from "./base-token-scan";
 import hDefiYieldScan  from "./defi-yield-scan";
 import hNarrativeScan  from "./narrative-scan";
 import hPicksCheck     from "./picks-check";
+// RH RWA Phase 1 (L1·L2·L3·L4·M1) — Robinhood Chain tokenized-stock skills
+import hRhStockToken   from "./rh-stock-token";
+import hRhRwaIndex     from "./rh-rwa-index";
+import hRhStockSearch  from "./rh-stock-search";
+import hRhRwaVerify    from "./rh-rwa-verify";
+import hRhStockQuote   from "./rh-stock-quote";
+// RH RWA Phase 2 (M2·M3·M4·M5) — market analytics
+import hRhStockOhlc      from "./rh-stock-ohlc";
+import hRhStockLiquidity from "./rh-stock-liquidity";
+import hRhStockMovers    from "./rh-stock-movers";
+import hRhStockArb       from "./rh-stock-arb";
+// RH RWA Phase 3 (X1·X2·X3) — trading execution
+import hRhStockSwapQuote   from "./rh-stock-swap-quote";
+import hRhStockSwapPrepare from "./rh-stock-swap-prepare";
+import hRhStockSwapRoute   from "./rh-stock-swap-route";
+// RH RWA Phase 4 (P1·P2·P3·P4) — portfolio
+import hRhStockHoldings      from "./rh-stock-holdings";
+import hRhStockPnl           from "./rh-stock-pnl";
+import hRhPortfolioRebalance from "./rh-portfolio-rebalance";
+import hRhSectorBasket       from "./rh-sector-basket";
+// RH RWA Phase 5 (D1·D2·D3·D4·D5) — discovery & analytics
+import hRhStockHolders       from "./rh-stock-holders";
+import hRhStockFlow          from "./rh-stock-flow";
+import hRhStockNewListings   from "./rh-stock-new-listings";
+import hRhStockBeaconCheck   from "./rh-stock-beacon-check";
+import hRhStockCorrelations  from "./rh-stock-correlations";
+// RH RWA Phase 6 (A1·A2·A3·A4) — agent skills
+import hRhRwaDca             from "./rh-rwa-dca";
+import hRhStockAlert         from "./rh-stock-alert";
+import hRhStockReport        from "./rh-stock-report";
+import hRhStockAgentBrief    from "./rh-stock-agent-brief";
+// RH RWA Phase 7 (B1·B2·E1·E2·E3) — bridge & builder kit (final)
+import hRhBridgeRoute        from "./rh-bridge-route";
+import hRhUsdgRoute          from "./rh-usdg-route";
+import hRhRwaEmbedKit        from "./rh-rwa-embed-kit";
+import hRhRwaReadme          from "./rh-rwa-readme";
+import hRhRwaPricingKit      from "./rh-rwa-pricing-kit";
+
 export const HANDLERS: Record<string, (req: Request) => Promise<Response>> = {
   "token-price": hTokenPrice,
   "pool-scan": hPoolScan,
@@ -168,4 +206,41 @@ export const HANDLERS: Record<string, (req: Request) => Promise<Response>> = {
   "defi-yield-scan":    hDefiYieldScan,
   "narrative-scan":     hNarrativeScan,
   "picks-check":        hPicksCheck,
+  // ── RH RWA Phase 1 ────────────────────────────────────────────────────
+  "rh-stock-token":     hRhStockToken,
+  "rh-rwa-index":       hRhRwaIndex,
+  "rh-stock-search":    hRhStockSearch,
+  "rh-rwa-verify":      hRhRwaVerify,
+  "rh-stock-quote":     hRhStockQuote,
+  // ── RH RWA Phase 2 — Market Analytics ─────────────────────────────────
+  "rh-stock-ohlc":      hRhStockOhlc,
+  "rh-stock-liquidity": hRhStockLiquidity,
+  "rh-stock-movers":    hRhStockMovers,
+  "rh-stock-arb":       hRhStockArb,
+  // ── RH RWA Phase 3 — Trading Execution ────────────────────────────────
+  "rh-stock-swap-quote":   hRhStockSwapQuote,
+  "rh-stock-swap-prepare": hRhStockSwapPrepare,
+  "rh-stock-swap-route":   hRhStockSwapRoute,
+  // ── RH RWA Phase 4 — Portfolio ────────────────────────────────────────
+  "rh-stock-holdings":      hRhStockHoldings,
+  "rh-stock-pnl":           hRhStockPnl,
+  "rh-portfolio-rebalance": hRhPortfolioRebalance,
+  "rh-sector-basket":       hRhSectorBasket,
+  // ── RH RWA Phase 5 — Discovery & Analytics ────────────────────────────
+  "rh-stock-holders":       hRhStockHolders,
+  "rh-stock-flow":          hRhStockFlow,
+  "rh-stock-new-listings":  hRhStockNewListings,
+  "rh-stock-beacon-check":  hRhStockBeaconCheck,
+  "rh-stock-correlations":  hRhStockCorrelations,
+  // ── RH RWA Phase 6 — Agent Skills ─────────────────────────────────────
+  "rh-rwa-dca":             hRhRwaDca,
+  "rh-stock-alert":         hRhStockAlert,
+  "rh-stock-report":        hRhStockReport,
+  "rh-stock-agent-brief":   hRhStockAgentBrief,
+  // ── RH RWA Phase 7 — Bridge & Builder Kit ─────────────────────────────
+  "rh-bridge-route":        hRhBridgeRoute,
+  "rh-usdg-route":          hRhUsdgRoute,
+  "rh-rwa-embed-kit":       hRhRwaEmbedKit,
+  "rh-rwa-readme":          hRhRwaReadme,
+  "rh-rwa-pricing-kit":     hRhRwaPricingKit,
 };

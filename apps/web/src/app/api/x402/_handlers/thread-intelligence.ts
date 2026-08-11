@@ -6,20 +6,16 @@
 // Output is labelled accordingly. Resilient: never 500.
 // Price: $0.35
 
-type Msg = { role: string; content: string };
 import { getAeonOutput, formatAeonForLLM } from "@/app/api/_lib/aeon-kv";
-import { NO_FABRICATION_RULE } from "@/app/api/_lib/llm";
+import { NO_FABRICATION_RULE, callLLM } from "@/app/api/_lib/llm";
 
+// Delegates to the shared Virtuals → Venice → Bankr chain. Bankr was
+// banned 2026-07-18; the direct-Bankr fetch this used to do is dead
+// on prod. `callLLM` retries providers in order and returns text +
+// provenance. Signature kept identical so all call sites stay untouched.
 async function llm(system: string, user: string, temp = 0, tokens = 1000): Promise<string> {
-  const r = await fetch("https://llm.bankr.bot/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": process.env.LLM_API_KEY ?? process.env.BANKR_API_KEY ?? "", "Content-Type": "application/json", "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: "claude-haiku-4-5", system: `${NO_FABRICATION_RULE}\n\n${system}`, messages: [{ role: "user", content: user }] as Msg[], temperature: temp, max_tokens: tokens }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!r.ok) throw new Error(`LLM ${r.status}`);
-  const d = await r.json() as { content?: { text: string }[] };
-  return d.content?.[0]?.text ?? "";
+  const r = await callLLM({ system: `${NO_FABRICATION_RULE}\n\n${system}`, user, temperature: temp, maxTokens: tokens });
+  return r.text;
 }
 const DISCLAIMER = "Content strategy is AI-generated; the scores (content_score, viral_potential, engagement_prediction) are model ESTIMATES, not measured from live social data.";
 function parseJson(t: string): Record<string, unknown> | null {

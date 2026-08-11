@@ -22,6 +22,7 @@ import { RobinhoodSwapCard, type RobinhoodSwapResult } from "./RobinhoodSwapCard
 import { RobinhoodSendCard, type RobinhoodSendResult } from "./RobinhoodSendCard";
 import { RobinhoodBridgeCard, type RobinhoodBridgeResult } from "./RobinhoodBridgeCard";
 import DcaCard, { type DcaResult } from "./DcaCard";
+import { HoodArrowCard, type HoodArrowResult } from "./HoodArrowCard";
 
 function truncAddr(addr: string, len = 6) {
   if (!addr || addr.length < 12) return addr;
@@ -868,8 +869,8 @@ function BlueStreamCard({ result }: { result: Record<string, unknown> }) {
   };
 
   return (
-    <Card accentColor={isRobinhood ? "#00C805" : "#4FC3F7"}>
-      <CardHeader accentColor={isRobinhood ? "#00C805" : "#4FC3F7"}>
+    <Card accentColor={isRobinhood ? "#34D399" : "#4FC3F7"}>
+      <CardHeader accentColor={isRobinhood ? "#34D399" : "#4FC3F7"}>
         <span className="font-mono text-[11px] font-bold text-slate-300">
           {isRobinhood ? "🟢 Robinhood Chain Stream" : "🔵 Base Stream"}
         </span>
@@ -2143,7 +2144,7 @@ function WalletCard({ result }: { result: WalletResultData }) {
 
       {/* Robinhood Chain leg */}
       <div className="flex items-center gap-1.5 mb-1">
-        <span className="w-1.5 h-1.5 rounded-full bg-[#00C805]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-[#34D399]" />
         <span className="font-mono text-[10px] text-slate-500">Robinhood Chain</span>
         <span className="font-mono text-[9px] text-slate-700">· {rhHoldings.length} token{rhHoldings.length === 1 ? "" : "s"}</span>
       </div>
@@ -2177,7 +2178,7 @@ function WalletCard({ result }: { result: WalletResultData }) {
               href={`https://robinhoodchain.blockscout.com/address/${addr}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-block font-mono text-[10px] text-slate-500 hover:text-[#00C805]"
+              className="inline-block font-mono text-[10px] text-slate-500 hover:text-[#34D399]"
             >
               Robinhood ↗
             </a>
@@ -3163,6 +3164,7 @@ export function ToolResultCard({ tool, result }: { tool: string; result: Record<
     case "hub_yield":         return <YieldCard        result={r} />;
     case "blue_stream":       return <BlueStreamCard   result={r} />;
     case "hub_b20_launch":       return <B20LaunchCard   result={r as B20LaunchResult} />;
+    case "hub_hood_arrow":       return <HoodArrowCard   result={r as unknown as HoodArrowResult} />;
     case "robinhood_swap":       return <RobinhoodSwapCard result={r as unknown as RobinhoodSwapResult} />;
     case "robinhood_send":       return <RobinhoodSendCard result={r as unknown as RobinhoodSendResult} />;
     case "robinhood_bridge":     return <RobinhoodBridgeCard result={r as unknown as RobinhoodBridgeResult} />;

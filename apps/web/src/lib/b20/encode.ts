@@ -9,7 +9,7 @@ import {
   type Hex,
 } from "viem";
 
-// OFFICIAL từ base-std StdPrecompiles.sol — KHÔNG dùng 0x4200...b20
+// OFFICIAL from base-std StdPrecompiles.sol — do NOT use 0x4200...b20
 export const B20_FACTORY = "0xB20f000000000000000000000000000000000000" as const;
 const MINT_ROLE = keccak256(stringToHex("MINT_ROLE"));
 

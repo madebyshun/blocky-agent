@@ -1,11 +1,10 @@
-import type { Metadata } from "next";
-import ProfileClient from "./ProfileClient";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "Profile — BlueAgent",
-  description: "Your BlueAgent profile on Base.",
-};
-
-export default function Page() {
-  return <ProfileClient />;
+// Profile was collapsed into the dashboard (0.1 route consolidation, 2026-07).
+// "me looking at me" — wallet, holdings, stake, alerts — all live in
+// /app/dashboard now; the public identity card is /agent/[handle] +
+// /builder/[handle]. This app-host stub keeps old /profile links alive.
+// (The former ProfileClient UI is kept as dead code alongside this file.)
+export default function ProfileRedirect() {
+  redirect("/dashboard");
 }

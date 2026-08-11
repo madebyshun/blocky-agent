@@ -94,7 +94,7 @@ const CURATED: { id: string; category: SkillCategory; trigger: string }[] = [
 const toolById = new Map(AGENT_TOOLS.map(t => [t.id, t]));
 
 // Blue Chat surfaces ONLY this curated subset — tools with a hand-tuned trigger
-// that actually do something useful in chat. The full 68-tool catalog still
+// that actually do something useful in chat. The full Hub tool catalog still
 // lives on the Hub page (/hub). Name + description come from AGENT_TOOLS so the
 // two stay in sync; entries whose id isn't in AGENT_TOOLS are skipped.
 export const HUB_SKILLS: HubSkill[] = CURATED.flatMap((c) => {

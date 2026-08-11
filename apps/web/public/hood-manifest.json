@@ -1,0 +1,13 @@
+{
+  "name": "Blue Hood",
+  "short_name": "Blue Hood",
+  "description": "24/7 onchain copilot for Robinhood Chain — Chainlink oracle vs DEX, arrows delivered as they fire.",
+  "start_url": "/hood",
+  "scope": "/hood/",
+  "display": "standalone",
+  "background_color": "#050508",
+  "theme_color": "#050508",
+  "icons": [
+    { "src": "/icon.png", "sizes": "any", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
