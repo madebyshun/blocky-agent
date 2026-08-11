@@ -13,10 +13,12 @@
  *
  * ─── The honesty constraints this file encodes ──────────────────────────────
  *
- * 1. `PLEDGE_DEADLINE_ISO` is `null` until a real date is decided. A countdown
+ * 1. `PLEDGE_DEADLINE_ISO` stays `null` until a real date is decided. A countdown
  *    is read as a promise, so the UI renders "to be announced" rather than
  *    ticking toward a placeholder. Setting a date here is what turns the
  *    countdown on — there is no way to show a clock without committing to one.
+ *    A date is now set; the null branch stays live because the honest state on
+ *    the day before an announcement is the one the code has to be able to hold.
  *
  * 2. `WARNING_TEXT` states the downside and stops. It covers BOTH directions —
  *    what happens if you pledge, and what happens if you don't — because a
@@ -77,8 +79,12 @@ export const ALLOCATION_ANNOUNCED: boolean = false;
 /**
  * Pledge window close, UTC ISO. `null` = not announced yet ⇒ the UI shows
  * "to be announced" and renders NO countdown. Set a real date to enable it.
+ *
+ * Announced 2026-08-11. Rendered as a fixed UTC timestamp, never as a relative
+ * "time left" — /pledge is statically prerendered, so a relative clock would be
+ * frozen at build time and would drift into a lie between deploys.
  */
-export const PLEDGE_DEADLINE_ISO: string | null = null;
+export const PLEDGE_DEADLINE_ISO: string | null = "2026-08-24T00:00:00Z";
 
 /**
  * ─── The conversion, and why it is not 1-for-1 ──────────────────────────────
@@ -194,9 +200,11 @@ export const CHAIN_KEYS = Object.keys(CHAINS) as ChainKey[];
  * that absence is load-bearing — see constraint 2 at the top of this file.
  *
  * Note the phrasing "if the window closes without your tokens in it" rather
- * than "before the deadline": `PLEDGE_DEADLINE_ISO` is null, so there IS no
- * deadline yet. A warning that refers to a date nobody has set is manufacturing
- * urgency, which is the same defect as a placeholder countdown.
+ * than "before the deadline". It was written that way because no date existed,
+ * and it STAYS that way now that one does: the date is printed once, in the
+ * window-closes field, where a reader looks for it. Repeating it inside the
+ * risk disclosure would turn a statement of consequence into a clock, and a
+ * countdown embedded in a warning is the shape every drainer page uses.
  */
 export const WARNING_TEXT =
   "Pledging is irreversible. The tokens leave your wallet and cannot be " +
