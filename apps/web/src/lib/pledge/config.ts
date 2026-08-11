@@ -81,10 +81,53 @@ export const ALLOCATION_ANNOUNCED: boolean = false;
  * "to be announced" and renders NO countdown. Set a real date to enable it.
  *
  * Announced 2026-08-11. Rendered as a fixed UTC timestamp, never as a relative
- * "time left" — /pledge is statically prerendered, so a relative clock would be
- * frozen at build time and would drift into a lie between deploys.
+ * "time left". /pledge is rendered per request now, so a countdown would no
+ * longer be frozen — but an absolute UTC instant is still the honest form: it
+ * does not depend on the reader's device clock or timezone being right, and it
+ * says the same thing in a screenshot an hour later.
  */
 export const PLEDGE_DEADLINE_ISO: string | null = "2026-08-24T00:00:00Z";
+
+/**
+ * Has the pledge window closed?
+ *
+ * `now` is injectable so the boundary can be tested at, just before, and just
+ * after the deadline. An off-by-one in the comparison direction here would tell
+ * a holder the window is open when it is shut, which is the one error on this
+ * page that costs somebody their tokens.
+ *
+ * No deadline set ⇒ NOT closed. A window that was never announced cannot have
+ * elapsed, and defaulting the other way would slam the page shut for everyone
+ * the moment someone blanked the constant.
+ */
+export function isPledgeWindowClosed(now: number = Date.now()): boolean {
+  if (!PLEDGE_DEADLINE_ISO) return false;
+  const deadline = Date.parse(PLEDGE_DEADLINE_ISO);
+  if (Number.isNaN(deadline)) return false;
+  return now >= deadline;
+}
+
+/**
+ * The disclosure once the window has shut.
+ *
+ * It REPLACES `WARNING_TEXT` rather than appending to it, because the open-state
+ * text is addressed to someone deciding whether to send, and that decision no
+ * longer exists. What survives the swap is everything still true afterwards: the
+ * allocation table is settled, and there is still no claim contract. Dropping
+ * that second one would quietly retire a disclosure at exactly the moment
+ * holders start waiting on it.
+ *
+ * It does not say the tokens are gone forever — the footer offers a contact
+ * route for a mistaken send, and a banner that contradicts the footer is worse
+ * than one that stops at what is certain.
+ */
+export const WARNING_TEXT_CLOSED =
+  "The pledge window is closed. Do NOT send tokens — transfers after the " +
+  "deadline are not counted toward the allocation table. If your transfer is " +
+  "not in the ledger below, it is not in the allocation. There is still no " +
+  "claim contract: allocations are published before distribution, not " +
+  "guaranteed. If you sent something by mistake, use the contact route at the " +
+  "bottom of this page rather than sending anything further.";
 
 /**
  * ─── The conversion, and why it is not 1-for-1 ──────────────────────────────

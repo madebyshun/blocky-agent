@@ -37,6 +37,8 @@ import {
   CHAIN_KEYS,
   RECEIVING_WALLET,
   NEW_TOKEN_SUPPLY,
+  PLEDGE_DEADLINE_ISO,
+  isPledgeWindowClosed,
   type ChainKey,
 } from "../src/lib/pledge/config";
 import {
@@ -324,6 +326,40 @@ function checkConversion() {
   }
 }
 
+// ─── 5c. The window boundary — open vs closed ────────────────────────────────
+
+/**
+ * `isPledgeWindowClosed` decides whether /pledge shows an address to send to or
+ * a red banner telling you not to. A flipped comparison would either invite
+ * transfers into a closed window or shut a live one, and neither shows up as a
+ * type error, so the boundary is pinned here at the exact millisecond.
+ */
+function checkWindowBoundary() {
+  if (!PLEDGE_DEADLINE_ISO) {
+    ok("no deadline set ⇒ window is open (nothing to elapse)");
+    eq("…and the helper agrees", isPledgeWindowClosed(), false);
+    return;
+  }
+
+  const t = Date.parse(PLEDGE_DEADLINE_ISO);
+  eq("one ms before the deadline the window is OPEN", isPledgeWindowClosed(t - 1), false);
+  eq("at the deadline exactly it is CLOSED", isPledgeWindowClosed(t), true);
+  eq("one ms after it is CLOSED", isPledgeWindowClosed(t + 1), true);
+  eq("a day before is open", isPledgeWindowClosed(t - 86_400_000), false);
+  eq("a day after is closed", isPledgeWindowClosed(t + 86_400_000), true);
+
+  // The deadline is only useful if it is actually reachable by a wall clock —
+  // a date accidentally set in 1970 or 2200 would pin the page to one state.
+  const yr = new Date(t).getUTCFullYear();
+  if (yr >= 2026 && yr <= 2030) ok(`deadline is a plausible wall-clock date (${yr})`);
+  else bad(`deadline year ${yr} is outside 2026–2030 — check PLEDGE_DEADLINE_ISO`);
+
+  console.log(
+    `    window is currently ${isPledgeWindowClosed() ? "CLOSED" : "OPEN"} ` +
+      `(deadline ${new Date(t).toISOString()})`,
+  );
+}
+
 // ─── 6. The bisect — the anti-silent-drop guarantee ──────────────────────────
 
 /**
@@ -445,6 +481,9 @@ async function main() {
 
   header("5. arithmetic — synthetic transfers, no chain involved");
   checkArithmetic();
+
+  header("5c. pledge window boundary");
+  checkWindowBoundary();
 
   header("6. bisect recovery — a deliberately failing RPC");
   await checkBisect();
