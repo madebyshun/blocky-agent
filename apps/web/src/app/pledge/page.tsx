@@ -221,6 +221,13 @@ export default function PledgePage() {
               without trusting this page.
             </p>
             <p>
+              <span className="text-slate-300">Claiming happens later, at{" "}
+              <Link href="/claim" className="text-[#4FC3F7] hover:underline">/claim</Link>.</span>{" "}
+              That page is up now and deliberately has no wallet connection on it yet — so &ldquo;the
+              site is asking me to connect in order to claim&rdquo; is, until it is announced, itself
+              the sign that you are not on our site.
+            </p>
+            <p>
               More about the project: <Link href="/about" className="text-[#4FC3F7] hover:underline">About</Link>
               {" · "}
               <Link href="/docs" className="text-[#4FC3F7] hover:underline">Docs</Link>

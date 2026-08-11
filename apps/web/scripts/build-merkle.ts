@@ -90,7 +90,12 @@ export interface BuildResult {
   rows: AllocationRow[];
   totalWei: bigint;
   tree: StandardMerkleTree<[string, string, string]>;
-  proofs: Record<string, { index: number; amount: string; proof: string[] }>;
+  /**
+   * Typed as `0x${string}[]` — the same shape `ProofsFile` in
+   * `src/lib/claim/config.ts` declares — so that the builder and the page agree
+   * at the type level and neither side has to re-cast what the other emits.
+   */
+  proofs: Record<string, { index: number; amount: string; proof: `0x${string}`[] }>;
   csvSha256: string;
   aggregated: { address: string; lines: number[]; chains: string[] }[];
 }
@@ -233,7 +238,9 @@ export function build(csvText: string, opts: { aggregate: boolean }): BuildResul
     proofs[address.toLowerCase()] = {
       index: Number(indexStr),
       amount,
-      proof: tree.getProof(treeIdx),
+      // getProof is typed `string[]`; every element is a 0x-prefixed 32-byte
+      // hex string. Narrowed once, here, rather than at each consumer.
+      proof: tree.getProof(treeIdx) as `0x${string}`[],
     };
   }
 
