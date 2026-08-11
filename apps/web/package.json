@@ -16,7 +16,12 @@
     "test:series": "tsx scripts/series-persist-test.ts",
     "test:series-api": "tsx scripts/series-endpoint-test.ts",
     "test:pledge": "tsx scripts/pledge-ledger-test.ts",
-    "verify:build": "NEXT_DIST_DIR=.next-verify next build"
+    "verify:build": "NEXT_DIST_DIR=.next-verify next build",
+    "merkle:build": "tsx scripts/build-merkle.ts",
+    "test:merkle": "tsx scripts/merkle-build-test.ts",
+    "test:claim": "tsx scripts/claim-page-test.ts",
+    "test:bundle:claim": "tsx scripts/claim-bundle-test.ts",
+    "dryrun:claim": "tsx scripts/claim-dryrun.ts"
   },
   "dependencies": {
     "@coinbase/onchainkit": "^1.1.2",
@@ -24,6 +29,7 @@
     "@coinbase/x402": "^2.1.0",
     "@farcaster/miniapp-sdk": "^0.3.0",
     "@farcaster/miniapp-wagmi-connector": "^2.0.0",
+    "@openzeppelin/merkle-tree": "^1.0.8",
     "@reservoir0x/relay-sdk": "^2.4.0",
     "@tanstack/react-query": "^5.100.10",
     "@upstash/ratelimit": "^2.0.8",
