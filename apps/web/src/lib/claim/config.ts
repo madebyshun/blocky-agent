@@ -20,12 +20,17 @@
  *   is, right now, itself the signal that something is wrong.
  *
  * Note there is deliberately no `CLAIM_LIVE` constant exported from this file.
- * The gate lives in `app/claim/page.tsx` and reads `process.env` inline,
- * because only a literal comparison lets webpack constant-fold the branch and
- * drop the wallet import — imported through a constant from here, the flag
- * still reads correctly but the browser downloads the whole wallet bundle
- * anyway. That comment in page.tsx explains it properly; this note exists so
- * that "why is there no CLAIM_LIVE?" has an answer where you would look first.
+ * The gate lives in `app/claim/ClaimGate.tsx`, a CLIENT module, and reads
+ * `process.env.NEXT_PUBLIC_CLAIM_LIVE` inline as a literal. Both halves of that
+ * sentence are load-bearing: Next inlines NEXT_PUBLIC_* only into the client
+ * build, and only a literal comparison gives webpack something to constant-fold,
+ * so only that combination actually deletes the branch and the wallet import
+ * with it. Read through a constant exported from here — or evaluated in a
+ * server component — the flag still reports the right answer and the page still
+ * looks correct, while the browser downloads the entire claim bundle anyway.
+ * ClaimGate's comment explains the mechanism and shows the emitted code; this
+ * note exists so "why is there no CLAIM_LIVE?" has an answer where you would
+ * look for it first.
  *
  * Flipping the flag is therefore a launch-day act with a runbook entry
  * (claim-data/RUNBOOK.md step 4), not a config default.

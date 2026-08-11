@@ -20,7 +20,8 @@
     "merkle:build": "tsx scripts/build-merkle.ts",
     "test:merkle": "tsx scripts/merkle-build-test.ts",
     "test:claim": "tsx scripts/claim-page-test.ts",
-    "test:bundle:claim": "tsx scripts/claim-bundle-test.ts"
+    "test:bundle:claim": "tsx scripts/claim-bundle-test.ts",
+    "dryrun:claim": "tsx scripts/claim-dryrun.ts"
   },
   "dependencies": {
     "@coinbase/onchainkit": "^1.1.2",

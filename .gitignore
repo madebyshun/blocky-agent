@@ -33,3 +33,10 @@ claim-data/tree.json
 claim-data/root.txt
 claim-data/summary.txt
 apps/web/public/claim-data/proofs.json
+
+# The throwaway deployer key for the testnet dry run. Already covered by the
+# `.env.*` rule above, and repeated here on purpose: that rule matches this
+# file by coincidence of naming, and a private key should not be protected by
+# a coincidence. The dry-run RECEIPTS (claim-data/dryrun/*.json) are NOT
+# ignored — they are the evidence the dry run happened and are meant to ship.
+claim-data/dryrun/.env.deployer
