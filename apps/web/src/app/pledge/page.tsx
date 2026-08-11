@@ -16,8 +16,6 @@
  * the action, and it does not.
  */
 import type { Metadata } from "next";
-import Link from "next/link";
-import Navbar from "@/components/Navbar";
 import {
   RECEIVING_WALLET,
   PLEDGE_DEADLINE_ISO,
@@ -81,7 +79,22 @@ export default function PledgePage() {
 
   return (
     <div className="min-h-screen bg-[#050508] text-white">
-      <Navbar />
+      {/*
+       * Brand mark only — deliberately not a nav, and not a link. Someone about
+       * to make an irreversible transfer should not be one stray click away from
+       * the page that carries the warning. The mark stays because a page asking
+       * you to verify you are on the real site cannot be an unbranded one.
+       */}
+      <header className="fixed top-0 left-0 right-0 z-50 border-b border-[#1A1A2E] bg-[#050508]/90 backdrop-blur-xl">
+        <div className="flex items-center h-14 px-6 sm:px-10">
+          <div className="flex items-center gap-2.5">
+            <img src="/logomark.svg" alt="" className="h-6 w-6 rounded-md" />
+            <span className="font-mono font-bold text-white tracking-widest text-[13px]">
+              BLUE<span className="text-[#4FC3F7]">AGENT</span>
+            </span>
+          </div>
+        </div>
+      </header>
 
       <div className="pt-14">
         {/* ══ Warning — first thing on the page, before the address ══════════ */}
@@ -219,13 +232,6 @@ export default function PledgePage() {
               </a>
               . Neither requires an account. Every row can be checked against the block explorer
               without trusting this page.
-            </p>
-            <p>
-              More about the project: <Link href="/about" className="text-[#4FC3F7] hover:underline">About</Link>
-              {" · "}
-              <Link href="/docs" className="text-[#4FC3F7] hover:underline">Docs</Link>
-              {" · "}
-              <Link href="/soul" className="text-[#4FC3F7] hover:underline">Soul</Link>
             </p>
           </div>
         </section>
