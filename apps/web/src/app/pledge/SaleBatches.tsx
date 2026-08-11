@@ -108,7 +108,7 @@ export default function SaleBatches() {
                   */}
                 <td className="px-4 py-3 font-mono text-[11px] text-slate-400 tabular-nums whitespace-nowrap">
                   {formatScaled(b.avgPriceScaled, 4)}{" "}
-                  <span className="text-slate-600">{b.received.asset}</span>
+                  <span className="text-slate-600">{b.received.asset}/token</span>
                 </td>
                 <td className="px-4 py-3">
                   <TxLink chain={b.chain} hash={b.txHash} />
