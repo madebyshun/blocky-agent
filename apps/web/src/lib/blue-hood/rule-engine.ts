@@ -27,6 +27,7 @@ import {
   KV_BRIEF_QUEUE,
   TTL_ARROW_INDEX,
 } from "./kv-keys";
+import { getTickerConfidence, confidenceForFire, type TickerConfidenceTable } from "./ticker-confidence";
 import type { Arrow, ArrowType, HoodSnapshot, TickerSnapshot } from "./types";
 
 // ── Thresholds (from spec Block 1.2) ─────────────────────────────────────
@@ -171,6 +172,12 @@ export async function fireArrow(
      *  persisted arrow so the (later) brief-worker can build a brief
      *  from FIRE-time state instead of re-reading M5 at attach time. */
     row?: TickerSnapshot;
+    /** Drift Statistics v0 — the confidence table for THIS cycle, read once
+     *  by `runRuleEngine` and threaded down. Passed in rather than fetched
+     *  here on purpose: a KV read inside fireArrow would run once per
+     *  candidate instead of once per cycle. Absent (seed/test callers) is
+     *  fine — the arrow lands stamped `insufficient/none`. */
+    confidence?: TickerConfidenceTable | null;
   } = {},
 ): Promise<{ arrow: Arrow | null; skipReason?: "dedup_ticker" | "dedup_type" | "cooldown" }> {
   // P3.1 (v3, 2026-07-24): dedup escalated from (ticker, type) to
@@ -247,6 +254,9 @@ export async function fireArrow(
       ny_time_iso: row.market.ny_time_iso,
     } : null,
     origin,
+    // Drift Statistics v0 — stamped at fire time and never recomputed, so
+    // "what did the record say when we chose to alert?" stays answerable.
+    ticker_confidence: confidenceForFire(opts.confidence ?? null, ticker, detected.type),
     ...(opts.test ? { test: true } : {}),
   };
 
@@ -302,6 +312,7 @@ function cryptoUuid(): string {
 //   candidates_over_threshold = skipped_dust + skipped_feed_stale + deduped + fired
 //   candidates_over_threshold + below_threshold = tokens_watched
 //                                                 - tokens_errored
+//   fired = fired_normal + fired_low_confidence + fired_insufficient
 
 export interface RuleEngineReport {
   cycle_id: number;
@@ -322,6 +333,15 @@ export interface RuleEngineReport {
   skipped_cooldown: number;
   skipped_dedup_type: number;
   fired: number;
+  /** Drift Statistics v0 — how `fired` splits by the per-ticker record.
+   *  These PARTITION `fired` (they never subtract from it): a low-confidence
+   *  arrow still fires and still grades, it just loses the alert fan-out.
+   *  `fired_low_confidence` is expected to be 0 until some ticker reaches
+   *  n=15 with a Wilson upper bound under 50% — watching it leave 0 is how
+   *  we learn the gate woke up. */
+  fired_normal: number;
+  fired_low_confidence: number;
+  fired_insufficient: number;
   arrows_fired: Arrow[];
 }
 
@@ -335,7 +355,16 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
   let skipped_dedup_ticker = 0;
   let skipped_cooldown = 0;
   let skipped_dedup_type = 0;
+  let fired_normal = 0;
+  let fired_low_confidence = 0;
+  let fired_insufficient = 0;
   const fired: Arrow[] = [];
+
+  // ONE KV read per cycle, hoisted above the loop. Inside it this would be
+  // ~20 reads/cycle × 288 cycles/day against the Upstash cap that already
+  // killed this engine once (task #123). Null (key never written) is a
+  // legitimate state — every arrow then stamps `insufficient/none`.
+  const confidence = await getTickerConfidence();
 
   for (const row of snap.tickers) {
     if (row.verdict === "ERROR") continue; // errored rows are tracked separately in metrics
@@ -365,9 +394,26 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
     // Pass `row` so fire-time facts + market clock get captured on the
     // persisted arrow (task #8). brief-worker uses these to author a
     // brief from FIRE-time state, not attach-time state.
-    const result = await fireArrow(row.ticker, candidate, snap.cycle_id, { row });
+    const result = await fireArrow(row.ticker, candidate, snap.cycle_id, { row, confidence });
     if (result.arrow) {
       fired.push(result.arrow);
+      const conf = result.arrow.ticker_confidence;
+      if (conf?.level === "low") {
+        fired_low_confidence++;
+        // Logged per-arrow, not just counted: this is the line that has to
+        // justify a suppressed alert months later, so it carries the whole
+        // basis rather than a bare verdict.
+        console.log(
+          `[engine] fired_low_confidence ticker=${row.ticker} type=${candidate.type}` +
+            ` serial=${result.arrow.serial} basis=${conf.basis}` +
+            ` record=${conf.hits}/${conf.n} wilson_high=${conf.wilson_high}` +
+            ` table_at=${conf.computed_at} (arrow fires + grades; alerts suppressed)`,
+        );
+      } else if (conf?.level === "normal") {
+        fired_normal++;
+      } else {
+        fired_insufficient++;
+      }
     } else {
       deduped++;
       // P3.1 — attribute the skip so we can see WHICH rule kept arrow
@@ -403,7 +449,10 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
       ` deduped=${deduped}` +
       ` skipped_dedup_ticker=${skipped_dedup_ticker}` +
       ` skipped_cooldown=${skipped_cooldown}` +
-      ` skipped_dedup_type=${skipped_dedup_type}`,
+      ` skipped_dedup_type=${skipped_dedup_type}` +
+      ` fired_normal=${fired_normal}` +
+      ` fired_low_confidence=${fired_low_confidence}` +
+      ` fired_insufficient=${fired_insufficient}`,
   );
 
   return {
@@ -420,6 +469,9 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
     skipped_cooldown,
     skipped_dedup_type,
     fired: fired.length,
+    fired_normal,
+    fired_low_confidence,
+    fired_insufficient,
     arrows_fired: fired,
   };
 }

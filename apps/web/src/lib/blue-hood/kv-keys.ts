@@ -227,6 +227,19 @@ export const KV_ALERT_PENDING = "bh:alert:pending";
  */
 export const kvSeriesDay = (yyyymmdd: string) => `bh:series:day:${yyyymmdd}`;
 
+/**
+ * Drift Statistics v0 — the per-ticker rolling confidence table, as ONE blob.
+ *
+ * One key, not one per ticker: the engine needs the whole table on every cycle
+ * (any of ~20 tickers may fire), so per-ticker keys would turn one read into
+ * twenty. Recomputing from the feed instead of caching would be ~300 reads ×
+ * 288 cycles/day ≈ 86K/day against the 500K/month Upstash cap that starved this
+ * engine once (task #123). Written only when the grader actually closes an
+ * arrow — see `CONFIDENCE_MIN_REFRESH_MS`. No TTL: a stale table is still a
+ * useful table, and the 24h ceiling forces a rebuild anyway.
+ */
+export const KV_TICKER_CONFIDENCE = "bh:ticker:confidence";
+
 /** TTL constants (seconds). */
 export const TTL_SNAPSHOT_HOUR = 60 * 60 * 25; // 25h so we always have a full 24h window
 export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are at most 24h
