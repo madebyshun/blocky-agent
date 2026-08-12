@@ -326,6 +326,23 @@ export interface Arrow {
     now_gap_pct: number | null;
     closed_by_pct: number | null;
   } | null;
+  /** Drift Statistics v0 — what the per-ticker rolling record said about this
+   *  ticker AT FIRE TIME. A fire-time fact, never recomputed: the whole point
+   *  is to be able to ask later "what did we know when we chose to alert (or
+   *  not)", and a value that drifts with the table can't answer that.
+   *
+   *  Shape is inlined rather than imported from `ticker-confidence.ts` because
+   *  that module imports `Arrow` from here — the type would be circular.
+   *  `ArrowTickerConfidence` there is the same shape and is the one to use in
+   *  code; this declaration exists so `Arrow` stays self-contained. */
+  ticker_confidence?: {
+    level: "normal" | "low" | "insufficient";
+    basis: "ticker_type" | "ticker" | "none";
+    n: number;
+    hits: number;
+    wilson_high: number | null;
+    computed_at: string | null;
+  } | null;
 }
 
 export interface ArrowBrief {

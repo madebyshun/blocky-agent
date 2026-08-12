@@ -110,7 +110,7 @@ export interface AlertEmitResult {
   recipients: number;
   /** true only when the HEALTH gate suppressed emission. */
   skipped: boolean;
-  skip_reason?: "engine_blind" | "engine_stale" | "not_engine_origin" | "no_alert_kind";
+  skip_reason?: "engine_blind" | "engine_stale" | "not_engine_origin" | "no_alert_kind" | "low_ticker_confidence";
 }
 
 // ── Label ────────────────────────────────────────────────────────────────────
@@ -283,6 +283,30 @@ export async function emitAlertsForArrow(arrow: Arrow, health: AlertHealthGate):
         `health=${health.status} observable=true at=${at} (no backfill by design)`,
     );
     return { ...base, emitted: 0, recipients: recipients.length, skipped: true, skip_reason: "engine_stale" };
+  }
+
+  // ── Ticker-confidence gate (Drift Statistics v0) ─────────────────────────
+  // The ONLY place a low-confidence verdict costs anything. The arrow already
+  // fired, is already in the public feed, and will still be graded and still
+  // counted in the published hit rate — dropping it from the number we publish
+  // would be cherry-picking. What it loses is the DM/push fan-out, which is
+  // the surface where a noisy ticker actually wakes someone up at 4am.
+  //
+  // Reads the stamp made at fire time, not the live table: an arrow must be
+  // judged on what was known when it fired.
+  //
+  // Deliberately placed AFTER the health gate — when KV is unreachable the
+  // health path returns without counting recipients, and that must stay true.
+  if (arrow.ticker_confidence?.level === "low") {
+    const c = arrow.ticker_confidence;
+    const recipients = await recipientsForArrow(arrow.ticker, alertKind);
+    console.warn(
+      `[alert] skip arrow=${arrow.serial} arrow_id=${arrow.id} ticker=${arrow.ticker} ` +
+        `kind=${alertKind} recipients_skipped=${recipients.length} reason=low_ticker_confidence ` +
+        `basis=${c.basis} record=${c.hits}/${c.n} wilson_high=${c.wilson_high} ` +
+        `table_at=${c.computed_at} (arrow still public + still graded; no backfill by design)`,
+    );
+    return { ...base, emitted: 0, recipients: recipients.length, skipped: true, skip_reason: "low_ticker_confidence" };
   }
 
   // ── Emit (Req 1 + 5 + 2.2b fan-out) ──────────────────────────────────────

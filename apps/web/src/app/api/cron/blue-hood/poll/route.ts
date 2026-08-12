@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { persistSnapshot, runPollCycle } from "@/lib/blue-hood/poller";
 import { runRuleEngine } from "@/lib/blue-hood/rule-engine";
 import { runGrader, backfillVoidGrades, backfillDriftRegrade } from "@/lib/blue-hood/grader";
+import { refreshTickerConfidence } from "@/lib/blue-hood/ticker-confidence";
 import { TOOL_CALLER_MODE } from "@/lib/blue-hood/tool-caller";
 import { kvDel, kvGet, kvSet, kvSetNX } from "@/lib/kv";
 import {
@@ -113,6 +114,17 @@ async function handle(req: NextRequest) {
     //     first tick and is a no-op forever after.
     const regrade = await backfillDriftRegrade();
 
+    // 3d. Drift Statistics v0 — recompute the per-ticker rolling record, but
+    //     only when it can actually have moved. All three steps above change
+    //     outcomes (a fresh grade, a miss→void, a regrade flip), so they sum
+    //     into one "did the record change" signal; a 1h floor and a 24h
+    //     ceiling do the rest. Placed after the engine on purpose — this
+    //     cycle's arrows were stamped from the PREVIOUS table, which is what
+    //     "what did we know at fire time" requires.
+    const confidence = await refreshTickerConfidence({
+      graded: grader.graded.length + backfill.voided + regrade.flipped,
+    });
+
     return NextResponse.json({
       ok: true,
       mode: TOOL_CALLER_MODE,
@@ -135,7 +147,10 @@ async function handle(req: NextRequest) {
         below_threshold: engine.below_threshold,
         deduped: engine.deduped,
         fired: engine.fired,
-        arrows: engine.arrows_fired.map((a) => ({ serial: a.serial, ticker: a.ticker, type: a.type, expected: a.expected_direction })),
+        fired_normal: engine.fired_normal,
+        fired_low_confidence: engine.fired_low_confidence,
+        fired_insufficient: engine.fired_insufficient,
+        arrows: engine.arrows_fired.map((a) => ({ serial: a.serial, ticker: a.ticker, type: a.type, expected: a.expected_direction, confidence: a.ticker_confidence?.level ?? null })),
       },
       grader: {
         graded: grader.graded.map((a) => ({ serial: a.serial, ticker: a.ticker, type: a.type, outcome: a.outcome, detail: a.outcome_detail })),
@@ -153,6 +168,15 @@ async function handle(req: NextRequest) {
         flipped: regrade.flipped,
         flipped_ids: regrade.flipped_ids,
         unmeasurable: regrade.unmeasurable,
+      },
+      ticker_confidence: {
+        refreshed: confidence.refreshed,
+        reason: confidence.reason,
+        sample_total: confidence.sample_total,
+        /** Entries past n=15 — i.e. actually being judged. 0 means the gate
+         *  is live but has no evidence to act on yet, which is expected. */
+        eligible: confidence.eligible,
+        low_count: confidence.low_count,
       },
     });
   } catch (e) {

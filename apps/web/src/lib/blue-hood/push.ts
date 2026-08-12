@@ -121,6 +121,20 @@ export async function pushArrowToAll(a: Arrow): Promise<FanoutStats> {
   if (a.test || (a.origin && a.origin !== "engine")) {
     return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
   }
+  // Drift Statistics v0 — a browser notification is the same surface as the
+  // Telegram DM, so it answers to the same gate; suppressing one channel and
+  // not the other would just wake the user through the other one. Gated here
+  // rather than at the call site so every caller inherits it, matching how the
+  // origin check above is done. The arrow itself is untouched: still public,
+  // still graded, still in the published hit rate.
+  if (a.ticker_confidence?.level === "low") {
+    console.warn(
+      `[push] skip arrow=${a.serial} ticker=${a.ticker} reason=low_ticker_confidence ` +
+        `record=${a.ticker_confidence.hits}/${a.ticker_confidence.n} ` +
+        `wilson_high=${a.ticker_confidence.wilson_high}`,
+    );
+    return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
+  }
   if (!ensureVapidConfigured()) {
     console.warn("[push] VAPID keys missing — skipping fan-out");
     return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
