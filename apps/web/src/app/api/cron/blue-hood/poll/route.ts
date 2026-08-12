@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { persistSnapshot, runPollCycle } from "@/lib/blue-hood/poller";
 import { runRuleEngine } from "@/lib/blue-hood/rule-engine";
-import { runGrader, backfillVoidGrades } from "@/lib/blue-hood/grader";
+import { runGrader, backfillVoidGrades, backfillDriftRegrade } from "@/lib/blue-hood/grader";
 import { TOOL_CALLER_MODE } from "@/lib/blue-hood/tool-caller";
 import { kvDel, kvGet, kvSet, kvSetNX } from "@/lib/kv";
 import {
@@ -107,6 +107,12 @@ async function handle(req: NextRequest) {
     //     skips arrows already at outcome != "miss". Safe to run every cycle.
     const backfill = await backfillVoidGrades();
 
+    // 3c. (2026-08-12) — idempotent regrade of drift arrows whose gap was
+    //     measured against the grade-time oracle instead of the fire-time
+    //     one. Guarded on `grading_math.basis`, so it converges after the
+    //     first tick and is a no-op forever after.
+    const regrade = await backfillDriftRegrade();
+
     return NextResponse.json({
       ok: true,
       mode: TOOL_CALLER_MODE,
@@ -140,6 +146,13 @@ async function handle(req: NextRequest) {
         scanned: backfill.scanned,
         voided: backfill.voided,
         voided_ids: backfill.voided_ids,
+      },
+      drift_regrade: {
+        scanned: regrade.scanned,
+        regraded: regrade.regraded,
+        flipped: regrade.flipped,
+        flipped_ids: regrade.flipped_ids,
+        unmeasurable: regrade.unmeasurable,
       },
     });
   } catch (e) {

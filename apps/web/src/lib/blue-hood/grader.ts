@@ -156,7 +156,7 @@ export async function runGrader(): Promise<GraderReport> {
       const outcome = await gradeOne(arrow);
       if (!outcome) { still_open++; continue; }
       const nowIso = new Date().toISOString();
-      const closed: Arrow = { ...arrow, status: "graded", outcome: outcome.outcome, graded_at: nowIso, outcome_detail: outcome.detail };
+      const closed: Arrow = { ...arrow, status: "graded", outcome: outcome.outcome, graded_at: nowIso, outcome_detail: outcome.detail, grading_math: outcome.math ?? null };
       await kvSet(kvArrow(id), closed);
       // Clear both open indexes so a new arrow can fire on this ticker.
       await kvSet(kvArrowOpenIndex(arrow.ticker, arrow.type), null, 1);
@@ -249,8 +249,106 @@ export async function backfillVoidGrades(): Promise<BackfillReport> {
   return { scanned, voided: voided_ids.length, voided_ids };
 }
 
+// ── Drift-denominator backfill (2026-08-12) ────────────────────────────
+export interface DriftRegradeReport {
+  scanned: number;
+  regraded: number;
+  flipped: number;
+  flipped_ids: string[];
+  unmeasurable: number;
+}
+
+/** `gap closed 62% (2.10% → 0.79%)` → the residual gap at grade time (0.79). */
+const DETAIL_GAP_RE = /\(\s*([\d.]+)\s*%\s*→\s*([\d.]+)\s*%\s*\)/;
+
+/**
+ * Re-grades every drift arrow whose verdict was computed against the
+ * GRADE-time oracle (see the drift branch in gradeOne). The residual gap
+ * measured at grade time is still correct — only the denominator was wrong
+ * — so the correction is a pure recompute against
+ * `snapshot_at_fire.oracle_price_usd`, no re-reading of any tool.
+ *
+ * The grade-time residual survives only inside the `outcome_detail` display
+ * string on pre-fix rows, so it is parsed back out. That is the one-time
+ * cost of not having stored it structurally; every row written from now on
+ * carries `grading_math` and this function will never need to parse again.
+ *
+ * Idempotent — `grading_math.basis === "fire_oracle"` is the guard, so a row
+ * corrected on one cron tick is skipped on every later one. Arrows the parse
+ * or the snapshot can't support are counted in `unmeasurable` and left
+ * untouched: a verdict we can't recompute is not a verdict we should rewrite.
+ *
+ * VOID arrows are deliberately not revisited — they were excluded by the
+ * stricter P0.1 clock rule, which this correction does nothing to change.
+ */
+export async function backfillDriftRegrade(): Promise<DriftRegradeReport> {
+  const feed = (await kvGet<string[]>(KV_ARROW_FEED)) ?? [];
+  const flipped_ids: string[] = [];
+  let scanned = 0;
+  let regraded = 0;
+  let unmeasurable = 0;
+
+  for (const id of feed) {
+    try {
+      const arrow = await kvGet<Arrow>(kvArrow(id));
+      if (!arrow) continue;
+      if (arrow.type !== "drift") continue;
+      if (arrow.status !== "graded") continue;
+      if (arrow.outcome !== "hit" && arrow.outcome !== "miss") continue;
+      if (arrow.grading_math?.basis === "fire_oracle") continue;
+      scanned++;
+
+      const fireOracle = arrow.snapshot_at_fire?.oracle_price_usd ?? null;
+      const fireDex = arrow.reference_price;
+      const m = arrow.outcome_detail?.match(DETAIL_GAP_RE);
+      const nowGapPct = m ? Number(m[2]) : NaN;
+      if (
+        typeof fireOracle !== "number" || !(fireOracle > 0) ||
+        !(fireDex > 0) || !Number.isFinite(nowGapPct)
+      ) {
+        unmeasurable++;
+        continue;
+      }
+
+      const fireGapPct = Math.abs((fireDex - fireOracle) / fireOracle) * 100;
+      if (!(fireGapPct > 0)) { unmeasurable++; continue; }
+      const closedBy = 1 - nowGapPct / fireGapPct;
+      const outcome: ArrowOutcome = closedBy >= DRIFT_HIT_GAP_CLOSE_PCT ? "hit" : "miss";
+      const prior = arrow.outcome;
+      const verb = outcome === "hit" ? "gap closed" : "gap only closed";
+
+      const corrected: Arrow = {
+        ...arrow,
+        outcome,
+        outcome_detail:
+          `${verb} ${(closedBy * 100).toFixed(0)}% (${fireGapPct.toFixed(2)}% → ${nowGapPct.toFixed(2)}%)` +
+          ` · regraded_vs_fire_oracle · prior_outcome=${prior}` +
+          ` (drift-denominator backfill 2026-08-12)`,
+        grading_math: {
+          basis: "fire_oracle",
+          fire_oracle_price_usd: fireOracle,
+          fire_dex_price_usd: fireDex,
+          fire_gap_pct: fireGapPct,
+          now_gap_pct: nowGapPct,
+          closed_by_pct: closedBy * 100,
+        },
+      };
+      await kvSet(kvArrow(id), corrected);
+      regraded++;
+      if (outcome !== prior) flipped_ids.push(id);
+    } catch (e) {
+      console.warn(`[drift-regrade] crash on ${id}: ${(e as Error).message}`);
+    }
+  }
+
+  console.log(`[drift-regrade] scanned=${scanned} regraded=${regraded} flipped=${flipped_ids.length} unmeasurable=${unmeasurable}`);
+  return { scanned, regraded, flipped: flipped_ids.length, flipped_ids, unmeasurable };
+}
+
 // ── Per-arrow grading ──────────────────────────────────────────────────────
-async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: string } | null> {
+type GradingMath = NonNullable<Arrow["grading_math"]>;
+
+async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: string; math?: GradingMath } | null> {
   const r = await callTool<M5Response>("rh-stock-arb", { ticker: arrow.ticker });
   // Downgraded to a soft skip: throwing here dumped the arrow into
   // `errored[]` every cycle forever, and one bad ticker's rate-limit
@@ -283,20 +381,46 @@ async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: 
   }
 
   if (arrow.type === "drift") {
-    // Gap DEX↔oracle at fire time vs now. Positive gap on fire (DEX > oracle
-    // by X%) closes ≥ 50% means |now_pct| ≤ 0.5 * |fire_pct|.
-    // We don't store fire_pct explicitly (spec says "reference_price" is the
-    // DEX price at fire), so approximate: we treat the current M5 spread as
-    // the residual and compare to the reference_price / oracle ratio.
+    // The gap that has to close is the one that EXISTED AT FIRE TIME:
+    // |dex_fire − oracle_fire| / oracle_fire. Both terms must come from
+    // `snapshot_at_fire`.
+    //
+    // Bug (fixed 2026-08-12): the denominator used `oracle` — the GRADE-time
+    // Chainlink read — against `reference_price`, the FIRE-time DEX price.
+    // That mixes two clocks: whenever the oracle moved during the window the
+    // denominator silently rebased, so `closedBy` measured "how far is DEX-
+    // then from oracle-now", not "did the gap close". Measured over the 112
+    // graded drift arrows, 81% of denominators were off by >25% from the real
+    // fire-time gap, in both directions.
+    const fireOracle = arrow.snapshot_at_fire?.oracle_price_usd ?? null;
+    const fireDex = arrow.reference_price;
     const nowGapPct = Math.abs(deltaPct);
-    const refPrice = arrow.reference_price;
-    const fireGapPct = refPrice > 0 ? Math.abs((refPrice - oracle) / oracle) * 100 : 0;
-    if (fireGapPct <= 0) return { outcome: "miss", detail: "no measurable fire-time gap" };
-    const closedBy = 1 - nowGapPct / fireGapPct;
-    if (closedBy >= DRIFT_HIT_GAP_CLOSE_PCT) {
-      return { outcome: "hit", detail: `gap closed ${(closedBy * 100).toFixed(0)}% (${fireGapPct.toFixed(2)}% → ${nowGapPct.toFixed(2)}%)` };
+    if (typeof fireOracle !== "number" || !(fireOracle > 0) || !(fireDex > 0)) {
+      // No fire-time oracle → the gap this arrow was supposed to close is
+      // not measurable. "Cannot assess" is the honest verdict; a HIT/MISS
+      // here would be computed from a denominator we do not have.
+      return {
+        outcome: "informational",
+        detail: `no fire-time oracle snapshot — gap not measurable (now ${nowGapPct.toFixed(2)}%)`,
+        math: { basis: "fire_oracle", fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: null, now_gap_pct: nowGapPct, closed_by_pct: null },
+      };
     }
-    return { outcome: "miss", detail: `gap only closed ${(closedBy * 100).toFixed(0)}% (${fireGapPct.toFixed(2)}% → ${nowGapPct.toFixed(2)}%)` };
+    const fireGapPct = Math.abs((fireDex - fireOracle) / fireOracle) * 100;
+    if (fireGapPct <= 0) {
+      // Engine fires drift only at |gap| ≥ 2%, so a zero fire-time gap means
+      // the snapshot is bad, not that the signal failed. Don't charge it.
+      return {
+        outcome: "informational",
+        detail: "no measurable fire-time gap",
+        math: { basis: "fire_oracle", fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: 0, now_gap_pct: nowGapPct, closed_by_pct: null },
+      };
+    }
+    const closedBy = 1 - nowGapPct / fireGapPct;
+    const math = { basis: "fire_oracle" as const, fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: fireGapPct, now_gap_pct: nowGapPct, closed_by_pct: closedBy * 100 };
+    if (closedBy >= DRIFT_HIT_GAP_CLOSE_PCT) {
+      return { outcome: "hit", detail: `gap closed ${(closedBy * 100).toFixed(0)}% (${fireGapPct.toFixed(2)}% → ${nowGapPct.toFixed(2)}%)`, math };
+    }
+    return { outcome: "miss", detail: `gap only closed ${(closedBy * 100).toFixed(0)}% (${fireGapPct.toFixed(2)}% → ${nowGapPct.toFixed(2)}%)`, math };
   }
 
   // flow / whale — not yet in this commit; leave open.

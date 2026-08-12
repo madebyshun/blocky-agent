@@ -312,6 +312,20 @@ export interface Arrow {
    *  Kept so the worker can skip records it just processed if the queue
    *  is re-enqueued by a bug. */
   brief_worker_at?: string | null;
+  /** The numbers the drift verdict was computed from, stored structurally.
+   *  Before 2026-08-12 the only record of them was the display string in
+   *  `outcome_detail` ("gap closed 62% (2.10% → 0.79%)"), so correcting the
+   *  math meant parsing prose. `basis` names which oracle built
+   *  `fire_gap_pct`: `fire_oracle` is correct, `grade_oracle` marks a row
+   *  still carrying the pre-fix denominator. Absent on arb/flow. */
+  grading_math?: {
+    basis: "fire_oracle" | "grade_oracle";
+    fire_oracle_price_usd: number | null;
+    fire_dex_price_usd: number | null;
+    fire_gap_pct: number | null;
+    now_gap_pct: number | null;
+    closed_by_pct: number | null;
+  } | null;
 }
 
 export interface ArrowBrief {
