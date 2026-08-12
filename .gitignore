@@ -23,3 +23,17 @@ coverage/
 /contracts/cache/
 apps/web/blue-render/
 broadcast/
+
+# Merkle claim artifacts — generated, NEVER committed.
+#
+# `apps/web/public/` is served statically, so a committed proofs.json would be
+# published at /claim-data/proofs.json and read as the AUTHORITATIVE claim
+# table. Everything generated there so far is dry-run/fixture data, and
+# shipping a fixture as the real allocation is the exact failure this rule
+# exists to prevent. The root-level dir holds the same run's tree/root/summary
+# — same reasoning, it just isn't web-served.
+#
+# Publishing the real table must be a conscious `git add -f`, never a side
+# effect of `git add -A`.
+/claim-data/
+apps/web/public/claim-data/
