@@ -143,6 +143,8 @@ async function handle(req: NextRequest) {
         candidates_over_threshold: engine.candidates_over_threshold,
         skipped_dust: engine.skipped_dust,
         skipped_no_executable_pool: engine.skipped_no_executable_pool,
+        skipped_dead_pool: engine.skipped_dead_pool,
+        dead_pool_vol_unknown: engine.dead_pool_vol_unknown,
         skipped_feed_stale: engine.skipped_feed_stale,
         below_threshold: engine.below_threshold,
         deduped: engine.deduped,

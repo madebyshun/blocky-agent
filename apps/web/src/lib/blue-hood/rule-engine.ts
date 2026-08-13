@@ -56,6 +56,73 @@ function rowPrimaryPoolTvl(row: TickerSnapshot): number {
   return row.tvl_usd ?? 0;
 }
 
+// P1 (2026-08-13) — DEAD-POOL LIVENESS GATE, drift only.
+//
+// A pool with no trades cannot move. When the DEX print is frozen and the
+// oracle keeps ticking, `drift_pct` grows purely because the ORACLE walked
+// away from a stale print — nothing drifted, and there is no basis for the
+// arrow's claim that the two prices converge. The gap-closure decomposition
+// (`scripts/gap-closure-dryrun.ts`, 2026-08-12) measured 8/24 tickers
+// dead-or-noisy, accounting for 51% of graded drift arrows; BABA's print was
+// bit-identical across 100% of archive hours, SPCX 98%.
+//
+// THRESHOLD IS MEASURED, NOT GUESSED. Swept the already-persisted
+// `snapshot_at_fire.dex_volume_24h_usd` over all 117 graded drift arrows:
+//
+//   thr      kept  hits  rate   cut  cut_hits cut_rate
+//   0        117    69   59%      0     -        -
+//   1        103    66   64%     14     3       21%
+//   1000      97    62   63%     20     7       35%
+//   10000     76    49   64%     41    20       48%
+//   50000     49    31   63%     68    38       55%
+//
+// The ENTIRE effect sits at the `> 0` boundary: cutting the 14 zero-volume
+// arrows (which hit only 3/14 = 21%) lifts 59% → 64%, and every higher floor
+// cuts more arrows for no additional gain. Raising this is a dead lever
+// exactly like `DRIFT_MIN_ABS_PCT` already is — do not "tighten" it without
+// new data. The 14 cut arrows are exactly BABA (9) + SPCX (5): the same two
+// tickers the independent frozen-print audit flagged, which is why BABA's
+// 11% hit rate is a measurement artifact rather than a weak signal.
+//
+// ⚠️ THIS GATE IS NARROWER THAN THE "51% OF ARROWS" HEADLINE — do not conflate
+// them. That 51% counts every ticker flagged dead OR noisy (8/24). This gate
+// only catches pools with literally zero 24h volume, which is BABA + SPCX =
+// 14/117 arrows (12%). AMD, COIN and SLV are frozen ≥50% of archive HOURS yet
+// still report real 24h volume, so they keep firing; ORCL (4.1× oracle vol)
+// and NVDA (3.4×) are noisy rather than dead and are not touched either — and
+// they hit 42% and 64%, so there is no measured case for gating noise. The
+// remaining dead/noisy exposure is a known, deliberate gap, not an oversight.
+//
+// FORWARD-ONLY. This changes which arrows FIRE; it rewrites nothing already
+// published. The public rate does not jump 59% → 64% on merge — it drifts
+// there as new arrows accumulate. Anyone quoting 64% before then is quoting a
+// counterfactual, not the record.
+//
+// Coherence: `rh-stock-arb.ts` does `const dex = primary.pool` and reads both
+// `price_usd` and `volume_24h_usd` off that SAME object, so gating the price
+// on the volume is not comparing two different pools.
+//
+// Drift only, on purpose. Arb's zero-volume record is n=2 (0 hits) — real but
+// far too small to gate on, and arb fires while the market is OPEN, where the
+// frozen-oracle mechanic that motivates this gate does not apply.
+const MIN_DEX_VOL_24H_USD = 0;   // strict `>`; see the sweep above
+
+/** `null` = the poller carried no volume reading for this row. NOT "zero". */
+function rowDexVolume24h(row: TickerSnapshot): number | null {
+  return typeof row.volume_24h_usd === "number" ? row.volume_24h_usd : null;
+}
+
+/** Dead = we HAVE a volume reading and it is at/below the floor.
+ *  Missing data FAILS OPEN by design (CLAUDE.md: never infer a negative from
+ *  absent data). `runRuleEngine` tallies the fail-open cases separately so a
+ *  poller regression that starts nulling the field shows up in the log
+ *  instead of silently disabling this gate. Measured `vol_null = 0` across
+ *  all 117 graded drift arrows, so fail-open costs nothing today. */
+function isDeadPool(row: TickerSnapshot): boolean {
+  const vol = rowDexVolume24h(row);
+  return vol !== null && vol <= MIN_DEX_VOL_24H_USD;
+}
+
 const DRIFT_GRADING_WINDOW_H = 6;   // grade after next-open + 2h (see grader.ts)
 const ARB_GRADING_WINDOW_H = 4;
 
@@ -114,6 +181,8 @@ export function detectArrow(row: TickerSnapshot): Candidate | null {
   // P0.2 — mirror the runRuleEngine executable-floor gate here so callers
   // of this shim get the same behavior.
   if (rowPrimaryPoolTvl(row) < MIN_TVL_USD) return null;
+  // P1 — mirror the runRuleEngine dead-pool liveness gate. Drift only.
+  if (c.type === "drift" && isDeadPool(row)) return null;
   if (c.type === "arb" && row.warnings.some((w) => w.startsWith("feed_abnormally_stale"))) return null;
   return c;
 }
@@ -309,10 +378,17 @@ function cryptoUuid(): string {
 // Report shape mirrors the reviewer-mandated log line so the two never
 // drift apart. Sanity property (guaranteed by construction, asserted in
 // tests):
-//   candidates_over_threshold = skipped_dust + skipped_feed_stale + deduped + fired
+//   candidates_over_threshold = skipped_dust + skipped_no_executable_pool
+//                             + skipped_dead_pool + skipped_feed_stale
+//                             + deduped + fired
 //   candidates_over_threshold + below_threshold = tokens_watched
 //                                                 - tokens_errored
 //   fired = fired_normal + fired_low_confidence + fired_insufficient
+//
+// (`skipped_no_executable_pool` was missing from the first identity until
+//  2026-08-13 — the comment had gone stale against the P0.2 gate. Any new
+//  gate MUST be added here and to `blue-hood-smoke.ts`'s conservation check,
+//  or the two silently disagree.)
 
 export interface RuleEngineReport {
   cycle_id: number;
@@ -324,6 +400,17 @@ export interface RuleEngineReport {
    *  is below $5k, so the panel would refuse "Pool too thin". Engine
    *  skips to prevent the self-contradiction. */
   skipped_no_executable_pool: number;
+  /** P1 — drift candidate on a pool with no 24h volume. The DEX print
+   *  cannot move, so the "drift" is the oracle walking away from a stale
+   *  quote, not a real dislocation. Measured: these arrows hit 3/14 = 21%
+   *  against a 59% baseline. */
+  skipped_dead_pool: number;
+  /** P1 observability, NOT a skip — drift candidates that passed the
+   *  liveness gate only because `volume_24h_usd` was absent (fail-open).
+   *  Does not appear in the conservation identity; it double-counts rows
+   *  that went on to fire or be deduped. Expected 0; a non-zero value
+   *  means the poller stopped carrying volume and the gate is inert. */
+  dead_pool_vol_unknown: number;
   skipped_feed_stale: number;
   below_threshold: number;
   deduped: number;
@@ -349,6 +436,8 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
   let candidates_over_threshold = 0;
   let skipped_dust = 0;
   let skipped_no_executable_pool = 0;
+  let skipped_dead_pool = 0;
+  let dead_pool_vol_unknown = 0;
   let skipped_feed_stale = 0;
   let below_threshold = 0;
   let deduped = 0;
@@ -386,6 +475,29 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
       );
       skipped_no_executable_pool++;
       continue;
+    }
+    // P1 — dead-pool liveness. Drift only; see MIN_DEX_VOL_24H_USD note.
+    if (candidate.type === "drift") {
+      const vol = rowDexVolume24h(row);
+      if (vol === null) {
+        // Fail-open, but never silently: this is the line that tells us the
+        // gate went inert because the poller stopped carrying volume.
+        dead_pool_vol_unknown++;
+        console.log(
+          `[engine] dead_pool_vol_unknown ticker=${row.ticker}` +
+          ` drift=${(row.drift_pct ?? 0).toFixed(2)}%` +
+          ` (volume_24h_usd absent — liveness gate FAILED OPEN, arrow allowed)`,
+        );
+      } else if (vol <= MIN_DEX_VOL_24H_USD) {
+        console.log(
+          `[engine] skipped_dead_pool ticker=${row.ticker}` +
+          ` vol_24h=${vol.toFixed(0)} drift=${(row.drift_pct ?? 0).toFixed(2)}%` +
+          ` primary_tvl=${primaryTvl.toFixed(0)}` +
+          ` (no trades — the oracle moved, the pool did not)`,
+        );
+        skipped_dead_pool++;
+        continue;
+      }
     }
     if (candidate.type === "arb" && row.warnings.some((w) => w.startsWith("feed_abnormally_stale"))) {
       skipped_feed_stale++; continue;
@@ -443,6 +555,8 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
       ` candidates_over_threshold=${candidates_over_threshold}` +
       ` skipped_dust=${skipped_dust}` +
       ` skipped_no_executable_pool=${skipped_no_executable_pool}` +
+      ` skipped_dead_pool=${skipped_dead_pool}` +
+      ` dead_pool_vol_unknown=${dead_pool_vol_unknown}` +
       ` skipped_feed_stale=${skipped_feed_stale}` +
       ` below_threshold=${below_threshold}` +
       ` fired=${fired.length}` +
@@ -462,6 +576,8 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
     candidates_over_threshold,
     skipped_dust,
     skipped_no_executable_pool,
+    skipped_dead_pool,
+    dead_pool_vol_unknown,
     skipped_feed_stale,
     below_threshold,
     deduped,
