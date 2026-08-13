@@ -37,6 +37,16 @@
  * before it CANNOT be decomposed, ever. The script reports that exclusion
  * explicitly rather than quietly analysing whatever happens to be left.
  *
+ * ⚠️ CHANGED 2026-08-13 (P2) — the grader now writes `grading_math
+ * .close_oracle_price_usd` + `.close_dex_price_usd` on every drift arrow it
+ * grades. Arrows graded FROM THAT DATE ON are self-decomposable straight off
+ * the arrow record: no archive join, no coverage floor, no join-validation
+ * drops. This script still uses the archive path because that is the only way
+ * to reach the historical rows — but when reruning, the right move is to
+ * decompose new arrows directly from `grading_math` and use the archive only
+ * for the pre-2026-08-13 tail. The `n` that made this analysis inconclusive
+ * is a fixed-supply problem for old arrows and a solved one for new ones.
+ *
  * ── THE JOIN IS VALIDATED, NOT ASSUMED ───────────────────────────────────────
  * The archive is hourly; `graded_at` is not. So the close-side read can be up to
  * ~30 min away from the instant the grader actually looked. Rather than hoping

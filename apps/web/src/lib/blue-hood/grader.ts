@@ -331,6 +331,14 @@ export async function backfillDriftRegrade(): Promise<DriftRegradeReport> {
           fire_gap_pct: fireGapPct,
           now_gap_pct: nowGapPct,
           closed_by_pct: closedBy * 100,
+          // P2 — this backfill reconstructs from `outcome_detail` PROSE and
+          // has no close-side levels of its own, so it must carry forward
+          // rather than invent. Unreachable today (the `basis === "fire_oracle"`
+          // guard above already skips every live-graded row), but a future
+          // backfill that widens that guard would otherwise silently erase
+          // the one field that makes an arrow decomposable.
+          close_oracle_price_usd: arrow.grading_math?.close_oracle_price_usd ?? null,
+          close_dex_price_usd: arrow.grading_math?.close_dex_price_usd ?? null,
         },
       };
       await kvSet(kvArrow(id), corrected);
@@ -381,6 +389,16 @@ async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: 
   }
 
   if (arrow.type === "drift") {
+    // P2 (2026-08-13) — CLOSE-SIDE LEVELS. `now_gap_pct` is a magnitude and
+    // therefore blind to WHICH SIDE MOVED; storing both close-time prices is
+    // what lets a future analysis decompose "oracle caught up" from "DEX
+    // reverted" per-arrow, with no archive join and no coverage window. Both
+    // are already narrowed to positive numbers by the guards above, so every
+    // drift arrow graded from here on is self-decomposable.
+    const closeLevels = {
+      close_oracle_price_usd: oracle,
+      close_dex_price_usd: dex,
+    };
     // The gap that has to close is the one that EXISTED AT FIRE TIME:
     // |dex_fire − oracle_fire| / oracle_fire. Both terms must come from
     // `snapshot_at_fire`.
@@ -402,7 +420,7 @@ async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: 
       return {
         outcome: "informational",
         detail: `no fire-time oracle snapshot — gap not measurable (now ${nowGapPct.toFixed(2)}%)`,
-        math: { basis: "fire_oracle", fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: null, now_gap_pct: nowGapPct, closed_by_pct: null },
+        math: { basis: "fire_oracle", fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: null, now_gap_pct: nowGapPct, closed_by_pct: null, ...closeLevels },
       };
     }
     const fireGapPct = Math.abs((fireDex - fireOracle) / fireOracle) * 100;
@@ -412,11 +430,11 @@ async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: 
       return {
         outcome: "informational",
         detail: "no measurable fire-time gap",
-        math: { basis: "fire_oracle", fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: 0, now_gap_pct: nowGapPct, closed_by_pct: null },
+        math: { basis: "fire_oracle", fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: 0, now_gap_pct: nowGapPct, closed_by_pct: null, ...closeLevels },
       };
     }
     const closedBy = 1 - nowGapPct / fireGapPct;
-    const math = { basis: "fire_oracle" as const, fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: fireGapPct, now_gap_pct: nowGapPct, closed_by_pct: closedBy * 100 };
+    const math = { basis: "fire_oracle" as const, fire_oracle_price_usd: fireOracle, fire_dex_price_usd: fireDex, fire_gap_pct: fireGapPct, now_gap_pct: nowGapPct, closed_by_pct: closedBy * 100, ...closeLevels };
     if (closedBy >= DRIFT_HIT_GAP_CLOSE_PCT) {
       return { outcome: "hit", detail: `gap closed ${(closedBy * 100).toFixed(0)}% (${fireGapPct.toFixed(2)}% → ${nowGapPct.toFixed(2)}%)`, math };
     }
