@@ -27,25 +27,37 @@
  *
  * ── WHERE THE NUMBERS COME FROM ───────────────────────────────────────────────
  * FIRE side  — exact, from the arrow's own `snapshot_at_fire` (oracle + dex).
- * CLOSE side — from `bh:series:day:*` via GET /api/hood/series, the permanent
- *              hourly oracle+dex archive. This is the ONLY source of close-side
- *              LEVELS: `grading_math` stores `now_gap_pct` (a magnitude) but not
- *              the two prices, so the decomposition is not recoverable from the
- *              arrow record alone — one equation, two unknowns.
+ * CLOSE side — TWO paths, and the script always says which one each row used:
  *
- * That makes the archive start date a hard floor on the sample: arrows graded
- * before it CANNOT be decomposed, ever. The script reports that exclusion
- * explicitly rather than quietly analysing whatever happens to be left.
+ *   1. `grading_math.close_oracle_price_usd` + `.close_dex_price_usd` — the
+ *      grader's OWN read, taken at the exact instant it graded. Preferred
+ *      unconditionally. Not a join at all: no hourly resolution to blur it, no
+ *      coverage floor to exclude it, no tolerance test to survive. Written by
+ *      P2 (2026-08-13) for drift and P2b (2026-08-14) for arb.
  *
- * ⚠️ CHANGED 2026-08-13 (P2) — the grader now writes `grading_math
- * .close_oracle_price_usd` + `.close_dex_price_usd` on every drift arrow it
- * grades. Arrows graded FROM THAT DATE ON are self-decomposable straight off
- * the arrow record: no archive join, no coverage floor, no join-validation
- * drops. This script still uses the archive path because that is the only way
- * to reach the historical rows — but when reruning, the right move is to
- * decompose new arrows directly from `grading_math` and use the archive only
- * for the pre-2026-08-13 tail. The `n` that made this analysis inconclusive
- * is a fixed-supply problem for old arrows and a solved one for new ones.
+ *   2. `bh:series:day:*` via GET /api/hood/series — the hourly oracle+dex
+ *      archive, joined to `graded_at`. The ONLY way to reach arrows graded
+ *      before those dates, since `grading_math` used to store `now_gap_pct`
+ *      (a magnitude) and not the two prices: one equation, two unknowns.
+ *
+ * Both paths are forward/backward halves of the same question, so they are
+ * counted and reported separately — an archive row is an estimate that passed a
+ * test, a grading_math row is the measurement itself, and averaging the two
+ * without saying so would hide exactly the kind of distinction this file exists
+ * to protect.
+ *
+ * The consequence worth internalising: for arrows graded before P2/P2b the small
+ * `n` is a FIXED SUPPLY — the levels were never written and cannot be recovered.
+ * For everything graded after, `n` grows on its own with every grading pass. So
+ * "insufficient data" here is a countdown, not a verdict. Re-run periodically;
+ * the exact-source count in PART 3 is the clock.
+ *
+ * ── BOTH LANES, NEVER POOLED ─────────────────────────────────────────────────
+ * drift and arb are both decomposed, and their results are never combined.
+ * drift fires only when the market is SHUT, so the oracle is frozen by
+ * construction and almost any closure it records must read "dex-led" — a
+ * property of the firing rule, not of price discovery. arb fires with both sides
+ * live, so it is the only lane whose oracle-vs-dex split means what it says.
  *
  * ── THE JOIN IS VALIDATED, NOT ASSUMED ───────────────────────────────────────
  * The archive is hourly; `graded_at` is not. So the close-side read can be up to
@@ -114,6 +126,16 @@ interface Decomp {
   fired_at: string;
   graded_at: string;
   join_minutes: number;
+  /**
+   * Where the CLOSE-side levels came from.
+   *   "grading_math" — the grader's own read, written at the exact grading
+   *                    instant. Exact. No join, no tolerance, no coverage floor.
+   *   "archive"      — nearest hourly `bh:series:day:*` point, corroborated
+   *                    against `now_gap_pct` before it is allowed through.
+   * Never pool the two without saying so: an archive row is an estimate that
+   * passed a test, a grading_math row is the measurement itself.
+   */
+  source: "grading_math" | "archive";
   fire_oracle: number;
   fire_dex: number;
   close_oracle: number;
@@ -477,7 +499,16 @@ function decompose(
   const dropped: Dropped[] = [];
 
   for (const a of arrows) {
-    if (a.type !== "drift" || a.status !== "graded") continue;
+    // Both lanes now. arb was excluded while it stored no `grading_math` at
+    // all (0/76 before P2b, 2026-08-14) — there was simply nothing to read.
+    // Now that it stores close-side levels, arb is the lane that most needs
+    // this answer: it fires while the market is OPEN and the UI turns
+    // `expected_direction` into a real position, so "which leg moved" is the
+    // difference between a paying trade and a HIT that paid nothing.
+    // The two lanes are NEVER pooled in the output — different rules, different
+    // clocks, different questions. See the per-type slices in main().
+    if (a.type !== "drift" && a.type !== "arb") continue;
+    if (a.status !== "graded") continue;
     if (a.outcome !== "hit" && a.outcome !== "miss") continue;
     const gm = a.grading_math;
     const fireOracle = a.snapshot_at_fire?.oracle_price_usd ?? null;
@@ -495,51 +526,101 @@ function decompose(
       continue;
     }
 
-    const series = idx.get(a.ticker);
-    if (!series?.length) {
-      dropped.push({ serial: a.serial, ticker: a.ticker, reason: "ticker absent from archive" });
-      continue;
-    }
-    const gradedMs = new Date(a.graded_at).getTime();
-    // Nearest archive read with BOTH sides priced.
-    let best: { at: number; oracle: number | null; dex: number | null } | null = null;
-    for (const p of series) {
-      if (p.oracle === null || p.dex === null) continue;
-      if (best === null || Math.abs(p.at - gradedMs) < Math.abs(best.at - gradedMs)) best = p;
-    }
-    if (!best) {
-      dropped.push({ serial: a.serial, ticker: a.ticker, reason: "no priced archive point" });
-      continue;
-    }
-    const joinMin = Math.abs(best.at - gradedMs) / 60000;
-    if (joinMin > MAX_JOIN_MINUTES) {
-      dropped.push({
-        serial: a.serial,
-        ticker: a.ticker,
-        // The dominant exclusion: graded before the archive existed.
-        reason: `graded ${(joinMin / 60).toFixed(1)}h from nearest archive point (archive starts later)`,
-      });
-      continue;
-    }
-
-    const closeOracle = best.oracle!;
-    const closeDex = best.dex!;
-    const closeGapPct = Math.abs((closeDex - closeOracle) / closeOracle) * 100;
+    let closeOracle: number;
+    let closeDex: number;
+    let joinMin: number;
+    let source: Decomp["source"];
     const graderGapPct = gm.now_gap_pct;
 
-    // Corroboration. The archive and the grader looked at slightly different
-    // instants; if they disagree about the gap, the archive prices are not a
-    // usable stand-in for what the grader saw, and this row is not evidence.
-    const tol = Math.max(JOIN_TOL_ABS_PP, JOIN_TOL_REL * graderGapPct);
-    if (Math.abs(closeGapPct - graderGapPct) > tol) {
-      dropped.push({
-        serial: a.serial,
-        ticker: a.ticker,
-        reason: `join failed: archive gap ${closeGapPct.toFixed(2)}% vs grader ${graderGapPct.toFixed(2)}% (tol ${tol.toFixed(2)})`,
-      });
-      continue;
+    // ── Direct path (P2, 2026-08-13 for drift; P2b, 2026-08-14 for arb) ─────
+    // The grader now records both close-side prices at the instant it graded.
+    // When they are present this is not a join at all — it is the measurement,
+    // so every approximation the archive path has to defend against (hourly
+    // resolution, coverage floor, tolerance band) simply does not arise.
+    // Preferred unconditionally: an exact read is never worse than an estimate
+    // that passed a test, and mixing them when the exact one exists would only
+    // add noise. This is the path that makes the whole question self-answering
+    // as new arrows accumulate.
+    const gmCloseOracle = gm.close_oracle_price_usd;
+    const gmCloseDex = gm.close_dex_price_usd;
+    if (
+      typeof gmCloseOracle === "number" && gmCloseOracle > 0 &&
+      typeof gmCloseDex === "number" && gmCloseDex > 0
+    ) {
+      closeOracle = gmCloseOracle;
+      closeDex = gmCloseDex;
+      joinMin = 0;
+      source = "grading_math";
+
+      // Self-consistency, not corroboration: both figures come from the same
+      // read, so this cannot fail for an honest row. It exists to catch a
+      // future grader change that writes the two fields from different reads —
+      // the exact class of drift that made this script necessary. Tolerance is
+      // the archive band; anything inside it is float noise.
+      const implied = Math.abs((closeDex - closeOracle) / closeOracle) * 100;
+      const selfTol = Math.max(JOIN_TOL_ABS_PP, JOIN_TOL_REL * graderGapPct);
+      if (Math.abs(implied - graderGapPct) > selfTol) {
+        dropped.push({
+          serial: a.serial,
+          ticker: a.ticker,
+          reason:
+            `grading_math self-inconsistent: levels imply ${implied.toFixed(2)}% but now_gap_pct says ` +
+            `${graderGapPct.toFixed(2)}% — the close levels and the gap were not read together`,
+        });
+        continue;
+      }
+    } else {
+      // ── Archive path — the only way to reach pre-P2 rows ──────────────────
+      // Kept because those arrows will never gain levels of their own. It is
+      // strictly the fallback: hourly resolution, a coverage floor, and a
+      // tolerance test every row must survive.
+      const series = idx.get(a.ticker);
+      if (!series?.length) {
+        dropped.push({ serial: a.serial, ticker: a.ticker, reason: "ticker absent from archive" });
+        continue;
+      }
+      const gradedMs = new Date(a.graded_at).getTime();
+      // Nearest archive read with BOTH sides priced.
+      let best: { at: number; oracle: number | null; dex: number | null } | null = null;
+      for (const p of series) {
+        if (p.oracle === null || p.dex === null) continue;
+        if (best === null || Math.abs(p.at - gradedMs) < Math.abs(best.at - gradedMs)) best = p;
+      }
+      if (!best) {
+        dropped.push({ serial: a.serial, ticker: a.ticker, reason: "no priced archive point" });
+        continue;
+      }
+      joinMin = Math.abs(best.at - gradedMs) / 60000;
+      if (joinMin > MAX_JOIN_MINUTES) {
+        dropped.push({
+          serial: a.serial,
+          ticker: a.ticker,
+          // The dominant exclusion: graded before the archive existed.
+          reason: `graded ${(joinMin / 60).toFixed(1)}h from nearest archive point (archive starts later)`,
+        });
+        continue;
+      }
+
+      closeOracle = best.oracle!;
+      closeDex = best.dex!;
+      source = "archive";
+
+      // Corroboration. The archive and the grader looked at slightly different
+      // instants; if they disagree about the gap, the archive prices are not a
+      // usable stand-in for what the grader saw, and this row is not evidence.
+      const archiveGapPct = Math.abs((closeDex - closeOracle) / closeOracle) * 100;
+      const tol = Math.max(JOIN_TOL_ABS_PP, JOIN_TOL_REL * graderGapPct);
+      if (Math.abs(archiveGapPct - graderGapPct) > tol) {
+        dropped.push({
+          serial: a.serial,
+          ticker: a.ticker,
+          reason: `join failed: archive gap ${archiveGapPct.toFixed(2)}% vs grader ${graderGapPct.toFixed(2)}% (tol ${tol.toFixed(2)})`,
+        });
+        continue;
+      }
     }
 
+    const closeGapPct = Math.abs((closeDex - closeOracle) / closeOracle) * 100;
     const s = Math.sign(fireDex - fireOracle) || 1;
     const oracleContrib = ((s * (closeOracle - fireOracle)) / fireOracle) * 100;
     const dexContrib = ((-s * (closeDex - fireDex)) / fireOracle) * 100;
@@ -555,6 +636,7 @@ function decompose(
       fired_at: a.fired_at,
       graded_at: a.graded_at,
       join_minutes: joinMin,
+      source,
       fire_oracle: fireOracle,
       fire_dex: fireDex,
       close_oracle: closeOracle,
@@ -756,7 +838,23 @@ async function main() {
   // ── Part 3: decomposition ─────────────────────────────────────────────────
   console.log(`\n${"─".repeat(78)}\nPART 3 — DECOMPOSITION\n${"─".repeat(78)}`);
   const { rows, dropped } = decompose(arrows, points);
-  console.log(`decomposable: ${rows.length}/${gradedDrift.length} graded drift arrows`);
+  const gradedArb = graded.filter((a) => a.type === "arb" && (a.outcome === "hit" || a.outcome === "miss"));
+  const driftRows = rows.filter((r) => r.type === "drift");
+  const arbRows = rows.filter((r) => r.type === "arb");
+  const direct = rows.filter((r) => r.source === "grading_math");
+  const viaArchive = rows.filter((r) => r.source === "archive");
+  console.log(`decomposable: drift ${driftRows.length}/${gradedDrift.length}   arb ${arbRows.length}/${gradedArb.length}`);
+  console.log(
+    `source:       grading_math ${direct.length} (exact, no join)   archive ${viaArchive.length} (hourly, join-validated)`,
+  );
+  if (direct.length === 0) {
+    console.log(
+      `  ↳ 0 exact rows yet. Expected: the grader only began writing close-side levels on\n` +
+        `    2026-08-13 (drift) and 2026-08-14 (arb), and both are forward-only — arrows\n` +
+        `    graded before those dates never had levels written and never will. The exact\n` +
+        `    count is a clock, not a bug: it rises with every grading pass from here.`,
+    );
+  }
   const byReason = new Map<string, number>();
   for (const d of dropped) {
     const k = d.reason.startsWith("graded ") ? "graded outside archive coverage" : d.reason.split(":")[0];
@@ -771,6 +869,18 @@ async function main() {
     console.log(`\n  join-validation failures (archive vs grader disagree on the close gap):`);
     for (const d of joinFails) console.log(`    ${d.serial} ${d.ticker} — ${d.reason}`);
   }
+  // A self-inconsistency can only come from a grader change, so it is a code
+  // bug rather than a data limitation. Never fold it into the reason tally.
+  const selfInconsistent = dropped.filter((d) => d.reason.startsWith("grading_math self-inconsistent"));
+  if (selfInconsistent.length) {
+    console.log(
+      `\n  ⚠️⚠️ ${selfInconsistent.length} row(s) where the grader's own close levels disagree with its own\n` +
+        `  now_gap_pct. These cannot both be right, and nothing downstream is trustworthy\n` +
+        `  until it is explained — check whether grader.ts still reads the levels and the\n` +
+        `  gap from a single M5 response:`,
+    );
+    for (const d of selfInconsistent) console.log(`    ${d.serial} ${d.ticker} — ${d.reason}`);
+  }
 
   if (rows.length === 0) {
     console.log("\nNo decomposable rows. Nothing can be concluded about (a) vs (b) yet.");
@@ -778,20 +888,33 @@ async function main() {
   }
 
   console.log(
-    `\nserial  ticker  out   sess        fire_gap  close_gap  Δoracle  Δdex   share_o  class`,
+    `\nserial  ticker  type   out   sess        fire_gap  close_gap  Δoracle  Δdex   share_o  class        src`,
   );
   for (const r of rows.sort((a, b) => a.fired_at.localeCompare(b.fired_at))) {
     console.log(
-      `${r.serial}  ${r.ticker.padEnd(6)}  ${r.outcome.padEnd(4)}  ${r.session.padEnd(10)}` +
+      `${r.serial}  ${r.ticker.padEnd(6)}  ${r.type.padEnd(5)}  ${r.outcome.padEnd(4)}  ${r.session.padEnd(10)}` +
         ` ${r.fire_gap_pct.toFixed(2).padStart(7)}%  ${r.close_gap_pct.toFixed(2).padStart(8)}%` +
         ` ${r.oracle_contrib_pct >= 0 ? "+" : ""}${r.oracle_contrib_pct.toFixed(2).padStart(6)}` +
         ` ${r.dex_contrib_pct >= 0 ? "+" : ""}${r.dex_contrib_pct.toFixed(2).padStart(6)}` +
-        `  ${(r.share_oracle === null ? "  n/a" : r.share_oracle.toFixed(2)).padStart(6)}   ${r.klass}`,
+        `  ${(r.share_oracle === null ? "  n/a" : r.share_oracle.toFixed(2)).padStart(6)}   ${r.klass.padEnd(10)}   ${r.source === "grading_math" ? "exact" : "arch"}`,
     );
   }
 
   console.log(`\n${"─".repeat(78)}\nSLICES (each reports its own n; small n is stated, not smoothed)\n${"─".repeat(78)}`);
-  printSlice("ALL", rows);
+  // Lane first, and never an ALL row that pools them. drift fires only when the
+  // market is SHUT (the oracle is frozen by construction, so a closure is almost
+  // forced to read "dex-led"); arb fires only when it is OPEN (both sides live).
+  // Pooling would let drift's structural asymmetry masquerade as a finding about
+  // arb, which is exactly the drift this file was written to stop.
+  printSlice("type=drift", driftRows);
+  printSlice("type=arb", arbRows);
+  printSlice("source=grading_math (exact)", direct);
+  printSlice("source=archive (join-validated)", viaArchive);
+  console.log(
+    `\n  ⚠ Read the two type rows separately. drift is graded with the oracle FROZEN at\n` +
+      `    fire, so any closure it records is heavily biased toward "dex-led" by design.\n` +
+      `    Only the arb rows can speak to oracle-vs-dex leadership with both sides live.`,
+  );
   printSlice("  outcome=hit", rows.filter((r) => r.outcome === "hit"));
   printSlice("  outcome=miss", rows.filter((r) => r.outcome === "miss"));
   for (const sess of [...new Set(rows.map((r) => r.session))].sort()) {
@@ -805,28 +928,48 @@ async function main() {
   }
 
   // ── Verdict ───────────────────────────────────────────────────────────────
+  // Per lane, never pooled. Same reason as the slices: the two lanes are graded
+  // on different rules against different market states, so a pooled (a)/(b)
+  // split would be a number about nothing.
   console.log(`\n${"─".repeat(78)}\nREADING\n${"─".repeat(78)}`);
+  reading("drift — market CLOSED at fire (oracle frozen by construction)", driftRows);
+  reading("arb — market OPEN at fire (both sides live; the informative lane)", arbRows);
+}
+
+/** The (a)/(b)/(c) verdict for ONE lane. Kept as a function so adding a lane can
+ *  never accidentally produce a pooled headline. */
+function reading(label: string, rows: Decomp[]) {
+  console.log(`\n${label}`);
+  console.log("─".repeat(label.length));
+  if (rows.length === 0) {
+    console.log(
+      `  no decomposable rows. Nothing can be said about (a) vs (b) for this lane —\n` +
+        `  which is a statement about coverage, not about the market.`,
+    );
+    return;
+  }
+
   const closed = rows.filter((r) => r.klass !== "widened");
   const t = tally(rows);
   if (closed.length < 10) {
     console.log(
-      `Only ${closed.length} arrows have a decomposable CLOSURE. That is below any\n` +
-        `threshold at which (a)/(b)/(c) can be separated — the Wilson interval on a\n` +
-        `proportion this small spans most of the unit interval. INSUFFICIENT DATA is\n` +
-        `the honest answer; re-run once the archive has covered more grading windows.`,
+      `  Only ${closed.length} arrows have a decomposable CLOSURE. That is below any\n` +
+        `  threshold at which (a)/(b)/(c) can be separated — the Wilson interval on a\n` +
+        `  proportion this small spans most of the unit interval. INSUFFICIENT DATA is\n` +
+        `  the honest answer; re-run once more grading windows have accumulated.`,
     );
   }
-  console.log(`\noracle-led ${fmtCI(t.oracle_led, closed.length)}`);
-  console.log(`dex-led    ${fmtCI(t.dex_led, closed.length)}`);
-  console.log(`mixed      ${fmtCI(t.mixed, closed.length)}`);
-  console.log(`widened (gap grew, no closure to attribute): ${t.widened}`);
+  console.log(`\n  oracle-led ${fmtCI(t.oracle_led, closed.length)}`);
+  console.log(`  dex-led    ${fmtCI(t.dex_led, closed.length)}`);
+  console.log(`  mixed      ${fmtCI(t.mixed, closed.length)}`);
+  console.log(`  widened (gap grew, no closure to attribute): ${t.widened}`);
   const medShare = closed
     .map((r) => r.share_oracle!)
     .filter((x) => x !== null)
     .sort((a, b) => a - b);
   if (medShare.length) {
     console.log(
-      `\nmedian share of closure done by the ORACLE: ${medShare[Math.floor(medShare.length / 2)].toFixed(2)}` +
+      `\n  median share of closure done by the ORACLE: ${medShare[Math.floor(medShare.length / 2)].toFixed(2)}` +
         `   (1.00 = oracle did all of it, 0.00 = dex did all of it)`,
     );
   }
@@ -840,15 +983,15 @@ async function main() {
   const live = closed.filter((r) => Math.abs(r.dex_contrib_pct) >= FROZEN_EPS);
   if (tauto.length) {
     console.log(
-      `\n⚠ TAUTOLOGY GUARD — ${tauto.length}/${closed.length} closures happened on a DEX print that did not\n` +
-        `  move at all (|Δdex| < ${FROZEN_EPS}%): ${tauto.map((r) => `${r.serial} ${r.ticker}`).join(", ")}.\n` +
-        `  On a pool with no trades, "oracle-led" is arithmetic, not price discovery —\n` +
-        `  the oracle is the only thing that CAN move. Excluding them:`,
+      `\n  ⚠ TAUTOLOGY GUARD — ${tauto.length}/${closed.length} closures happened on a DEX print that did not\n` +
+        `    move at all (|Δdex| < ${FROZEN_EPS}%): ${tauto.map((r) => `${r.serial} ${r.ticker}`).join(", ")}.\n` +
+        `    On a pool with no trades, "oracle-led" is arithmetic, not price discovery —\n` +
+        `    the oracle is the only thing that CAN move. Excluding them:`,
     );
     const lt = tally(live);
-    console.log(`    oracle-led ${fmtCI(lt.oracle_led, live.length)}`);
-    console.log(`    dex-led    ${fmtCI(lt.dex_led, live.length)}`);
-    console.log(`    mixed      ${fmtCI(lt.mixed, live.length)}`);
+    console.log(`      oracle-led ${fmtCI(lt.oracle_led, live.length)}`);
+    console.log(`      dex-led    ${fmtCI(lt.dex_led, live.length)}`);
+    console.log(`      mixed      ${fmtCI(lt.mixed, live.length)}`);
   }
 }
 
