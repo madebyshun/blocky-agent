@@ -325,6 +325,31 @@ export interface Arrow {
     fire_gap_pct: number | null;
     now_gap_pct: number | null;
     closed_by_pct: number | null;
+    /** P2 (2026-08-13) — CLOSE-SIDE PRICE LEVELS.
+     *
+     *  `now_gap_pct` is a MAGNITUDE: |dex − oracle| / oracle. It says how big
+     *  the gap was at grade time but not WHICH SIDE MOVED, so the grader
+     *  scores a HIT identically whether the oracle came to the DEX or the DEX
+     *  reverted to the oracle. The decomposition that would separate those two
+     *  ("oracle catches up" vs "DEX reverts") has one equation and two
+     *  unknowns without these levels — which is exactly why the 2026-08-12
+     *  attempt could only decompose 9 of 112 graded drift arrows, and only by
+     *  joining against the hourly archive that starts 20260810.
+     *
+     *  With these two fields every arrow graded from here on decomposes on its
+     *  own, no archive join and no coverage window. This is the field that
+     *  makes the (a)/(b) question answerable once n accumulates — and the only
+     *  way to ever measure whether the brief's "snap toward the feed" claim is
+     *  true, since the hit rate alone is blind to it.
+     *
+     *  `null` = no level available for that side (a pre-2026-08-13 row the
+     *  regrade backfill touched; the backfill reads prose and cannot recover
+     *  levels). Absent entirely = graded before 2026-08-13 and never
+     *  regraded. Operationally identical — both mean "not decomposable" while
+     *  the gap % stays valid. Readers MUST handle both and must never treat
+     *  either as zero: zero is a price, missing is not. */
+    close_oracle_price_usd?: number | null;
+    close_dex_price_usd?: number | null;
   } | null;
   /** Drift Statistics v0 — what the per-ticker rolling record said about this
    *  ticker AT FIRE TIME. A fire-time fact, never recomputed: the whole point
