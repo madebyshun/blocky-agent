@@ -382,10 +382,58 @@ async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: 
 
   if (arrow.type === "arb") {
     const spreadPct = Math.abs(deltaPct);
+
+    // P2b (2026-08-14) — ARB WAS LEFT OUT OF P2, AND THAT WAS AN OVERSIGHT.
+    //
+    // P2 (2026-08-13) added close-side price levels to the DRIFT branch only.
+    // Unlike the P1 liveness gate — which is drift-only *on purpose*, with the
+    // reason stated at its definition — nothing justified excluding arb. It was
+    // simply missed. Measured cost before this fix: 0 of 76 arb arrows carried
+    // ANY `grading_math`, so a third of the published record was structurally
+    // un-analysable and could never be recovered after the fact.
+    //
+    // Arb needs this MORE than drift, not less. Drift fires while the market is
+    // shut, so nobody holds the position overnight. Arb fires while the market
+    // is OPEN and the UI turns it into an executable buy/sell (`ReviewSignPanel`
+    // derives the side from `expected_direction`), so a user is actually long or
+    // short something — and their PnL depends entirely on WHICH SIDE MOVED,
+    // which `now_gap_pct` alone can never say.
+    //
+    // ⚠️ `closed_by_pct` HERE IS RECORDED, NOT APPLIED. The arb verdict is and
+    // remains the ABSOLUTE test below (`spread < ARB_HIT_SPREAD_PCT`), which is
+    // the economically right shape for arb: a spread trade pays off when the
+    // spread drops under your fee+slippage cost, and that cost is an absolute
+    // number, not a fraction of where the spread started. Drift's ≥50%-closure
+    // rule is a RELATIVE test and answers a different question. Storing the
+    // relative figure alongside the absolute verdict is what makes the two
+    // conventions comparable in analysis without either rule changing, and
+    // without rewriting a single published outcome.
+    //
+    // ⚠️ Missing fire-time levels must NEVER change an arb verdict. The drift
+    // branch downgrades to `informational` when it cannot measure the fire gap,
+    // because a relative rule is meaningless without a denominator. The absolute
+    // rule needs no denominator, so arb still grades hit/miss exactly as before
+    // and only the math fields go null. Do not "align" this with drift.
+    const fireOracle = arrow.snapshot_at_fire?.oracle_price_usd ?? null;
+    const fireDex = arrow.reference_price;
+    const fireMeasurable =
+      typeof fireOracle === "number" && fireOracle > 0 && typeof fireDex === "number" && fireDex > 0;
+    const fireGapPct = fireMeasurable ? Math.abs((fireDex - fireOracle) / fireOracle) * 100 : null;
+    const math: GradingMath = {
+      basis: "fire_oracle",
+      fire_oracle_price_usd: fireOracle,
+      fire_dex_price_usd: typeof fireDex === "number" ? fireDex : null,
+      fire_gap_pct: fireGapPct,
+      now_gap_pct: spreadPct,
+      closed_by_pct: fireGapPct !== null && fireGapPct > 0 ? (1 - spreadPct / fireGapPct) * 100 : null,
+      close_oracle_price_usd: oracle,
+      close_dex_price_usd: dex,
+    };
+
     if (spreadPct < ARB_HIT_SPREAD_PCT) {
-      return { outcome: "hit", detail: `spread narrowed to ${spreadPct.toFixed(3)}% (< ${ARB_HIT_SPREAD_PCT}%)` };
+      return { outcome: "hit", detail: `spread narrowed to ${spreadPct.toFixed(3)}% (< ${ARB_HIT_SPREAD_PCT}%)`, math };
     }
-    return { outcome: "miss", detail: `spread still ${spreadPct.toFixed(3)}% (≥ ${ARB_HIT_SPREAD_PCT}%) after ${arrow.grading_window_h}h` };
+    return { outcome: "miss", detail: `spread still ${spreadPct.toFixed(3)}% (≥ ${ARB_HIT_SPREAD_PCT}%) after ${arrow.grading_window_h}h`, math };
   }
 
   if (arrow.type === "drift") {

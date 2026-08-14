@@ -9,6 +9,8 @@
     "lint": "next lint",
     "hood:smoke": "tsx scripts/blue-hood-smoke.ts",
     "hood:kick-crons": "tsx scripts/hood-kick-crons.ts",
+    "hood:decompose": "tsx scripts/gap-closure-dryrun.ts",
+    "hood:arb-audit": "tsx scripts/arb-convention-dryrun.ts",
     "tg:set-webhook": "tsx scripts/tg-set-webhook.ts",
     "sync:soul": "tsx scripts/sync-soul.ts",
     "test:ledger": "tsx scripts/ledger-race-test.ts",
