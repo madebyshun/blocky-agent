@@ -38,7 +38,7 @@
  * wrong.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   CHAINS,
   CHAIN_KEYS,
@@ -389,16 +389,37 @@ const COLUMNS = ALLOCATION_ANNOUNCED
 function Ledger({ snap }: { snap: LedgerSnapshot }) {
   const [query, setQuery] = useState("");
   const [chainFilter, setChainFilter] = useState<ChainKey | "all">("all");
+  /**
+   * One row per wallet is the right shape for this table — a pledger looks
+   * themselves up by address. But a wallet that pledged twice used to collapse
+   * into the string "2 ↗", which linked only the newest transfer: the older
+   * hash appeared nowhere on the page, so a holder searching for their own
+   * receipt concluded it had not been counted. It always had been — the totals,
+   * the JSON and the CSV all carried it. Only the HTML hid it.
+   *
+   * So: keep the wallet row, and let it open. Every transfer stays reachable
+   * without turning the ledger into a transfer log.
+   */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+  const toggle = useCallback((key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }, []);
+
+  const q = query.trim().toLowerCase();
 
   const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
     return snap.wallets.filter((w) => {
       if (chainFilter !== "all" && w.chain !== chainFilter) return false;
       if (!q) return true;
       if (w.wallet.toLowerCase().includes(q)) return true;
       return w.txs.some((t) => t.txHash.toLowerCase().includes(q));
     });
-  }, [snap.wallets, query, chainFilter]);
+  }, [snap.wallets, q, chainFilter]);
 
   return (
     <div>
@@ -461,8 +482,17 @@ function Ledger({ snap }: { snap: LedgerSnapshot }) {
               {rows.map((w, i) => {
                 const cfg = CHAINS[w.chain];
                 const latest = w.txs[0];
+                const key = `${w.chain}:${w.wallet}`;
+                // A hash typed into the filter is someone looking for one
+                // specific receipt. Opening the row for them is the whole point
+                // of the search — making them find and click a toggle first
+                // would reproduce the bug in one extra step.
+                const matchedByHash =
+                  q.length > 0 && w.txs.some((t) => t.txHash.toLowerCase().includes(q));
+                const open = w.txCount > 1 && (expanded.has(key) || matchedByHash);
                 return (
-                  <tr key={`${w.chain}:${w.wallet}`} className="border-t border-[#1A1A2E] hover:bg-[#0a0a10]">
+                  <Fragment key={key}>
+                  <tr className="border-t border-[#1A1A2E] hover:bg-[#0a0a10]">
                     <td className="px-4 py-3 font-mono text-[11px] text-slate-600 tabular-nums">{i + 1}</td>
                     <td className="px-4 py-3">
                       <a
@@ -492,21 +522,62 @@ function Ledger({ snap }: { snap: LedgerSnapshot }) {
                       </td>
                     ) : null}
                     <td className="px-4 py-3">
-                      {/* Every row links to its own receipt — that is what makes the list checkable. */}
-                      <a
-                        href={cfg.explorerTx(latest.txHash)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-mono text-[11px] text-slate-500 hover:text-[#4FC3F7] transition-colors"
-                        title={latest.txHash}
-                      >
-                        {w.txCount > 1 ? `${w.txCount} ↗` : shortHash(latest.txHash)}
-                      </a>
+                      {/* Every transfer is reachable from its own row — that is what makes the list checkable. */}
+                      {w.txCount > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => toggle(key)}
+                          aria-expanded={open}
+                          className="font-mono text-[11px] text-slate-500 hover:text-[#4FC3F7] transition-colors"
+                          title={`Show all ${w.txCount} transfers from this wallet`}
+                        >
+                          {w.txCount} transfers {open ? "▾" : "▸"}
+                        </button>
+                      ) : (
+                        <a
+                          href={cfg.explorerTx(latest.txHash)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono text-[11px] text-slate-500 hover:text-[#4FC3F7] transition-colors"
+                          title={latest.txHash}
+                        >
+                          {shortHash(latest.txHash)}
+                        </a>
+                      )}
                     </td>
                     <td className="px-4 py-3 font-mono text-[11px] text-slate-600 whitespace-nowrap">
                       {fmtWhen(latest.timestamp)}
                     </td>
                   </tr>
+                  {open ? (
+                    <tr className="bg-[#08080d]">
+                      <td />
+                      <td colSpan={COLUMNS.length - 1} className="px-4 pb-3">
+                        <div className="flex flex-col gap-1.5">
+                          {w.txs.map((t) => (
+                            <div key={t.txHash} className="flex items-baseline gap-4">
+                              <a
+                                href={cfg.explorerTx(t.txHash)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono text-[11px] text-slate-500 hover:text-[#4FC3F7] transition-colors"
+                                title={t.txHash}
+                              >
+                                {shortHash(t.txHash)}
+                              </a>
+                              <span className="font-mono text-[11px] text-slate-300 tabular-nums whitespace-nowrap">
+                                {formatAmount(BigInt(t.amount), cfg.token.decimals)}
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-600 whitespace-nowrap">
+                                {fmtWhen(t.timestamp)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 );
               })}
             </tbody>
