@@ -115,9 +115,57 @@ export function aggregate(txs: PledgeTx[], chain: ChainKey, supply: bigint): Wal
     });
   }
 
-  // Largest first — the ledger is read top-down and the big pledges are the
-  // ones people cross-check against the explorer.
+  // Largest first. The published order is decided once, across both chains, by
+  // `byNewestFirst` below — this sort only guarantees a deterministic starting
+  // order so that rows with no usable timestamp still come out the same way on
+  // every refresh instead of shuffling.
   return out.sort((a, b) => (BigInt(b.totalAmount) > BigInt(a.totalAmount) ? 1 : -1));
+}
+
+/**
+ * The wallet's most recent transfer, or null if not one of its transfers has a
+ * known time.
+ *
+ * `PledgeTx.timestamp` is nullable ON PURPOSE: `sources.ts` treats the time as
+ * cosmetic and publishes a transfer with an unknown one rather than dropping
+ * it, and the RPC fallback leaves every timestamp null when the block lookup
+ * fails. Anything that sorts on time has to survive that.
+ */
+function latestTimestamp(w: WalletPledge): number | null {
+  let best: number | null = null;
+  for (const t of w.txs) {
+    if (t.timestamp === null) continue;
+    if (best === null || t.timestamp > best) best = t.timestamp;
+  }
+  return best;
+}
+
+/**
+ * Newest pledge first — how the page is actually read. Someone who just sent
+ * looks for themselves at the top, and a ledger that opens on the oldest entry
+ * makes a fresh pledge feel unrecorded.
+ *
+ * A row is a WALLET, not a transfer, so "newest" is the wallet's most recent
+ * transfer. A wallet that pledged in June and again today belongs at the top,
+ * not back in June.
+ *
+ * Unknown times sink to the bottom rather than scattering through the list, and
+ * ties fall back to largest-first. That fallback is not a corner case: on the
+ * RPC path every timestamp can be null at once, and the whole table degrades to
+ * it. An unhelpful order that is stable and identical on every refresh beats
+ * one that reshuffles rows under a reader who is checking a receipt.
+ */
+function byNewestFirst(a: WalletPledge, b: WalletPledge): number {
+  const ta = latestTimestamp(a);
+  const tb = latestTimestamp(b);
+  if (ta !== null && tb !== null) {
+    if (ta !== tb) return tb - ta;
+  } else if (ta === null && tb !== null) {
+    return 1;
+  } else if (ta !== null && tb === null) {
+    return -1;
+  }
+  return BigInt(b.totalAmount) > BigInt(a.totalAmount) ? 1 : -1;
 }
 
 function emptySummary(chain: ChainKey, supply: bigint, source: "onchain" | "pinned"): ChainSummary {
@@ -195,7 +243,9 @@ export async function buildSnapshot(prev: LedgerSnapshot | null): Promise<Ledger
     }),
   );
 
-  wallets.sort((a, b) => (BigInt(b.totalAmount) > BigInt(a.totalAmount) ? 1 : -1));
+  // Decided here, once, so the page, the JSON and the CSV cannot disagree about
+  // what order the ledger is in.
+  wallets.sort(byNewestFirst);
 
   return {
     updatedAt: Date.now(),
