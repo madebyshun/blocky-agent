@@ -10,7 +10,7 @@ import { AGENT_TOOLS } from "@/lib/agent-tools";
 import { HANDLERS } from "@/app/api/x402/_handlers";
 
 const USDC_BASE  = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const PAY_TO     = "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f";
+const PAY_TO     = "0x02950ad38ada1d599375bd447e080cd404809205";
 const NETWORK    = "eip155:8453";
 const BASE_URL   = "https://blueagent.dev";
 

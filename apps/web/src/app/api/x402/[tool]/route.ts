@@ -1,8 +1,8 @@
 /**
  * Self-hosted x402 endpoint (Base mainnet, Coinbase CDP facilitator).
  *
- *   no X-Payment  → 402 with our requirements (payTo = Club wallet 0xb058)
- *   X-Payment     → settle USDC via CDP (charges user → 0xb058) → run handler
+ *   no X-Payment  → 402 with our requirements (payTo = Blue Agent treasury 0x0295)
+ *   X-Payment     → settle USDC via CDP (charges user → 0x0295) → run handler
  *
  * No Bankr dependency. Tool compute runs locally via the self-contained
  * handlers copied into _handlers/ (registry). Only tools in HANDLERS are live.

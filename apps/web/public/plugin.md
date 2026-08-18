@@ -12,7 +12,7 @@ Base MCP can call any tool and settle the USDC payment without extra wiring.
 - **Asset:** USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
 - **Payment:** x402 v2 · pay-per-call · no API key · no subscription
 - **Settlement:** Coinbase CDP facilitator (on-chain transferWithAuthorization)
-- **Receives:** Blue Hub wallet `0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f`
+- **Receives:** Blue Agent treasury `0x02950ad38ada1d599375bd447e080cd404809205`
 
 ---
 
@@ -44,7 +44,7 @@ no auth. Returns:
   "x402Version": 2,
   "network": "eip155:8453",
   "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  "payTo": "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f",
+  "payTo": "0x02950ad38ada1d599375bd447e080cd404809205",
   "count": 34,
   "tools": [
     {
@@ -98,7 +98,7 @@ client needs to sign and retry:
     "network": "eip155:8453",
     "asset":   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "amount":  "200000",
-    "payTo":   "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f",
+    "payTo":   "0x02950ad38ada1d599375bd447e080cd404809205",
     "maxTimeoutSeconds": 120,
     "extra":   { "name": "USD Coin", "version": "2" }
   }],
@@ -264,7 +264,7 @@ approval prompts via Base MCP's built-in x402 handler.
 
 ## License & ownership
 
-Open for any Base MCP integration. Wallet `0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f`
+Open for any Base MCP integration. Wallet `0x02950ad38ada1d599375bd447e080cd404809205`
 receives all settlements. Built by Blocky Studio. Powered by `$BLUEAGENT`.
 
 For questions, manifest details, or to suggest tools:

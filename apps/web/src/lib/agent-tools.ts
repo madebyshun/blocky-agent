@@ -16,9 +16,10 @@ export type CompositeSkill = {
 
 const X402_BASE = "https://blueagent.dev/api/x402";
 
-// Blue Hub treasury — default builder address for Blue Agent first-party tools.
+// Blue Agent treasury — default builder address for first-party tools, and the
+// single x402 payee (same wallet as x402-cdp PAY_TO and payments TOPUP_TREASURY).
 // Builder-submitted tools (Hub v2 Phase 3) will set this to the builder's own wallet.
-export const BLUE_TREASURY = "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f" as const;
+export const BLUE_TREASURY = "0x02950ad38ada1d599375bd447e080cd404809205" as const;
 
 export type AgentTool = {
   id: string;

@@ -15,11 +15,13 @@ import { getAddress } from "viem";
 // USDC on Base (6 decimals) — canonical, verified on Basescan.
 export const USDC_BASE = getAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 
-// payTo — the Virtuals wallet for Blue Agent. This is DELIBERATELY DECOUPLED
-// from agent-tools' BLUE_TREASURY (0xb058…, the Bankr x402 payout wallet):
-// chat-credit top-ups settle to the Virtuals treasury, NOT the Bankr wallet.
-// Kept as a local const so this feature doesn't pull the 74-tool catalog into
-// the client bundle. Verified checksum address on Base.
+// payTo — the Blue Agent treasury. As of 2026-08-18 this is the SINGLE payee
+// for every surface: chat-credit top-ups AND x402 tool calls (agent-tools'
+// BLUE_TREASURY, x402-cdp's PAY_TO). It used to be deliberately decoupled from
+// the old 0xb058… Bankr payout wallet; that wallet is retired, so the two were
+// unified onto this address. Still kept as a local const so this feature
+// doesn't pull the whole tool catalog into the client bundle.
+// Verified checksum address on Base.
 export const TOPUP_TREASURY = getAddress("0x02950Ad38aDA1D599375bD447E080cd404809205");
 
 export const BASE_CHAIN_ID = 8453 as const;

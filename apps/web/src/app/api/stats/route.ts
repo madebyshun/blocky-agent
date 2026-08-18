@@ -14,7 +14,7 @@ export const runtime = "nodejs";
 // it fails loudly instead of silently 504-ing.
 export const maxDuration = 15;
 
-const PAY_TO = "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f";
+const PAY_TO = "0x02950ad38ada1d599375bd447e080cd404809205";
 const USDC   = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 function priceNum(price?: string): number {
