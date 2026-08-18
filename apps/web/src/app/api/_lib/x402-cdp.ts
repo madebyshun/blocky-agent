@@ -13,7 +13,12 @@
  */
 const CDP_HOST = "https://api.cdp.coinbase.com/platform/v2/x402";
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-export const PAY_TO = "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f"; // Bankr Club wallet — receives USDC
+// Blue Agent treasury — receives every USDC settlement. Same wallet as
+// payments.ts TOPUP_TREASURY (chat credits), unified 2026-08-18: the old
+// 0xb058… Bankr Club wallet is retired. MUST stay in lockstep with the
+// client-side payTo in hub/HubView.tsx — the browser signs `authorization.to`
+// against it, so any divergence fails CDP verification on every Hub call.
+export const PAY_TO = "0x02950ad38ada1d599375bd447e080cd404809205";
 
 export type PaymentRequirements = {
   scheme: "exact";

@@ -13,7 +13,7 @@ import { recoverTypedDataAddress } from "viem";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const PAY_TO          = (process.env.PAYMENT_WALLET ?? "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f").toLowerCase();
+const PAY_TO          = (process.env.PAYMENT_WALLET ?? "0x02950ad38ada1d599375bd447e080cd404809205").toLowerCase();
 const NETWORK         = "eip155:8453";
 const USDC            = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
 const FACILITATOR     = "https://facilitator.x402.org";

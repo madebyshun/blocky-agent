@@ -32,7 +32,7 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 
 | Layer | What it is |
 |---|---|
-| `apps/web` | Next.js 15 frontend + **the entire live x402 surface** — founder console UI, `AGENT_TOOLS` catalog, all tool compute, self-hosted x402 settled via the Coinbase CDP facilitator (payTo `0xb058`) |
+| `apps/web` | Next.js 15 frontend + **the entire live x402 surface** — founder console UI, `AGENT_TOOLS` catalog, all tool compute, self-hosted x402 settled via the Coinbase CDP facilitator (payTo `0x0295…` — see Hard rule 6) |
 | ~~`apps/api`~~ ~~`apps/portal`~~ | 🗑️ **DELETED 2026-08-18.** The Bankr x402 storefront and the `api.blueagent.dev` portal. Both dead before removal — no Vercel project, no importers, `api.blueagent.dev` 404s. Do not recreate; `git log --all -- apps/api apps/portal` has the old text. |
 | `packages/bankr` | ☠️ **Legacy** — Bankr LLM client. Bankr 403-banned 2026-07-20; inference is Virtuals via `apps/web/src/app/api/_lib/llm.ts`. |
 | `packages/core` | Shared schemas, command pricing, and tool input definitions |
@@ -91,6 +91,9 @@ When a user request matches a trigger phrase, load the skill file and follow its
 4. **No hallucinated addresses, ever.** If you don't have a verified address, say so. Do not fill in placeholders that look like real addresses.
 
 5. **Business logic lives in packages, not in the app.** Keep `apps/web` thin. Schemas, pricing, and tool definitions belong in `packages/core`.
+
+6. **payTo is `0x02950ad38ada1d599375bd447e080cd404809205` (Base 8453) — changed 2026-08-18.** Every off-chain payee is this wallet, the same one that receives Blue Chat credit top-ups. The old `0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f` (Bankr Club wallet) is **retired** — do not reintroduce it. Server `PAY_TO` (`api/_lib/x402-cdp.ts`) and client `PAY_TO_WALLET` (`hub/HubView.tsx`) **must change in lockstep**: the browser signs `authorization.to` against the client value, so divergence fails CDP verification on *every* Hub payment.
+   ⚠️ **Two deployed contracts still pay the old wallet and cannot be redirected** — `B20HUBHook.TREASURY` (`0xe3B801B6721B0bB77AD43e5F9cAfC02780061200`) and `BlueBuyBack.payoutRecipient` (`0xBCF026857cbeF2429bf373Bc5fFFa5f8005175B4`), both Base 8453, both `immutable`; the buyback one has **no setter by deliberate design** so a hostile owner can't redirect staker yield. Only a redeploy changes them, and redeploying the V4 hook changes its address (permission bits) and would require a new pool. Editing the `.sol` source changes nothing — the deployed bytecode is what pays.
 
 ---
 

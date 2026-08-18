@@ -2,7 +2,7 @@
  * POST /api/hub/community/[slug]/invoke — paid invoke for a HOSTED Blue Hub tool.
  *
  * Payment model (x402 USDC on Base, via the Coinbase CDP facilitator):
- *   no X-Payment → 402 with our requirements (payTo = Blue Hub wallet 0xb058)
+ *   no X-Payment → 402 with our requirements (payTo = Blue Agent treasury 0x0295)
  *   X-Payment    → cdpVerify (NO charge) → accept job (202) → run in background
  *                  → cdpSettle ONLY after a successful run → accrue creator 90%
  *

@@ -16,19 +16,28 @@ const nextConfig: NextConfig = {
       // config redirect can't express (and config redirects run BEFORE
       // middleware, so they'd shadow the gate). See the BlueBank preview gate
       // there. Remove that block when BlueBank ships to GA.
+      // Both of these used to point at `api.blueagent.dev`, which no longer
+      // resolves — the Vercel project behind that hostname is gone, so every
+      // hit returned 404. `/mcp` is the shortcut printed in the X bio and in
+      // tweets, so the most-shared link on the site was dead.
+      //
+      // The old comment planned to "re-point to blueagent.dev/docs/mcp once the
+      // docs domain is consolidated onto the main site". That consolidation has
+      // happened (by deletion rather than by plan), so this is that re-point.
+      // Destinations are now same-origin paths that exist in this app under
+      // src/app/docs/ — a route that ships with the build can't rot the way an
+      // external hostname can.
+      //
+      // Kept at 307 (`permanent: false`) deliberately: a 308 is cached by the
+      // browser indefinitely, and these two have already moved once.
       {
-        // Clean marketing shortcut for the MCP setup guide (tweets, bio, etc.).
-        // Temporary (307) so we can re-point to blueagent.dev/docs/mcp once the
-        // docs domain is consolidated onto the main site.
         source: "/mcp",
-        destination: "https://api.blueagent.dev/docs/mcp",
+        destination: "/docs/mcp",
         permanent: false,
       },
       {
-        // /api-docs retired — API + MCP docs now live on the api subdomain.
-        // The main docs hub is blueagent.dev/docs.
         source: "/api-docs",
-        destination: "https://api.blueagent.dev/docs",
+        destination: "/docs/api",
         permanent: false,
       },
       // (Removed the /app/hub/:tool → /hub/:tool redirect: /app/hub/[tool] is now

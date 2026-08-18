@@ -22,7 +22,7 @@ const VERSION  = "1.0.0";
 const NETWORK  = "Base Mainnet";
 const CHAIN_ID = "eip155:8453";
 const USDC     = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const PAY_TO   = "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f";
+const PAY_TO   = "0x02950ad38ada1d599375bd447e080cd404809205";
 
 const CAT_COLOR: Record<string, string> = {
   intelligence:    "#4FC3F7",
