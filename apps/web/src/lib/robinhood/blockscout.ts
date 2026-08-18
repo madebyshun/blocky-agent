@@ -47,11 +47,16 @@ export type BlockscoutTransfer = {
   transaction_hash?: string;
 };
 
-async function bsFetch<T>(network: RobinhoodNetwork, path: string): Promise<T | null> {
+async function bsFetch<T>(
+  network: RobinhoodNetwork,
+  path: string,
+  timeoutMs?: number,
+): Promise<T | null> {
   try {
     const res = await fetch(`${EXPLORER_BASE[network]}${path}`, {
       // Blockscout data changes fast (transfers/holders) — don't cache.
       cache: "no-store",
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
     if (!res.ok) return null;
     return (await res.json()) as T;
@@ -76,6 +81,35 @@ export async function getTokenTransfers(network: RobinhoodNetwork, address: stri
 
 export function explorerBase(network: RobinhoodNetwork): string {
   return EXPLORER_BASE[network];
+}
+
+/**
+ * Who deployed this contract. Returns the creator address, or null when
+ * Blockscout doesn't know (EOA, unindexed, or the request failed).
+ *
+ * Provenance is the only property of a token an impersonator cannot copy:
+ * name, symbol and decimals are free to forge, but the creator is written at
+ * deployment. `rh-rwa-verify` leans on this to tell a real Robinhood stock
+ * token from a byte-identical fake.
+ *
+ * Null means "couldn't determine", NOT "not the deployer" — callers must keep
+ * those two apart or a Blockscout hiccup turns into a false accusation.
+ *
+ * Measured 2.4–8.8s per call on RH Chain's Blockscout, so the timeout is
+ * explicit: a defensive tool that hangs is a defensive tool nobody calls.
+ */
+const CREATOR_TIMEOUT_MS = 10_000;
+
+export async function getContractCreator(
+  address: string,
+  network: RobinhoodNetwork = "mainnet",
+): Promise<string | null> {
+  const info = await bsFetch<{ creator_address_hash?: string | null }>(
+    network,
+    `/api/v2/addresses/${address}`,
+    CREATOR_TIMEOUT_MS,
+  );
+  return info?.creator_address_hash ?? null;
 }
 
 // ─── Address balances (native ETH + all ERC-20) ─────────────────────────────
