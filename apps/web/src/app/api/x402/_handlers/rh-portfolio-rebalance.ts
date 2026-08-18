@@ -59,6 +59,29 @@ export default async function handler(req: Request): Promise<Response> {
 
     // ── Read current portfolio ──────────────────────────────────────────
     const rawBalances = await readAllBalances(wallet);
+
+    // A rebalance plan is an instruction to move real money, and it is derived
+    // entirely from the *difference* between current and target weights. A
+    // balanceOf that failed enters that math as a zero, which is not a neutral
+    // error: a position we couldn't read looks maximally underweight, so the
+    // plan confidently tells you to buy more of something you already hold —
+    // and funds it by selling something you do hold. Degrading gracefully here
+    // would mean emitting a plausible, well-formed, wrong plan. So we refuse.
+    // The x402 route only settles on a 200 with no `error`, so this path costs
+    // the caller nothing and asks them to retry.
+    const unread = rawBalances.filter((b) => b.failed);
+    if (unread.length > 0) {
+      return Response.json({
+        error: `Refusing to plan: ${unread.length} of ${RWA_TOKENS.length} balance reads failed, so the current allocation is unknown, not empty. A rebalance computed from partial balances would sell real positions to buy into ones that only appear underweight. Retry.`,
+        tool: "rh-portfolio-rebalance",
+        wallet,
+        tokens_scanned: RWA_TOKENS.length,
+        unread_count: unread.length,
+        unread_tickers: unread.map((b) => b.token.ticker),
+        network: RH_CHAIN, timestamp,
+      }, { status: 503 });
+    }
+
     const holdings = await priceHoldings(rawBalances);
     const total_value_usd = holdings.reduce((s, h) => s + (h.value_usd ?? 0), 0);
 
@@ -66,8 +89,14 @@ export default async function handler(req: Request): Promise<Response> {
       return Response.json({
         tool: "rh-portfolio-rebalance",
         wallet, total_value_usd,
+        holdings_count: holdings.length,
         plan: [],
-        note: "Wallet has no priced RH RWA holdings. Rebalance requires an existing portfolio to redistribute — add funds first, then run.",
+        // "Add funds" is the wrong advice when the wallet is funded but every
+        // position is unpriceable — most RH stock tokens have neither a
+        // Chainlink feed nor a pool, so a real portfolio can total $0 here.
+        note: holdings.length > 0
+          ? `Wallet holds ${holdings.length} RWA token(s) but none of them resolve to a USD price (no Chainlink feed, no DEX pool), so there is no value to redistribute. This is a pricing gap, not an empty wallet — a rebalance cannot be sized without prices.`
+          : "Wallet holds no RH RWA tokens from the canonical registry. Rebalance requires an existing portfolio to redistribute — add funds first, then run.",
         network: RH_CHAIN, timestamp,
       });
     }

@@ -311,8 +311,11 @@ export default function HoodSidebar({
           }}
         />
         <span className="font-mono text-[11px] flex-1 text-left" style={{ color: "#64748b" }}>
+          {/* Denominator is the feed-eligible pool, not the whole registry —
+              the poller can't watch a row with no Chainlink feed. Matches the
+              "TOKENS WATCHED" card in HoodClient; keep the two in step. */}
           {snap
-            ? `${snap.metrics.tokens_watched}/${snap.metrics.registry_total} tokens · 30 Hub skills`
+            ? `${snap.metrics.tokens_watched}/${snap.metrics.tokens_eligible ?? snap.metrics.registry_total} tokens · 30 Hub skills`
             : "warming up…"}
         </span>
         <span className="font-mono text-[9px] text-slate-700 group-hover:text-slate-500 transition-colors">

@@ -54,12 +54,24 @@
  * log; the internal deadline is enforced by the route (Promise.race).
  */
 import { poolsForToken, type PoolMeta } from "@/lib/robinhood/rwa-market";
-import { findByTicker, findByContract } from "@/lib/robinhood/rwa-registry";
+import { findByTicker, findByContract, RWA_TOKENS } from "@/lib/robinhood/rwa-registry";
 
 // USDG / WETH addresses are DERIVED from the verified registry — never
 // hardcoded here (hard rule: no hallucinated/duplicated addresses).
 const USDG_LOWER = (findByTicker("USDG")?.contract ?? "").toLowerCase();
 const WETH_LOWER = (findByTicker("WETH")?.contract ?? "").toLowerCase();
+
+// Registry shape, COUNTED not typed out. The user-facing "unknown ticker" hint
+// below used to read "26 tokens: 20 stocks, 5 ETFs, WETH, USDG", which was a
+// literal transcription of the registry on the day it was written. When the
+// registry was completed from the RHJ factory log it became 205 rows, and the
+// hint kept telling users the universe was 26 — i.e. the error message for
+// "that ticker doesn't exist" was itself the least accurate string in the file.
+// Derived, it cannot drift again.
+const REGISTRY_SHAPE = (() => {
+  const n = (k: string) => RWA_TOKENS.filter((t) => t.kind === k).length;
+  return { total: RWA_TOKENS.length, stocks: n("stock"), etfs: n("etf") };
+})();
 
 // ── Heuristic thresholds (advisory, NOT measured facts) ─────────────────────
 /** Single-pool impact above this is worth considering a split … */
@@ -254,7 +266,7 @@ export async function computeExecutionPlan(input: ExecPlanInput): Promise<ExecPl
       kind: "reject",
       error: "unknown_ticker",
       reason: `"${rawTicker}" is not a canonical Robinhood-Chain RWA token.`,
-      hint: "Use a ticker from the RH RWA registry (26 tokens: 20 stocks, 5 ETFs, WETH, USDG).",
+      hint: `Use a ticker from the RH RWA registry (${REGISTRY_SHAPE.total} tokens: ${REGISTRY_SHAPE.stocks} stocks, ${REGISTRY_SHAPE.etfs} ETFs, WETH, USDG). Note that registry membership proves the token was issued by RHJ — it does NOT imply the token is tradable; most have no pool.`,
     };
   }
 
@@ -295,7 +307,10 @@ export async function computeExecutionPlan(input: ExecPlanInput): Promise<ExecPl
     chosen = usdgFrame ?? wethFrame;
   }
 
-  const data_sources = ["api.geckoterminal.com (Robinhood Chain pools)", "RH RWA registry (26 tokens)"];
+  const data_sources = [
+    "api.geckoterminal.com (Robinhood Chain pools)",
+    `RH RWA registry (${REGISTRY_SHAPE.total} tokens)`,
+  ];
   const modelStr =
     "constant-product (xy=k) first-order impact = size/(one_side+size); one_side ≈ reserve_usd/2. " +
     "xy=k assumes full-range depth; RH V4 pools concentrate liquidity near mid, so this OVER-states impact (conservative). ESTIMATE — not a guaranteed fill.";

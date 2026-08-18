@@ -107,10 +107,24 @@ export interface HoodSnapshot {
   metrics: {
     /** Every stock + ETF in the RWA registry. The UI shows "N/registry_total". */
     registry_total: number;
-    /** Rows this cycle actually polled (registry_total minus no-Chainlink drops). */
+    /** Registry rows that have a Chainlink feed — the pool the poller draws
+     *  from. `registry_total` counts rows that exist; this counts rows that
+     *  are *watchable*, which is the denominator coverage should be read
+     *  against.
+     *
+     *  Optional because snapshots are persisted: every cycle written before
+     *  the registry sweep landed has no such field, and back-filling a number
+     *  onto a historical snapshot would be inventing data. `undefined` here
+     *  means "this cycle predates the field", not zero — render it as absent. */
+    tokens_eligible?: number;
+    /** Rows this cycle actually polled. */
     tokens_watched: number;
     /** Registry rows dropped this cycle because they lack a Chainlink feed. */
     tokens_no_feed: number;
+    /** Feed-eligible rows deliberately left out of the poll budget. Explicit
+     *  rather than silent: see `HOOD_ENABLED` in blue-hood/registry.ts.
+     *  Optional for the same historical-snapshot reason as `tokens_eligible`. */
+    tokens_not_enabled?: number;
     /** Rows polled but whose M5 call errored. Subset of tokens_watched. */
     tokens_errored: number;
     tvl_scanned_usd: number;

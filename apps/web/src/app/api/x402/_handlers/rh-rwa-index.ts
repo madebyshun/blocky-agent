@@ -1,9 +1,16 @@
 // x402/rh-rwa-index (L2) — full canonical RH RWA catalog.
 // Price: $0.02
 //
-// Zero-input. Returns the entire hand-curated Robinhood Chain RWA registry:
-//   • 20 stocks + 5 ETFs + late-listed MSTR + WETH/USDG utility tokens
-//   • plus Chainlink-only tickers (feed exists but ERC-20 not yet registered)
+// Zero-input. Returns the entire Robinhood Chain RWA registry — every token
+// the RHJ factory has deployed (stocks + ETFs), plus the WETH/USDG utility
+// rows, plus Chainlink-only tickers (a feed exists but no ERC-20 is registered).
+// The registry is generated from the factory's `Deployed` event log rather than
+// hand-curated, so the counts below are whatever the chain says today.
+//
+// One thing this catalog does NOT claim: tradability. Membership proves RHJ
+// issued the token, nothing more — most RH stock tokens have no pool and no
+// Chainlink feed, so a listing here is not a green light to route an order
+// through it. Check depth first (see rh-stock-liquidity / M-series tools).
 //
 // Callable by portfolio dashboards, sector-basket builders (P4), rebalance
 // planners (P3), and any front-end that needs to render "all available RH
@@ -42,7 +49,12 @@ export default async function handler(_req: Request): Promise<Response> {
         note: "Live Chainlink feed on RH Chain but ERC-20 token contract not yet in canonical registry.",
       })),
       data_sources: [
-        "docs.robinhood.com/chain/contracts",
+        // The docs page is a subset that lags the chain — it listed 25 tokens
+        // while 203 had been deployed. Provenance is the factory, not the docs:
+        // the registry is generated from the RHJ factory's own `Deployed` event
+        // log, which cannot silently return a prefix the way a ranked token
+        // list can. See scripts/rwa-generate.ts.
+        "robinhoodchain.blockscout.com API v2 /addresses/{RH_RWA_DEPLOYER}/logs — Deployed events",
         "reference-data-directory.vercel.app/feeds-robinhood-mainnet.json (Chainlink)",
       ],
       timestamp: new Date().toISOString(),

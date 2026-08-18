@@ -1420,7 +1420,7 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
   {
     id: "rh-rwa-index",
     name: "RH RWA Index",
-    description: "Full canonical Robinhood Chain RWA catalog — 20+ tokenized stocks, 5 ETFs, plus Chainlink-only feeds. Zero-input. For portfolio dashboards + sector basket builders.",
+    description: "Full canonical Robinhood Chain RWA catalog — every token the RHJ factory has deployed (180+ tokenized stocks, 20+ ETFs), plus Chainlink-only feeds. Zero-input. A listing proves RHJ issued the token; it does not imply the token is tradable. For portfolio dashboards + sector basket builders.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "on-chain",
     inputs: [],
@@ -1615,7 +1615,7 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
   {
     id: "rh-stock-holdings",
     name: "RH Stock Holdings",
-    description: "Full RH RWA portfolio for a wallet: reads balanceOf for all 26 canonical tokenized stocks/ETFs, prices non-zero balances via Chainlink (fallback DEX). Real on-chain reads. Never fabricates. Value_usd is null when no price source exists.",
+    description: "Full RH RWA portfolio for a wallet: reads balanceOf for every canonical tokenized stock/ETF in the registry, prices non-zero balances via Chainlink (fallback DEX). Real on-chain reads. Never fabricates — value_usd is null when no price source exists, and any balance read that failed is reported in unread_count rather than counted as a zero.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "portfolio",
     inputs: [
@@ -1720,7 +1720,7 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
   {
     id: "rh-stock-new-listings",
     name: "RH New Listings",
-    description: "Detects newly-deployed contracts by the canonical RHJ deployer via Blockscout — anything not in our registry is a candidate for the next RWA listing. Auto-diff vs canonical registry.",
+    description: "Reads every `Deployed` event from the canonical RHJ token factory and diffs it against our registry. Provenance is structural — an impersonator cannot emit the real factory's events — so anything listed here is a genuine RH stock token, and anything missing from the registry is a real new listing.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "on-chain",
     inputs: [
