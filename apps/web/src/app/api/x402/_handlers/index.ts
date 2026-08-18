@@ -1,4 +1,13 @@
-// AUTO-GENERATED — self-hosted x402 handler registry (copied from apps/api/x402).
+// Self-hosted x402 handler registry — the live tool surface, hand-maintained.
+//
+// This header used to read "AUTO-GENERATED … (copied from apps/api/x402)". Both
+// halves were false: `apps/api` has been deleted, and no generator ever existed
+// (`_gen.mjs`, named as the source of truth, is in no commit on any branch). So
+// edit this file directly — nothing regenerates it.
+//
+// Adding a tool means TWO registrations: the `HANDLERS` map below, and
+// `AGENT_TOOLS` in `@/lib/agent-tools`. A tool in only one is not live, and the
+// two counts must stay equal (112 == 112 today).
 import hTokenPrice from "./token-price";
 import hPoolScan from "./pool-scan";
 import hWalletHoldings from "./wallet-holdings";

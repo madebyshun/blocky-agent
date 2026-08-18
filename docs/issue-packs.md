@@ -74,7 +74,7 @@ Complete the product loop: chat, payments, history, market, score, setup.
 
 ### Claude handoff
 **Goal:** Ship the Phase 3 product loop.
-**Files:** `apps/web`, `apps/api`, `packages/payments`, `packages/core`, docs.
+**Files:** `apps/web`, `packages/payments`, `packages/core`, docs.
 **Acceptance:** chat is usable, payments are wired, usage is stored, market exists, setup is documented.
 **Constraints:** Keep Base-only focus, avoid overengineering.
 

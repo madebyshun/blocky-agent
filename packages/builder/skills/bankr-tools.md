@@ -54,7 +54,9 @@ const json = extractJsonObject(result); // safely strips prose around the JSON b
 
 - Never call OpenAI, Anthropic, or any other LLM directly — always go through `callBankrLLM()`.
 - API key is `process.env.BANKR_API_KEY` — never hardcode it.
-- All AI calls in `apps/api` x402 handlers must use this client.
+- All AI calls in the x402 handlers (`apps/web/src/app/api/x402/_handlers/`) go through
+  `callLLM` from `apps/web/src/app/api/_lib/llm.ts`, which reaches Virtuals. `callBankrLLM`
+  still exists there as a compatibility shim but does not call Bankr.
 
 ---
 
@@ -94,7 +96,8 @@ mcp__plugin_bankr-agent_bankr-agent-api__bankr_agent_submit_prompt({
 
 ## x402 Payments
 
-x402 is a micropayment protocol for HTTP APIs. Blue Agent's `apps/api` exposes paid endpoints using x402.
+x402 is a micropayment protocol for HTTP APIs. Blue Agent exposes paid endpoints from `apps/web` at
+`https://blueagent.dev/api/x402/<tool-id>`, self-hosted and settled through the Coinbase CDP facilitator.
 
 ### How it works
 
@@ -120,8 +123,10 @@ Prices are in USD, paid in USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`) o
 
 ### Adding a new paid endpoint
 
-1. Create handler in `apps/api/x402/<tool-name>/index.ts`.
-2. Register in `apps/api/x402/index.ts`.
+1. Create the handler in `apps/web/src/app/api/x402/_handlers/<tool-id>.ts`.
+2. Register it in BOTH `_handlers/index.ts` (the `HANDLERS` map) and
+   `apps/web/src/lib/agent-tools.ts` (`AGENT_TOOLS`) — a tool is only live if it is in both,
+   and the two counts must stay equal.
 3. Set price in `BLUE_AGENT_PRICING` if it's a core command, or define inline for one-off tools.
 4. Use `packages/payments/src/x402.ts` helpers for payment verification.
 

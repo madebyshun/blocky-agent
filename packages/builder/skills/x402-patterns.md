@@ -224,7 +224,9 @@ Use the `nonce` from the payment authorization as an idempotency key. Same nonce
 
 ## 7. Blue Agent x402 Services
 
-Current services in `apps/api/`:
+Current services live in `apps/web/src/app/api/x402/_handlers/`. The table below is a sample —
+the live catalog is `AGENT_TOOLS` in `apps/web/src/lib/agent-tools.ts`, or
+`https://blueagent.dev/.well-known/openapi.json`:
 
 | Service | Path | Price | What it does |
 |---|---|---|---|

@@ -33,7 +33,7 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 | Layer | What it is |
 |---|---|
 | `apps/web` | Next.js 15 frontend + **the entire live x402 surface** — founder console UI, `AGENT_TOOLS` catalog, all tool compute, self-hosted x402 settled via the Coinbase CDP facilitator (payTo `0x0295…` — see Hard rule 6) |
-| `apps/api` | ☠️ **DEAD** — former Bankr x402 Cloud storefront: zero-compute proxies to `blueagent.dev`, stale since 2026-06-18. Do not mirror, deploy, or count it. Deletion proposed. |
+| ~~`apps/api`~~ ~~`apps/portal`~~ | 🗑️ **DELETED 2026-08-18.** The Bankr x402 storefront and the `api.blueagent.dev` portal. Both dead before removal — no Vercel project, no importers, `api.blueagent.dev` 404s. Do not recreate; `git log --all -- apps/api apps/portal` has the old text. |
 | `packages/bankr` | ☠️ **Legacy** — Bankr LLM client. Bankr 403-banned 2026-07-20; inference is Virtuals via `apps/web/src/app/api/_lib/llm.ts`. |
 | `packages/core` | Shared schemas, command pricing, and tool input definitions |
 | `packages/payments` | x402 payment helpers |
@@ -47,8 +47,8 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 blue-agent/
 ├── apps/
 │   ├── web/              # Next.js app + ALL live x402 tool handlers + compute
-│   └── api/              # DEAD — Bankr storefront proxies, deletion proposed
-│       └── x402/         # stale zero-compute proxies → blueagent.dev
+│   ├── docs/             # Mintlify docs source (no package.json — not an npm workspace)
+│   └── worker/           # @blueagent/worker — referenced nowhere in-repo, status unverified
 ├── packages/
 │   ├── core/             # Shared types, schemas, pricing, tool-input specs
 │   ├── bankr/            # LEGACY — Bankr LLM client (Bankr 403-banned 2026-07-20)
