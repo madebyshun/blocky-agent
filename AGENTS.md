@@ -24,7 +24,7 @@ Blue Agent is the flagship AI agent of the Base ecosystem. It is not just a chat
 
 ## This repo — Founder Console
 
-The `blue-agent` repo is the **AI-native founder console for Base builders**. It is a workflow-first product for thinking, building, auditing, shipping, and raising on Base — powered by Bankr LLM and monetized via x402 micropayments.
+The `blue-agent` repo is the **AI-native founder console for Base builders**. It is a workflow-first product for thinking, building, auditing, shipping, and raising on Base — powered by Virtuals inference and monetized via self-hosted x402 micropayments.
 
 ---
 
@@ -32,9 +32,9 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 
 | Layer | What it is |
 |---|---|
-| `apps/web` | Next.js 15 frontend — founder console UI |
-| `apps/api` | x402 paid API services (risk-gate, deep-analysis, wallet-pnl, etc.) |
-| `packages/bankr` | Bankr LLM client — wraps `https://llm.bankr.bot/v1/messages` |
+| `apps/web` | Next.js 15 frontend + **the entire live x402 surface** — founder console UI, `AGENT_TOOLS` catalog, all tool compute, self-hosted x402 settled via the Coinbase CDP facilitator (payTo `0xb058`) |
+| `apps/api` | ☠️ **DEAD** — former Bankr x402 Cloud storefront: zero-compute proxies to `blueagent.dev`, stale since 2026-06-18. Do not mirror, deploy, or count it. Deletion proposed. |
+| `packages/bankr` | ☠️ **Legacy** — Bankr LLM client. Bankr 403-banned 2026-07-20; inference is Virtuals via `apps/web/src/app/api/_lib/llm.ts`. |
 | `packages/core` | Shared schemas, command pricing, and tool input definitions |
 | `packages/payments` | x402 payment helpers |
 | Base chain | All on-chain actions are Base only (chain ID 8453) |
@@ -46,12 +46,12 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 ```
 blue-agent/
 ├── apps/
-│   ├── web/              # Next.js app — /code, /chat, /launch, /market, /rewards
-│   └── api/              # x402 paid endpoints (TypeScript)
-│       └── x402/         # Individual paid tool handlers
+│   ├── web/              # Next.js app + ALL live x402 tool handlers + compute
+│   └── api/              # DEAD — Bankr storefront proxies, deletion proposed
+│       └── x402/         # stale zero-compute proxies → blueagent.dev
 ├── packages/
 │   ├── core/             # Shared types, schemas, pricing, tool-input specs
-│   ├── bankr/            # Bankr LLM client (callBankrLLM, extractJsonObject)
+│   ├── bankr/            # LEGACY — Bankr LLM client (Bankr 403-banned 2026-07-20)
 │   └── payments/         # x402 payment flow helpers
 ├── agents/
 │   └── blue-agent/       # Agent runtime config (agent.json, tasks.json)
@@ -76,7 +76,7 @@ Five Aeon skills are bundled in `skills/` and available to any command or agent 
 | `aeon-deep-research` | `skills/aeon-deep-research.md` | "DD on X", "build me a memo", "contrarian take" |
 | `aeon-distribute-tokens` | `skills/aeon-distribute-tokens.md` | Weekly $BLUEAGENT rewards payout to leaderboard |
 
-When a user request matches a trigger phrase, load the skill file and follow its output rules. All Aeon skills are **read-to-apply** — no extra setup required except `aeon-distribute-tokens` which needs `BANKR_API_KEY` with Wallet write scope.
+When a user request matches a trigger phrase, load the skill file and follow its output rules. All Aeon skills are **read-to-apply** — no extra setup required except `aeon-distribute-tokens` which needs `BANKR_API_KEY` with Wallet write scope — ⚠️ **assume dead until tested**: that is Bankr's *Wallet* API, a different endpoint from the 403-banned `llm.bankr.bot`, but it authenticates against the same Bankr account, and no code in this repo reads `BANKR_API_KEY` any more. Verify before relying on a payout run.
 
 ---
 
@@ -86,7 +86,7 @@ When a user request matches a trigger phrase, load the skill file and follow its
 
 2. **All contract addresses must be verified on Basescan.** Never invent or guess a contract address. If an address is needed and not already in the codebase, flag it for the user to supply. Format: `0x…` — always full checksum address.
 
-3. **Use Bankr LLM for all AI calls.** Import from `packages/bankr` and call `callBankrLLM()`. Do NOT call OpenAI, Anthropic, or any other LLM API directly. The endpoint is `https://llm.bankr.bot/v1/messages`. API key is `process.env.BANKR_API_KEY`.
+3. **Use Virtuals for all AI calls.** Import `callLLM` from `apps/web/src/app/api/_lib/llm.ts`. Do NOT call OpenAI, Anthropic, Bankr, or Venice directly. The endpoint is `https://compute.virtuals.io/v1`, key `process.env.VIRTUALS_API_KEY`. **Do not write new `callBankrLLM` / `callVeniceLLM` calls** — those are compatibility shims that delegate to Virtuals, kept only so ~46 legacy importers compile; their names describe providers this repo no longer uses (Bankr 403-banned 2026-07-20, Venice removed from the fallback chain 2026-07-25). `packages/bankr` is legacy for the same reason.
 
 4. **No hallucinated addresses, ever.** If you don't have a verified address, say so. Do not fill in placeholders that look like real addresses.
 
