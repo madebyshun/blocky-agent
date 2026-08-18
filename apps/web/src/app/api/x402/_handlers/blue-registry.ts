@@ -100,7 +100,7 @@ export default async function handler(req: Request): Promise<Response> {
       how_to_call: {
         x402: "GET /api/x402/{id} for payment requirements, sign EIP-3009 USDC on Base (chain 8453), POST with X-Payment header.",
         mcp:  "Connect the Blue Agent MCP server (https://blueagent.dev/api/mcp) in Claude Desktop / Cursor and call the tool by name.",
-        docs: "https://api.blueagent.dev/docs",
+        docs: "https://blueagent.dev/.well-known/openapi.json",
       },
       submit_a_tool: "Builders: register your own x402 tool at https://blueagent.dev/hub/submit (80/20 revenue split, USDC on Base).",
     });

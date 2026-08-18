@@ -31,7 +31,7 @@ export default function BlueHubDoc() {
       <P>
         Every tool uses live data (never fabricated numbers) and is callable three ways: the{" "}
         <a href="/hub" className="text-[#4FC3F7] underline">Hub UI</a>, the{" "}
-        <a href="https://api.blueagent.dev/docs" className="text-[#4FC3F7] underline">x402 API</a>, or any MCP client.
+        <a href="/docs/api" className="text-[#4FC3F7] underline">x402 API</a>, or any MCP client.
       </P>
 
       <H2 id="consensus">3-agent consensus</H2>
@@ -68,7 +68,7 @@ export default function BlueHubDoc() {
 
       <Callout color="#fbbf24" title="Pricing & API">
         Pay-per-call in USDC on Base — no keys, no subscription. See <Link href="/docs/x402" className="text-[#fbbf24] underline">x402 Tools</Link> for
-        the core command suite, or the <a href="https://api.blueagent.dev/docs" className="text-[#fbbf24] underline">OpenAPI spec</a>.
+        the core command suite, or the <a href="https://blueagent.dev/.well-known/openapi.json" className="text-[#fbbf24] underline">OpenAPI spec</a>.
       </Callout>
 
       <PrevNext current="/docs/blue-hub" />

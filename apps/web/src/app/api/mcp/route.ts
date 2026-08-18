@@ -17,7 +17,7 @@
  *         + the 7 b20_* tools are MCP-only — pure calldata builders + on-chain reads, no x402 payment)
  *        NOTE: verified via scripts/p4-mcp-smoke.ts. Do NOT change this count
  *        without re-running the smoke — landing copy and docs quote it.
- * Docs: https://api.blueagent.dev/docs
+ * Docs: https://blueagent.dev/.well-known/openapi.json
  */
 import { NextRequest, NextResponse } from "next/server";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
@@ -1045,7 +1045,7 @@ export async function POST(req: NextRequest) {
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
       serverInfo: { name: "blue-agent", version: "1.0.0" },
-      instructions: `Blue Agent MCP server — ${TOOLS.length} tools for Base builders. Docs: https://api.blueagent.dev/docs`,
+      instructions: `Blue Agent MCP server — ${TOOLS.length} tools for Base builders. Docs: https://blueagent.dev/.well-known/openapi.json`,
     }, useSse);
   }
 
@@ -1196,7 +1196,7 @@ export async function GET(req: NextRequest) {
       },
       cursor: "https://blueagent.dev/api/mcp",
     },
-    docs: "https://api.blueagent.dev/docs",
+    docs: "https://blueagent.dev/.well-known/openapi.json",
   }, {
     headers: { "Access-Control-Allow-Origin": "*" },
   });
