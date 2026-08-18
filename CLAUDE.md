@@ -141,7 +141,7 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 | `packages/bankr` | ☠️ **Legacy** — Bankr LLM client. Bankr 403-banned 2026-07-20; inference is Virtuals via `apps/web/src/app/api/_lib/llm.ts`. |
 | `packages/core` | Shared schemas, command pricing, and tool input definitions |
 | `packages/payments` | x402 payment helpers |
-| Base chain | All on-chain actions are Base only (chain ID 8453) |
+| Chains | **Robinhood Chain (4663)** — primary, all stock-token / RWA work. **Base (8453)** — legacy, older non-RH tools. Never assume which; state it. |
 
 ---
 
@@ -186,9 +186,9 @@ When a user request matches a trigger phrase, load the skill file and follow its
 
 ## Hard rules
 
-1. **Base chain only.** Never suggest Ethereum mainnet. All contract addresses, RPC calls, and on-chain actions target Base (chain ID 8453). Mention Base explicitly in every on-chain context.
+1. **Robinhood Chain (4663) is the primary target for all stock-token / RWA actions. Base (8453) is legacy — only for older non-RH tools. Never assume Base for RH Chain work.** Never suggest Ethereum mainnet. State the chain explicitly in every on-chain context — an address, RPC call, or explorer link is meaningless without it, and RH and Base share neither.
 
-2. **All contract addresses must be verified on Basescan.** Never invent or guess a contract address. If an address is needed and not already in the codebase, flag it for the user to supply. Format: `0x…` — always full checksum address.
+2. **All contract addresses must be verified on the explorer for their own chain** — `robinhoodchain.blockscout.com` for RH Chain (4663), Basescan for Base (8453). An RH contract does not exist on Basescan, so "verified on Basescan" is not a check you can run on RWA work. Never invent or guess a contract address. If an address is needed and not already in the codebase, flag it for the user to supply. Format: `0x…` — always full checksum address.
 
 3. **Use Virtuals for all AI calls.** Import `callLLM` from `apps/web/src/app/api/_lib/llm.ts`. Do NOT call OpenAI, Anthropic, Bankr, or Venice directly. The endpoint is `https://compute.virtuals.io/v1`, key `process.env.VIRTUALS_API_KEY`. **Do not write new `callBankrLLM` / `callVeniceLLM` calls** — those are compatibility shims that delegate to Virtuals, kept only so ~46 legacy importers compile; their names describe providers this repo no longer uses (Bankr 403-banned 2026-07-20, Venice removed from the fallback chain 2026-07-25). `packages/bankr` is legacy for the same reason.
 
