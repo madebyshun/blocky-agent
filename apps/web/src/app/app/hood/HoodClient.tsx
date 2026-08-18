@@ -483,17 +483,25 @@ function MetricStrip({
         : `warming up · ${arrows.hit_rate.sample}/${arrows.hit_rate.needed}`)
     : undefined;
 
-  // BLOCKER 2 — honest denominator. Show "watched / registry_total" and
-  // annotate the drops so no one has to guess where the missing 2 went.
+  // BLOCKER 2 — honest denominator, and it is deliberately NOT registry_total.
+  // The poller can only ever watch a row that has a Chainlink feed, so
+  // `tokens_eligible` is what coverage should be read against; printing
+  // "24/96" would imply 72 misses when 61 of those have no oracle to miss.
+  // The sub-label closes the gap so the arithmetic is checkable by eye:
+  //   watched + not_enabled = eligible, and eligible + no_feed = registry_total.
+  // (`tokens_eligible` is absent on snapshots written before the registry
+  //  sweep — fall back rather than render "undefined".)
   const watchedValue = snap
-    ? `${snap.metrics.tokens_watched - snap.metrics.tokens_errored}/${snap.metrics.registry_total}`
+    ? `${snap.metrics.tokens_watched - snap.metrics.tokens_errored}/${snap.metrics.tokens_eligible ?? snap.metrics.registry_total}`
     : "…";
   const watchedSub = snap
-    ? snap.metrics.tokens_errored > 0
-      ? `${snap.metrics.tokens_errored} errored · ${snap.metrics.tokens_no_feed} no feed`
-      : snap.metrics.tokens_no_feed > 0
-        ? `${snap.metrics.tokens_no_feed} no Chainlink feed`
-        : "chainlink-backed"
+    ? [
+        snap.metrics.tokens_errored > 0 ? `${snap.metrics.tokens_errored} errored` : null,
+        snap.metrics.tokens_not_enabled ? `${snap.metrics.tokens_not_enabled} not enabled` : null,
+        snap.metrics.tokens_no_feed > 0 ? `${snap.metrics.tokens_no_feed} no feed` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "chainlink-backed"
     : undefined;
 
   const items: { label: string; value: string; sub?: string }[] = [

@@ -215,8 +215,10 @@ export async function runPollCycle(): Promise<HoodSnapshot> {
     tickers: rows,
     metrics: {
       registry_total: HOOD_REGISTRY_STATS.rwa_candidates,
+      tokens_eligible: HOOD_REGISTRY_STATS.feed_eligible,
       tokens_watched: HOOD_WATCHLIST.length,
       tokens_no_feed: HOOD_REGISTRY_STATS.no_chainlink_feed,
+      tokens_not_enabled: HOOD_REGISTRY_STATS.not_enabled,
       tokens_errored,
       tvl_scanned_usd,
       market_is_open: market.is_open,

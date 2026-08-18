@@ -105,9 +105,15 @@ export async function GET(req: Request) {
           is_open: snap.metrics.market_is_open,
           session: snap.metrics.market_session,
         },
+        // A paying agent needs to know what it is NOT being told. `watched`
+        // alone reads like full coverage; the other three make the shortfall
+        // machine-readable: watched + not_enabled = feed_eligible, and
+        // feed_eligible + no_chainlink_feed = registry_total.
         tokens: {
           registry_total: snap.metrics.registry_total,
+          feed_eligible: snap.metrics.tokens_eligible ?? null,
           watched: snap.metrics.tokens_watched,
+          not_enabled: snap.metrics.tokens_not_enabled ?? null,
           no_chainlink_feed: snap.metrics.tokens_no_feed,
           errored: snap.metrics.tokens_errored,
         },
