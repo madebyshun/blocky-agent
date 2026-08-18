@@ -1,6 +1,6 @@
 # {{PROJECT_NAME}} — Paid x402 API Template
 
-A production-ready paid API service on Base using x402 micropayments. Mirrors the pattern from Blue Agent's own API (`apps/api`).
+A production-ready paid API service on Base using x402 micropayments. Mirrors the pattern from Blue Agent's own x402 surface (`apps/web/src/app/api/x402/`).
 
 ## What it is
 
