@@ -2,7 +2,7 @@
  * x402 settlement ledger — real USDC settled on Base via the Coinbase CDP facilitator.
  *
  * Every paid tool call that clears CDP `/settle` moves USDC on-chain to the Blue
- * Hub wallet (0xb058…). We record ONLY confirmed settlements (settle.ok === true)
+ * Agent treasury (0x0295…). We record ONLY confirmed settlements (settle.ok === true)
  * here so the /stats page can show the actual amount Coinbase CDP has settled —
  * not the runs×price ESTIMATE (which counts internal-bypass / free / failed-settle
  * calls too). The number is therefore a strict, honest lower-bound of paid volume.

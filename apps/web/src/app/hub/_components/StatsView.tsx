@@ -492,7 +492,7 @@ export default function StatsView({ inShell = false }: { inShell?: boolean }) {
                       {[
                         { label: "ERC-8257 ToolRegistry",  note: "64 tools · Base",          href: "https://basescan.org/address/0x265BB2DBFC0A8165C9A1941Eb1372F349baD2cf1" },
                         { label: "agentic.market",          note: "1 service endpoint",       href: "https://agentic.market/services/blueagent-dev" },
-                        { label: "CDP Bazaar",              note: "merchant indexed",         href: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f" },
+                        { label: "CDP Bazaar",              note: "merchant indexed",         href: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=0x02950ad38ada1d599375bd447e080cd404809205" },
                         { label: "OpenAPI spec",            note: "/.well-known/openapi.json",href: "https://blueagent.dev/.well-known/openapi.json" },
                         { label: "ai-plugin.json",          note: "ChatGPT-compatible",       href: "https://blueagent.dev/.well-known/ai-plugin.json" },
                       ].map((r, i) => (

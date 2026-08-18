@@ -644,8 +644,9 @@ function ToolRunner({ tool, onBack, cached, onResult }: {
       try {
         // Known constants — no discovery call needed
         const USDC        = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
-        // Self-hosted x402: pay our Club wallet (CDP facilitator settles to it)
-        const BANKR_WALLET = "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f" as const;
+        // Self-hosted x402: pay the Blue Agent treasury (CDP facilitator settles to it).
+        // MUST match PAY_TO in api/_lib/x402-cdp.ts — this is the `to` we sign.
+        const PAY_TO_WALLET = "0x02950ad38ada1d599375bd447e080cd404809205" as const;
         const priceRaw    = tool.price.replace("$", "");
         const priceVal    = parseFloat(priceRaw) || 0;
         const priceUnits  = String(Math.round(priceVal * 1_000_000)); // USDC 6 decimals
@@ -695,7 +696,7 @@ function ToolRunner({ tool, onBack, cached, onResult }: {
           primaryType: "TransferWithAuthorization",
           message: {
             from:        address,
-            to:          BANKR_WALLET,
+            to:          PAY_TO_WALLET,
             value:       BigInt(priceUnits),
             validAfter:  BigInt(0),
             validBefore: validBefore,
@@ -714,7 +715,7 @@ function ToolRunner({ tool, onBack, cached, onResult }: {
             signature,
             authorization: {
               from:        address,
-              to:          BANKR_WALLET,
+              to:          PAY_TO_WALLET,
               value:       priceUnits,
               validAfter:  "0",
               validBefore: validBefore.toString(),

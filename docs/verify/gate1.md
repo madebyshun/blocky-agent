@@ -11,7 +11,7 @@ Status: **PARTIAL** — 1.1, 1.3a, 1.3c verified. 1.2, 1.4 require an actual on-
 - `payment-required` response header: base64 encoded payment payload present
 - Body content:
   - `x402Version: 2`
-  - `accepts[0]`: `scheme: exact`, `network: eip155:8453` (Base), `asset: USDC contract`, `amount: 50000` (= $0.05 USDC micro-units), `payTo: 0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f` (Blue Club wallet)
+  - `accepts[0]`: `scheme: exact`, `network: eip155:8453` (Base), `asset: USDC contract`, `amount: 50000` (= $0.05 USDC micro-units), `payTo: 0x02950ad38ada1d599375bd447e080cd404809205` (Blue Agent treasury)
   - `resource.url`, `description`, `serviceName: "Blue Hub"`, `tags: ["base","ai","defi","agents"]`
   - `extensions.bazaar` — input schema
   - `extensions.builder-code`
