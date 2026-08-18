@@ -154,6 +154,112 @@ export const STATIC_KNOWLEDGE_DISCLAIMER =
 
 export const VIRTUALS_DEFAULT_MODEL = "deepseek-deepseek-v4-flash";
 
+/** Virtuals OpenAI-compatible base URL — the single inference gateway. */
+export const VIRTUALS_BASE_URL = "https://compute.virtuals.io/v1";
+
+export type VirtualsProbe = {
+  /** true only when the gateway accepted our key on a real authenticated call. */
+  ok: boolean;
+  /** Health vocabulary: "ok" | "missing_key" | "error_<code>: …" | "unreachable: …" */
+  status: string;
+  /** The model this deployment is configured to call. */
+  model: string;
+  latencyMs: number | null;
+  /** When the underlying network check actually ran (not when it was served). */
+  checkedAt: string;
+  /** True when this verdict came from cache rather than a fresh call. */
+  cached: boolean;
+};
+
+// Bound the cost of a PUBLIC probe: at most one real upstream call per window
+// per warm instance, no matter how hard the endpoint is hit. Failures expire
+// faster than successes so a recovery shows up quickly instead of being pinned
+// "down" for the full success TTL.
+const PROBE_OK_TTL_MS   = 10 * 60 * 1000; // 10 min
+const PROBE_FAIL_TTL_MS = 30 * 1000;      // 30 s
+let _probeCache: { probe: VirtualsProbe; at: number } | null = null;
+
+/**
+ * Liveness probe for the Virtuals gateway — the real health of the only
+ * inference provider we use.
+ *
+ * Why a 1-token authenticated completion and NOT `GET /v1/models`: the models
+ * catalog is served to *anyone*, with no auth at all (verified 2026-08-18 —
+ * a bogus bearer and a missing header both return 200 with 63 models). So a
+ * catalog probe proves the host is up while saying nothing about whether OUR
+ * key works. That would have made `/api/health` publish a green light with a
+ * revoked `VIRTUALS_API_KEY` while every tool in the product failed — the same
+ * class of lie as the old Bankr red light, only inverted. `/v1/chat/completions`
+ * returns 403 without a valid key, so it actually discriminates.
+ *
+ * Cost is why this is cached, not why it's avoided: `max_tokens: 1` on the
+ * flash model is a fraction of a cent, but the endpoint is public and
+ * `no-store`, so an uncached probe would be an unmetered faucet on our
+ * credits. The cache bounds it to one upstream call per TTL per instance.
+ * (The *authenticated* `/api/hood/llm-health` still does a full uncached
+ * `callLLM` — that one is gated behind `X-Blue-Internal` precisely so a public
+ * caller can never trigger it.)
+ *
+ * Deliberately NOT reusing `getVirtualsCatalog()`: that helper serves a 6h
+ * stale cache on failure, which is right for validating model ids and wrong
+ * for health — it would keep reporting "ok" straight through an outage.
+ *
+ * NOTE: if this ever reports `error_403`, that is a TRUE signal about a gateway
+ * we really depend on — unlike the pre-2026-08-18 Bankr 403, which reported a
+ * provider that had already been removed from the code path.
+ */
+export async function probeVirtuals(timeoutMs = 4000): Promise<VirtualsProbe> {
+  const now = Date.now();
+  if (_probeCache) {
+    const ttl = _probeCache.probe.ok ? PROBE_OK_TTL_MS : PROBE_FAIL_TTL_MS;
+    if (now - _probeCache.at < ttl) return { ..._probeCache.probe, cached: true };
+  }
+
+  const model = process.env.VIRTUALS_MODEL ?? VIRTUALS_DEFAULT_MODEL;
+  const apiKey = process.env.VIRTUALS_API_KEY;
+  const checkedAt = new Date(now).toISOString();
+
+  const finish = (p: Omit<VirtualsProbe, "cached" | "checkedAt">): VirtualsProbe => {
+    const probe: VirtualsProbe = { ...p, checkedAt, cached: false };
+    _probeCache = { probe, at: Date.now() };
+    return probe;
+  };
+
+  if (!apiKey) return finish({ ok: false, status: "missing_key", model, latencyMs: null });
+
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${VIRTUALS_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      // Smallest call that still exercises auth + routing. Content is never read.
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const latencyMs = Date.now() - t0;
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      return finish({ ok: false, status: `error_${res.status}: ${txt.slice(0, 80)}`, model, latencyMs });
+    }
+    return finish({ ok: true, status: "ok", model, latencyMs });
+  } catch (e) {
+    return finish({
+      ok: false,
+      status: `unreachable: ${(e as Error).message.slice(0, 60)}`,
+      model,
+      latencyMs: null,
+    });
+  }
+}
+
 // ─── Virtuals catalog (kill the "id-doesn't-exist → 400" bug family) ──────
 //
 // Root cause of the same bug family, 3rd time (2026-07-24):
