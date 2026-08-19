@@ -943,6 +943,20 @@ interface ToolCallResult {
   text:     string;
   result?:  unknown;
   /**
+   * Pure-marker short-circuit. When set, this tool's card is fully self-contained
+   * client-side (it renders from `result` and the user signs in their own wallet),
+   * and the model's ONLY job was to emit a fixed one-liner. The chat route streams
+   * this string verbatim and SKIPS the Phase 2 synthesis LLM call — turning a
+   * ~48s second round-trip into ~0s (see the short-circuit in `veniceToolStream`).
+   *
+   * ONLY set this for tools whose reply never depends on fetched data: interactive
+   * "review + sign in the card" cards (prepare_*, robinhood_*, hub_b20_launch,
+   * hub_b20_manage). Do NOT set it for reader tools whose one-liner states a live
+   * value (check_memo / check_authorization / check_wallet) or tools that need real
+   * synthesis from data (hub_hood_arrow) — those must still run Phase 2.
+   */
+  staticReply?: string;
+  /**
    * Credits actually debited from the user's ledger for this tool call.
    * Read off the X-Credits-Debited response header set by the x402 route.
    * Zero for free/non-priced tools (e.g. hub_crypto_rpc) or guest sessions.
@@ -1081,6 +1095,7 @@ async function callHubTool(
     // it POSTs to /api/launch-token. We never deploy from here.
     return {
       text: "Token-launch card rendered. The card shows all details — do NOT restate them as a table and do NOT quote any gas/ETH cost (gas is sponsored). Reply with one short line: tell the user to review and hit Launch in the card.",
+      staticReply: "Your token-launch card is ready above — review the details and hit **Launch** when you're set. Gas is sponsored.",
       result: { kind: "token_launch", ...args },
     };
   }
@@ -1090,6 +1105,7 @@ async function callHubTool(
     // move funds from here.
     return {
       text: "Move-to-yield card rendered. The card shows the network, amount and Supply/Withdraw action — the user reviews and SIGNS in their own wallet (non-custodial). Do NOT restate numbers as a table, do NOT claim funds were moved, and do NOT quote an APY. Reply with one short line: tell the user to review and sign in the card.",
+      staticReply: "Your move-to-yield card is above — review the network, amount and action, then sign in your own wallet.",
       result: { kind: "yield_move", ...args },
     };
   }
@@ -1098,6 +1114,7 @@ async function callHubTool(
     // SIGNS the USDC/ETH transfer in their own wallet. We never move funds.
     return {
       text: "Send/Pay card rendered. The card shows recipient, amount and asset — the user reviews and SIGNS the transfer in their own wallet (non-custodial). Do NOT claim funds were sent and do NOT restate the recipient as if confirmed. Reply with one short line: tell the user to review the recipient + amount and sign in the card.",
+      staticReply: "Your send card is above — double-check the recipient and amount, then sign the transfer in your own wallet.",
       result: { kind: "send", ...args },
     };
   }
@@ -1113,6 +1130,7 @@ async function callHubTool(
       : typeof args.amountIn === "number" ? String(args.amountIn) : "";
     return {
       text: "Swap card rendered. The card fetches a live 0x quote and the user reviews the rate and SIGNS the swap in their own wallet (non-custodial). Do NOT quote a rate or output amount yourself, do NOT claim the swap happened. Reply with one short line: tell the user to review the quote in the card and sign.",
+      staticReply: "Your swap card is above — review the live quote, then sign the swap in your own wallet.",
       result: {
         kind: "swap",
         tokenIn, tokenOut, amountIn, network,
@@ -1126,6 +1144,7 @@ async function callHubTool(
     // entirely in the browser. No server execution, no funds moved.
     return {
       text: "B20 launch form rendered. The card is pre-filled with the token details — the user can edit fields and click Generate Scripts to get the foundry.toml, deploy script, and CLI commands. Do NOT restate the fields as a table. Reply with one short line: tell the user to review the form and click Generate Scripts.",
+      staticReply: "Your B20 launch form is above — review the fields and hit **Generate Scripts** for the foundry.toml, deploy script and CLI commands.",
       result: { kind: "b20_launch", ...args },
     };
   }
@@ -1336,6 +1355,9 @@ async function callHubTool(
       text: error
         ? `Robinhood swap card rendered with an error: ${error}. Reply with one short line telling the user; do NOT invent an address.`
         : `Robinhood swap card rendered for ${modeDesc}. The card fetches the live Uniswap V3 route and shows a slippage picker; the user's own wallet signs approve (if selling or token↔token) + swap. Do NOT restate the fields as a table, do NOT claim the swap has executed. Reply with one short line telling the user to review the amount + slippage in the card and click the swap button to sign.`,
+      staticReply: error
+        ? `⚠️ ${error}`
+        : `Your Robinhood swap card (${modeDesc}) is above — review the amount and slippage, then sign in your own wallet.`,
       result: {
         kind: "robinhood_swap",
         direction,
@@ -1374,6 +1396,9 @@ async function callHubTool(
       text: error
         ? `Robinhood send card rendered with an error: ${error}. Reply with one short line telling the user; do NOT invent an address or amount.`
         : `Robinhood send card rendered — the user reviews the recipient/amount and SIGNS the transfer in their own wallet (non-custodial). Do NOT restate the fields as a table, do NOT claim the send has happened. Reply with one short line telling the user to review and sign in the card.`,
+      staticReply: error
+        ? `⚠️ ${error}`
+        : `Your Robinhood send card is above — review the recipient and amount, then sign the transfer in your own wallet.`,
       result: {
         kind: "robinhood_send",
         fromAddress, toAddress, token: rawToken, amount, tokenSymbol,
@@ -1405,6 +1430,9 @@ async function callHubTool(
       text: error
         ? `Robinhood bridge card rendered with an error: ${error}. Reply with one short line telling the user; do NOT invent an address or amount.`
         : `Robinhood bridge card rendered — the user reviews the Relay quote in the card and SIGNS the source-chain tx in their own wallet (non-custodial). Do NOT restate the quote as a table, do NOT claim the bridge has completed. Reply with one short line telling the user to review and sign in the card; delivery is tracked on relay.link.`,
+      staticReply: error
+        ? `⚠️ ${error}`
+        : `Your Robinhood bridge card is above — review the Relay quote, then sign the source-chain tx in your own wallet. Delivery is tracked on relay.link.`,
       result: {
         kind: "robinhood_bridge",
         fromChain, toChain, fromAddress, recipient, token: rawToken, amount, tokenSymbol,
@@ -1419,6 +1447,7 @@ async function callHubTool(
     // No server execution here, no private keys, no funds moved.
     return {
       text: "B20 manage card rendered. The card loads the token's live state and shows only the actions the connected wallet is authorized for — the user signs each action in their own wallet (non-custodial). Do NOT output cast commands, private keys, or Basescan write steps, and do NOT restate the actions as a table. Reply with one short line: tell the user to use the manage card above to sign their action.",
+      staticReply: "Your B20 manage card is above — it shows only the actions your connected wallet is authorized for. Review and sign your action there.",
       result: { kind: "b20_manage", ...args },
     };
   }
@@ -1731,6 +1760,23 @@ async function veniceToolStream(
               balance: out.insufficient.balance,
             });
           }
+        }
+
+        // ─── Pure-marker short-circuit ──────────────────────────────────────
+        // If EVERY tool this turn is a self-contained interactive card
+        // (staticReply set), the Phase 2 synthesis LLM call is pure waste — the
+        // card already rendered from the tool_done.result above and the model's
+        // only remaining job was to emit a fixed one-liner. Stream those lines
+        // directly and skip the ~48s Phase 2 round-trip (Issue 2: 48s → ~1s).
+        // Any tool needing real synthesis (readers, hub_hood_arrow) leaves at
+        // least one output without staticReply, so the turn falls through below.
+        if (veniceOutputs.every(({ out }) =>
+          typeof out.staticReply === "string" && out.staticReply.length > 0)) {
+          const line = veniceOutputs.map(({ out }) => out.staticReply).join("\n\n");
+          emit({ delta: { text: line } });
+          controller.enqueue(enc.encode("data: [DONE]\n\n"));
+          controller.close();
+          return;
         }
 
         // 4. Phase 2 streaming synthesis
