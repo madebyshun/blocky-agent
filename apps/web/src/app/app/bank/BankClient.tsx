@@ -253,7 +253,7 @@ export default function BankPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: historySnapshot,
-          system: `You are BlueAgent Banking assistant. User: ${name ?? shortAddr(acct)}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · In yield: $${usd(inYield)} at ${bestApy?.toFixed(1) ?? "—"}%. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Focus on Base DeFi and banking.`,
+          system: `You are BlueAgent Wallet assistant. User: ${name ?? shortAddr(acct)}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · In yield: $${usd(inYield)} at ${bestApy?.toFixed(1) ?? "—"}%. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Focus on Base DeFi and wallet operations.`,
           model: "fast",
         }),
       });
@@ -420,7 +420,7 @@ export default function BankPage() {
         {/* 1. Header */}
         <div className="px-4 h-14 flex items-center gap-2 border-b border-[#1A1A2E] shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-[#4FC3F7] animate-pulse shrink-0" />
-          <p className="font-mono text-[11px] text-[#4FC3F7] tracking-widest">// BLUEBANK</p>
+          <p className="font-mono text-[11px] text-[#4FC3F7] tracking-widest">// WALLET</p>
         </div>
 
         {/* 2. Net Worth widget */}
@@ -937,7 +937,7 @@ export default function BankPage() {
                     <div className="rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-2.5 mt-4">
                       <p className="font-mono text-[9px] text-slate-500 leading-relaxed">
                         {parseFloat(reqAmount) > 0
-                          ? <>Payment-request QR — a payer scanning it (BlueBank <b className="text-slate-300">Scan to pay</b>, or any EIP-681 wallet) gets <b className="text-slate-300">{reqAmount} {reqAsset}</b> prefilled.</>
+                          ? <>Payment-request QR — a payer scanning it (Wallet <b className="text-slate-300">Scan to pay</b>, or any EIP-681 wallet) gets <b className="text-slate-300">{reqAmount} {reqAsset}</b> prefilled.</>
                           : <>Scan the QR with any wallet, or set an amount above to make a payment request. <b className="text-slate-300">USDC / ETH on Base</b> ({net.short}) only.</>}
                       </p>
                     </div>
@@ -961,7 +961,7 @@ export default function BankPage() {
             <div className="flex items-center gap-2">
               <img src="/logomark.svg" alt="BlueAgent" className="w-5 h-5" />
               <span className="font-mono text-[11px] text-[#4FC3F7] font-bold">BlueAgent</span>
-              <span className="font-mono text-[9px] text-slate-600">Banking mode</span>
+              <span className="font-mono text-[9px] text-slate-600">Wallet mode</span>
             </div>
             <button onClick={() => setChatOpen(false)}
               className="font-mono text-slate-500 hover:text-white text-sm w-6 h-6 flex items-center justify-center rounded">✕</button>
@@ -1167,20 +1167,20 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
     { icon: "🔑", title: "Sign in with Face ID — no seed phrase", body: "Coinbase Smart Wallet: a passkey-secured account you create in one tap. Recoverable, no 12-word phrase to lose." },
     { icon: "📈", title: `Earn ${apyText} APY on idle USDC`, body: "Live rates across blue-chip lending (Aave · Morpho). Your USDC works while you sleep — no lockups." },
     { icon: "➡", title: "Send to any wallet or name.base", body: "Pay anyone on Base by address or Basename. Instant, 24/7, no cut-off times." },
-    { icon: "🔒", title: "Non-custodial — you hold the keys", body: "You sign every transaction from your own wallet. BlueBank never holds your keys or funds." },
+    { icon: "🔒", title: "Non-custodial — you hold the keys", body: "You sign every transaction from your own wallet. BlueAgent never holds your keys or funds." },
     { icon: "🌐", title: "On-chain, withdraw anytime", body: "Your money lives on Base, not in a silo. Pull it out whenever you want, in one click." },
   ];
   return (
     <div className="min-h-full bg-[#050508] flex items-center justify-center p-5 sm:p-8">
       <div className="w-full max-w-4xl grid md:grid-cols-2 gap-6 items-center">
         <div>
-          <div className="font-mono text-[13px] tracking-widest text-[#4FC3F7] font-bold mb-3">🔵 BLUEBANK</div>
+          <div className="font-mono text-[13px] tracking-widest text-[#4FC3F7] font-bold mb-3">🔵 WALLET</div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white leading-tight mb-3">
-            Banking that you<br />actually own.
+            A wallet you<br />actually own.
           </h1>
           <p className="font-mono text-[12px] text-slate-400 leading-relaxed mb-5 max-w-md">
             Hold USDC, earn real yield, and move money on Base — <span className="text-slate-200">non-custodial</span>.
-            You hold the keys; BlueBank only prepares the transaction, you sign it.
+            You hold the keys; BlueAgent only prepares the transaction, you sign it.
           </p>
           <div className="space-y-3">
             {features.map(f => (
