@@ -15,7 +15,7 @@ import {
 } from "wagmi";
 import { formatUnits, isAddress } from "viem";
 import { ConnectButton } from "@/components/ConnectModal";
-import { TokenGlyph, ChainDot, ConfirmPreview } from "./ConfirmCardParts";
+import { TokenGlyph, ChainDot, ConfirmPreview, resolveQuantity } from "./ConfirmCardParts";
 
 // Chain metadata — hard-coded rather than reused from viem, so this card has
 // no cross-file coupling to the wagmi config. Base blue vs Robinhood green
@@ -123,10 +123,6 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   const tokenSymHint = (result.tokenSymbol || "").replace(/^\$/, "");
   const initialAmt   = result.amount != null ? String(result.amount) : "";
 
-  // Amount is display-only — the LLM's value is the source of truth (#107).
-  // No in-card edit = no drift from the chat context (Issue 1).
-  const amount = initialAmt;
-
   const [prep, setPrep]   = useState<PrepareResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [prepErr, setPrepErr] = useState("");
@@ -159,10 +155,22 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   const balance  = isNative
     ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
     : (erc20Bal != null ? Number(formatUnits(erc20Bal as bigint, decimals)) : null);
-  // Amount is display-only now (#107) so this equals the LLM's value; kept as a
-  // parse of `amount` so the overBalance guard reads the same number we render.
-  const amtNum = parseFloat(amount);
-  const overBalance = balance != null && Number.isFinite(amtNum) && amtNum > balance;
+
+  // The amount may be a quantity word ("all"/"max"/"half"/"N%") — resolve it
+  // against the SOURCE-chain balance we just read (#137/#138). Native ETH keeps
+  // a small gas reserve; ERC-20 uses the full balance (gas paid in ETH apart).
+  // While a word is still resolving (balance loading) `amount` is "" and the
+  // prepare effect WAITS instead of round-tripping Relay with a bad value.
+  const q = resolveQuantity(initialAmt, balance, { isNative });
+  // Non-symbolic → the LLM's exact string (bridge-prepare's amount regex rejects
+  // an exponential re-format like "1e-7", so never round-trip a plain number).
+  const amount = q.symbolic ? (q.value != null ? String(q.value) : "") : initialAmt;
+  // Display label for the amount-in — a plain decimal, NOT routed through
+  // fmtAmount() (whose base-units heuristic would misread a large whole number).
+  const amtLabel = q.value != null && q.value > 0
+    ? q.value.toLocaleString("en-US", { maximumFractionDigits: 6 })
+    : (q.symbolic ? "…" : "0.0");
+  const overBalance = balance != null && q.value != null && q.value > balance;
 
   // Watch the primary tx until the SOURCE-chain RPC returns a receipt — that's
   // the point where the funds are handed off to the Relay solvers and the
@@ -222,9 +230,16 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   // two Relay requests for a single click.
   useEffect(() => {
     let cancelled = false;
-    if (!fromAddress || !rawToken || !amount || fromChain === toChain) {
+    if (!fromAddress || !rawToken || fromChain === toChain) {
       setLoading(false);
-      setPrepErr(!amount ? "Enter an amount" : "Missing required field — need from/to chain, address, token, amount.");
+      setPrepErr("Missing required field — need from/to chain, address, token.");
+      return;
+    }
+    if (!amount) {
+      // A quantity word ("all"/"max"/…) still resolving against the source-chain
+      // balance — wait (keep the spinner), don't error or round-trip Relay yet.
+      setLoading(true);
+      setPrepErr("");
       return;
     }
     // Reject non-numeric / zero amounts early — no point round-tripping Relay.
@@ -369,7 +384,7 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
       {step === "filled" ? (
         <div className="rounded-lg border p-3" style={{ borderColor: "#34D39940", background: "#34D39908" }}>
           <div className="font-bold mb-1" style={{ color: "#34D399" }}>
-            Bridged {fmtAmount(initialAmt, 18)} {symbol} to {toCfg.label}
+            Bridged {amtLabel} {symbol} to {toCfg.label}
           </div>
           <div className="flex gap-2 flex-wrap mt-1">
             {txHash && (
@@ -392,7 +407,7 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
           <ConfirmPreview
             left={{
               glyph: <TokenGlyph symbol={symbol} />,
-              top: fmtAmount(initialAmt, 18) || "0.0",
+              top: amtLabel,
               bottom: `${symbol} on ${fromCfg.label}`,
             }}
             right={{
@@ -401,6 +416,13 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
               bottom: `${symbol} on ${toCfg.label}`,
             }}
           />
+
+          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to. */}
+          {q.symbolic && (
+            <div className="text-[9px] text-[#34D399] mb-2">
+              {q.value != null ? `${q.word} → ${amtLabel} ${symbol}` : "Resolving your balance…"}
+            </div>
+          )}
 
           {/* Small meta text: relayer fee · est fill · recipient · balance.
               Fee amount in the token is truthful; Relay's amountUsd is often
@@ -466,7 +488,7 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
               : wrongChain    ? `Switch to ${fromCfg.label}`
               : overBalance   ? "Insufficient balance"
               : needsApprove  ? `Approve ${symbol}`
-              : `Confirm · Bridge ${fmtAmount(initialAmt, 18)} ${symbol} → ${toCfg.label}`}
+              : `Confirm · Bridge ${amtLabel} ${symbol} → ${toCfg.label}`}
           </button>
 
           {/* Tracker link is always available once the primary tx is broadcast,

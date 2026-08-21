@@ -779,7 +779,7 @@ Default to "base" for Base-related queries.`,
         token:         { type: "string", description: "Token contract address (0x…) on Robinhood Chain, OR a ticker symbol (e.g. CASHDOG, HOODRAT). For token↔token this is tokenOut. Server resolves symbols via the live Robinhood Chain feed. Never invent addresses." },
         token_in:      { type: "string", description: "OPTIONAL. When set, switches to token↔token mode. tokenIn contract address (0x…) OR ticker symbol. Never invent addresses." },
         slippage_bps:  { type: "number", description: "OPTIONAL. Slippage tolerance in basis points (e.g. 50 = 0.5%). Default 50. Only honoured in token↔token mode; ETH↔token uses the card's built-in picker." },
-        amount:        { type: "string", description: "Human-readable amount: ETH for buy, token for sell (or tokenIn for token↔token). Optional." },
+        amount:        { type: "string", description: "Human-readable amount: ETH for buy, token for sell (or tokenIn for token↔token). Optional. May ALSO be a quantity word — 'all', 'max', 'half', or a percentage like '50%' — pass it through verbatim; the card resolves it against the user's live on-chain balance (never compute the number yourself)." },
       },
       required: ["token"],
     },
@@ -792,7 +792,7 @@ Default to "base" for Base-related queries.`,
       properties: {
         toAddress:   { type: "string", description: "Recipient 0x… address on Robinhood Chain. Never invent one." },
         token:       { type: "string", description: "ERC-20 contract address (0x…) on Robinhood Chain, OR the string 'ETH' / 'NATIVE' for native ETH. Never invent a contract address." },
-        amount:      { type: "string", description: "Human-readable amount in whole units (e.g. '25.5', '0.1'). The server converts to base units using the token's own decimals." },
+        amount:      { type: "string", description: "Human-readable amount in whole units (e.g. '25.5', '0.1'). May ALSO be a quantity word — 'all', 'max', 'half', or a percentage like '50%' — pass it through verbatim; the card resolves it against the user's live on-chain balance (never compute the number yourself). The server converts the resolved value to base units using the token's own decimals." },
         fromAddress: { type: "string", description: "OPTIONAL hint — the card uses the connected wallet by default. Do not ask the user for this; the browser already has it." },
         tokenSymbol: { type: "string", description: "Optional display hint — the card prefers the on-chain symbol read from the token contract." },
       },
@@ -808,7 +808,7 @@ Default to "base" for Base-related queries.`,
         fromChain:   { type: "string", enum: ["base", "robinhood"], description: "Source chain — the chain funds leave from." },
         toChain:     { type: "string", enum: ["base", "robinhood"], description: "Destination chain — must differ from fromChain." },
         token:       { type: "string", description: "ERC-20 contract address (0x…) on fromChain, OR the string 'ETH'/'NATIVE' for native ETH. Never invent an address." },
-        amount:      { type: "string", description: "Amount in whole units (e.g. '25.5', '0.1'). Server converts to base units using the token's decimals." },
+        amount:      { type: "string", description: "Amount in whole units (e.g. '25.5', '0.1'). May ALSO be a quantity word — 'all', 'max', 'half', or a percentage like '50%' — pass it through verbatim; the card resolves it against the user's live source-chain balance (never compute the number yourself). Server converts the resolved value to base units using the token's decimals." },
         fromAddress: { type: "string", description: "OPTIONAL hint — usually the connected wallet. The card falls back to the connected wallet." },
         recipient:   { type: "string", description: "OPTIONAL destination address. Defaults to fromAddress." },
         tokenSymbol: { type: "string", description: "OPTIONAL display hint — card prefers the on-chain symbol read from the token contract." },
@@ -1391,7 +1391,11 @@ async function callHubTool(
     else if (!/^0x[a-fA-F0-9]{40}$/.test(toAddress)) error = "Missing recipient — pass a 0x… address.";
     else if (!rawToken) error = "Missing token — pass an ERC-20 contract address or 'ETH' for native.";
     else if (!/^(0x[a-fA-F0-9]{40}|ETH|NATIVE)$/i.test(rawToken)) error = "Token must be a 0x… contract or 'ETH'/'NATIVE' — never invent an address.";
-    else if (!amount || !/^\d+(\.\d+)?$/.test(amount)) error = "Missing amount — pass a positive decimal string, e.g. '25.5'.";
+    // Accept a positive decimal OR a quantity word (all|max|half|N%). The card
+    // resolves the word against the live balance it already reads, so the number
+    // is derived from the user's own chain state, never typed — confirm-only
+    // stays intact (#138). Anything else is malformed.
+    else if (!amount || !/^(\d+(\.\d+)?|all|max|half|\d+(\.\d+)?%)$/i.test(amount)) error = "Missing amount — pass a positive decimal (e.g. '25.5') or a quantity word (all, max, half, 50%).";
     return {
       text: error
         ? `Robinhood send card rendered with an error: ${error}. Reply with one short line telling the user; do NOT invent an address or amount.`
@@ -1425,7 +1429,10 @@ async function callHubTool(
     else if (recipient && !/^0x[a-fA-F0-9]{40}$/.test(recipient)) error = "recipient must be a valid 0x… address.";
     else if (!rawToken) error = "Missing token — pass an ERC-20 contract address or 'ETH' for native.";
     else if (!/^(0x[a-fA-F0-9]{40}|ETH|NATIVE)$/i.test(rawToken)) error = "Token must be a 0x… contract or 'ETH'/'NATIVE' — never invent an address.";
-    else if (!amount || !/^\d+(\.\d+)?$/.test(amount)) error = "Missing amount — pass a positive decimal string, e.g. '25.5'.";
+    // Accept a positive decimal OR a quantity word (all|max|half|N%) — the card
+    // resolves it against the live source-chain balance (#137/#138). Confirm-only
+    // holds: the number is derived from the user's own balance, never typed.
+    else if (!amount || !/^(\d+(\.\d+)?|all|max|half|\d+(\.\d+)?%)$/i.test(amount)) error = "Missing amount — pass a positive decimal (e.g. '25.5') or a quantity word (all, max, half, 50%).";
     return {
       text: error
         ? `Robinhood bridge card rendered with an error: ${error}. Reply with one short line telling the user; do NOT invent an address or amount.`

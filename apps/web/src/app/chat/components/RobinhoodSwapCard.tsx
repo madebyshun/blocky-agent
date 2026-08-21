@@ -12,7 +12,7 @@ import { useAccount, useSwitchChain, useSendTransaction, useReadContract, useBal
 import { parseUnits, formatUnits } from "viem";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { ConnectButton } from "@/components/ConnectModal";
-import { TokenGlyph, ConfirmPreview } from "./ConfirmCardParts";
+import { TokenGlyph, ConfirmPreview, resolveQuantity, clampDecimals } from "./ConfirmCardParts";
 
 const RH_ROUTER = "0x3bb0e9E3dB75faDC5f1f8b7D7B9D761Ef15cd23D" as const;
 const RH_CHAIN_ID = 4663;
@@ -93,9 +93,10 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
   const isT2T = /^0x[a-fA-F0-9]{40}$/.test(tokenInAddr);
   const tokenInSym = (result.token_in_symbol || "").replace(/^\$/, "") || "TOKEN_IN";
 
-  // Amount is display-only — the LLM's value is the source of truth (#107).
-  // If it's wrong the user re-chats; no in-card edit = no drift (Issue 1).
-  const amount = initialAmt;
+  // Amount comes from the LLM marker and may be a quantity word ("all"/"max"/
+  // "half"/"N%") — resolved against the live balance below (once we've read it).
+  // Display-only either way: no in-card edit = no drift (Issue 1, #107).
+  //
   // Slippage is shown as small text now, not an editable control. ETH↔token
   // uses a 3% default; token→token honours the trader's persisted bps pref.
   const [slippagePct] = useState(3);
@@ -135,8 +136,16 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
       ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
       : (tokenBal != null ? Number(formatUnits(tokenBal as bigint, 18)) : null);
 
-  const amt = parseFloat(amount);
-  const overBalance = balance != null && amt > balance;
+  // Resolve a symbolic amount against the balance we just read. On a BUY the
+  // input is native ETH → keep a gas reserve; on sell / token→token the input
+  // is the ERC-20 (gas is paid in ETH, separately), so no reserve.
+  const q = resolveQuantity(initialAmt, balance, { isNative: !isT2T && direction === "buy" });
+  // Non-symbolic → keep the LLM's exact string (avoids exponential re-format of
+  // tiny numbers like "0.0000001", which parseUnits/servers reject). Symbolic →
+  // the resolved balance-fraction as a plain decimal string.
+  const amount = q.symbolic ? (q.value != null ? String(q.value) : "") : initialAmt;
+  const amt = q.value ?? NaN;
+  const overBalance = balance != null && Number.isFinite(amt) && amt > balance;
 
   // Debounced quote fetch — /api/robinhood/swap/quote for ETH↔token,
   // GeckoTerminal-only for token→token (that endpoint doesn't handle it).
@@ -226,7 +235,10 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
         } catch { return 18; }
       }
       const [inDec, outDec] = await Promise.all([readDecimals(inTokenAddr as `0x${string}` | null), readDecimals(outTokenAddr as `0x${string}` | null)]);
-      const amountInWei = parseUnits(amount, inDec);
+      // Truncate to the token's own decimals — a resolved "half"/"N%" can carry
+      // more fractional digits than the token supports, and parseUnits throws on
+      // that. Floor (never round up) so we can't exceed the real balance.
+      const amountInWei = parseUnits(clampDecimals(amount, inDec), inDec);
       // Clamp minOut precision to token's decimals (parseUnits throws on more
       // decimals than the token supports, e.g. parseUnits("0.014925", 6) is
       // fine but parseUnits("0.0000000000000000149", 6) is not).
@@ -403,6 +415,13 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
             left={{ glyph: <TokenGlyph symbol={inSym} />, top: amtLabel, bottom: inSym }}
             right={{ glyph: <TokenGlyph symbol={outSym} />, top: previewOut, bottom: outSym }}
           />
+
+          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to. */}
+          {q.symbolic && (
+            <div className="text-[9px] text-[#4FC3F7] mb-2">
+              {q.value != null ? `${q.word} → ${fmtNum(q.value)} ${inSym}` : "Resolving your balance…"}
+            </div>
+          )}
 
           {/* Small meta text: rate · route · slippage · min · balance. */}
           <div className="text-[9px] text-slate-500 mb-2 space-y-1">

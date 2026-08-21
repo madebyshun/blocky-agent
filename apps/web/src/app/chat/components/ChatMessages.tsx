@@ -18,6 +18,16 @@ const ZH_B20_PROMPTS = [
   "B20 转账策略如何工作？",
 ];
 
+// Action/marker tools whose ToolResultCard renders its OWN branded, self-headed
+// card — token glyph, a "you sign · non-custodial · <chainId>" subheader, and a
+// Confirm button. For these the generic "⚡ Blue Agent · <tool> ✓ 1.2s" chip
+// above the card just duplicates the card's own header (Issue #139), so we drop
+// the chip and render the card alone. Data/compute tools keep the chip as a
+// provenance signal (which provider ran, how long it took).
+const SELF_HEADED_MARKERS = new Set<string>([
+  "robinhood_swap", "robinhood_send", "robinhood_bridge",
+]);
+
 // ── Animated dot ──────────────────────────────────────────────────────────────
 
 function Dot({ delay }: { delay: number }) {
@@ -702,18 +712,23 @@ export default function ChatMessages() {
                               : log.tool.includes("base") || log.tool.includes("contract") || log.tool.includes("deploy")
                               ? { icon: "🔵", color: "#34D399", label: "Base MCP" }
                               : { icon: "⚡", color: "#4FC3F7", label: "Blue Agent" };
+                            // Self-headed action cards (swap/send/bridge) own
+                            // their header — suppress the redundant chip (#139).
+                            const selfHeaded = SELF_HEADED_MARKERS.has(log.tool);
                             return (
                               <React.Fragment key={j}>
-                                <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg border"
-                                  style={{ borderColor: `${prov.color}20`, background: `${prov.color}07` }}>
-                                  <span className="text-xs shrink-0">{prov.icon}</span>
-                                  <span className="font-mono text-[10px] font-semibold shrink-0" style={{ color: prov.color }}>{prov.label}</span>
-                                  <span className="font-mono text-[10px] text-slate-500 flex-1 truncate capitalize">{name}</span>
-                                  {log.status === "running"
-                                    ? <span className="font-mono text-[9px] text-slate-600 animate-pulse shrink-0">running…</span>
-                                    : <span className="font-mono text-[9px] shrink-0" style={{ color: "#34D399" }}>✓{log.ms !== undefined ? ` ${(log.ms / 1000).toFixed(1)}s` : ""}</span>
-                                  }
-                                </div>
+                                {!selfHeaded && (
+                                  <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg border"
+                                    style={{ borderColor: `${prov.color}20`, background: `${prov.color}07` }}>
+                                    <span className="text-xs shrink-0">{prov.icon}</span>
+                                    <span className="font-mono text-[10px] font-semibold shrink-0" style={{ color: prov.color }}>{prov.label}</span>
+                                    <span className="font-mono text-[10px] text-slate-500 flex-1 truncate capitalize">{name}</span>
+                                    {log.status === "running"
+                                      ? <span className="font-mono text-[9px] text-slate-600 animate-pulse shrink-0">running…</span>
+                                      : <span className="font-mono text-[9px] shrink-0" style={{ color: "#34D399" }}>✓{log.ms !== undefined ? ` ${(log.ms / 1000).toFixed(1)}s` : ""}</span>
+                                    }
+                                  </div>
+                                )}
                                 {/* Inline result card — rendered when tool has a result */}
                                 {log.status === "done" && log.result != null && (
                                   <ToolResultCard tool={log.tool} result={log.result as Record<string, unknown>} />
