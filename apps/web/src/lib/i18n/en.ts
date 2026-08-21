@@ -126,6 +126,7 @@ export const en = {
   nav: {
     chat: "Chat",
     hub: "Hub",
+    wallet: "Wallet",
     feed: "Feed",
     bank: "Bank",
     launches: "Launches",

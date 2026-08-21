@@ -123,6 +123,7 @@ export const zh: Dict = {
   nav: {
     chat: "聊天",
     hub: "中心",
+    wallet: "钱包",
     feed: "动态",
     bank: "银行",
     launches: "发行",
