@@ -1,14 +1,16 @@
 "use client";
 
 // Full live token holdings — the Bankr-style portfolio centerpiece of the Wallet
-// surface. Columns: Token · Balance · Value. Data comes from /api/wallet/holdings
-// (Moralis, spam-filtered, usd_value already priced). Value renders "—" whenever
-// Moralis has no price for a token — we NEVER fabricate a number.
+// surface. Columns: Token · Balance · Value · (Sell). Data comes from
+// /api/wallet/holdings (Moralis, spam-filtered, usd_value already priced). Value
+// renders "—" whenever Moralis has no price for a token — we NEVER fabricate one.
 //
 // Chain: Base mainnet by default (matches the connected wallet), or Base Sepolia
-// when the wallet is on 84532. Robinhood-Chain tokens, a PnL column, and inline
-// quick-sell / swap actions are deliberate follow-ups (Moralis is Base-only, and
-// PnL needs a real cost-basis source).
+// when the wallet is on 84532. The per-row quick-sell (25/50/100%) only shows on
+// Base mainnet (0x has no testnet liquidity) — it just pre-fills + opens the
+// Convert panel via onQuickSell; the user still reviews and signs there.
+// Robinhood-Chain tokens and a PnL column are deliberate follow-ups (Moralis is
+// Base-only, and PnL needs a real cost-basis source).
 
 import { useEffect, useState } from "react";
 import { useChainId } from "wagmi";
@@ -40,7 +42,27 @@ function fmtAmount(s: string): string {
   return s;
 }
 
-export default function TokenTable({ address }: { address?: `0x${string}` }) {
+// Compact per-row quick-sell: 25/50/100% → opens the Convert panel pre-filled.
+// A native <select> so it never nests inside the row's explorer <a>.
+function SellControl({ h, onQuickSell }: { h: WalletHolding; onQuickSell: (h: WalletHolding, pct: number) => void }) {
+  return (
+    <select
+      aria-label={`Sell ${h.symbol}`}
+      defaultValue=""
+      onChange={e => { const p = Number(e.target.value); e.currentTarget.selectedIndex = 0; if (p > 0) onQuickSell(h, p); }}
+      className="justify-self-end bg-[#050508] border border-[#1A1A2E] rounded-lg pl-1.5 pr-0.5 py-1 font-mono text-[9px] text-[#4FC3F7] outline-none cursor-pointer hover:border-[#4FC3F7]/40">
+      <option value="">Sell ▾</option>
+      <option value="25">25%</option>
+      <option value="50">50%</option>
+      <option value="100">100%</option>
+    </select>
+  );
+}
+
+export default function TokenTable({ address, onQuickSell }: {
+  address?: `0x${string}`;
+  onQuickSell?: (h: WalletHolding, pct: number) => void;
+}) {
   const chainId = useChainId();
   const [data, setData] = useState<HoldingsResp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -48,6 +70,9 @@ export default function TokenTable({ address }: { address?: `0x${string}` }) {
   // Base mainnet portfolio unless the wallet is explicitly on Base Sepolia.
   const network    = chainId === 84532 ? "baseSepolia" : "base";
   const chainLabel = network === "baseSepolia" ? "Base Sepolia" : "Base";
+  // Quick-sell only on Base mainnet (0x has no testnet liquidity).
+  const showSell = !!onQuickSell && network === "base";
+  const gridCls  = showSell ? "grid-cols-[1fr_auto_4.5rem_auto]" : "grid-cols-[1fr_auto_5rem]";
 
   useEffect(() => {
     if (!address) { setData(null); return; }
@@ -82,10 +107,11 @@ export default function TokenTable({ address }: { address?: `0x${string}` }) {
       </div>
 
       {/* Column head */}
-      <div className="grid grid-cols-[1fr_auto_5rem] gap-3 px-1 pb-1.5 font-mono text-[9px] text-slate-600 border-b border-[#1A1A2E]">
+      <div className={`grid ${gridCls} gap-3 px-1 pb-1.5 font-mono text-[9px] text-slate-600 border-b border-[#1A1A2E]`}>
         <span>Token</span>
         <span className="text-right">Balance</span>
         <span className="text-right">Value</span>
+        {showSell && <span className="text-right">Sell</span>}
       </div>
 
       {/* Rows */}
@@ -96,12 +122,12 @@ export default function TokenTable({ address }: { address?: `0x${string}` }) {
       ) : (
         <div className="divide-y divide-[#1A1A2E]">
           {holdings.map(h => (
-            <a key={h.address || h.symbol}
-              href={`${explorer}/token/${h.address}?a=${address}`}
-              target="_blank" rel="noopener noreferrer"
-              className="grid grid-cols-[1fr_auto_5rem] gap-3 items-center px-1 py-2 hover:bg-[#0d0d12] transition-colors">
-              {/* Token */}
-              <div className="flex items-center gap-2 min-w-0">
+            <div key={h.address || h.symbol}
+              className={`grid ${gridCls} gap-3 items-center px-1 py-2 hover:bg-[#0d0d12] transition-colors`}>
+              {/* Token — links to explorer */}
+              <a href={`${explorer}/token/${h.address}?a=${address}`}
+                target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-2 min-w-0">
                 {h.logo
                   ? // eslint-disable-next-line @next/next/no-img-element
                     <img src={h.logo} alt="" className="w-6 h-6 rounded-full shrink-0"
@@ -118,13 +144,15 @@ export default function TokenTable({ address }: { address?: `0x${string}` }) {
                   </div>
                   {h.name && <div className="font-mono text-[9px] text-slate-600 truncate">{h.name}</div>}
                 </div>
-              </div>
+              </a>
               {/* Balance */}
               <span className="font-mono text-[10px] text-slate-300 text-right tabular-nums">{fmtAmount(h.amount)}</span>
               {/* Value */}
-              <span className="font-mono text-[10px] text-right tabular-nums w-20"
+              <span className="font-mono text-[10px] text-right tabular-nums"
                 style={{ color: h.usdValue != null ? "#34D399" : "#64748b" }}>{fmtUsd(h.usdValue)}</span>
-            </a>
+              {/* Sell — pre-fills the Convert panel; user reviews + signs there */}
+              {showSell && <SellControl h={h} onQuickSell={onQuickSell!} />}
+            </div>
           ))}
         </div>
       )}
