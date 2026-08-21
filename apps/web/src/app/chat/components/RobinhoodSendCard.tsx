@@ -13,6 +13,7 @@ import {
 } from "wagmi";
 import { formatUnits, isAddress } from "viem";
 import { ConnectButton } from "@/components/ConnectModal";
+import { TokenGlyph, AddrGlyph, ConfirmPreview } from "./ConfirmCardParts";
 
 const RH_CHAIN_ID = 4663;
 const RH_EXPLORER = "https://robinhoodchain.blockscout.com";
@@ -223,12 +224,15 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
   return (
     <div className="rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 font-mono text-[11px] text-slate-300 max-w-md">
       <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-white text-[12px] font-bold">
-            Send {fmtAmount(initialAmt)} {symbol} on Robinhood Chain
-          </div>
-          <div className="text-slate-600 text-[10px]">
-            direct transfer · you sign · non-custodial · chainId 4663
+        <div className="flex items-center gap-2 min-w-0">
+          <TokenGlyph symbol={symbol} />
+          <div className="min-w-0">
+            <div className="text-white text-[12px] font-bold truncate">
+              Send {fmtAmount(initialAmt)} {symbol}
+            </div>
+            <div className="text-slate-600 text-[10px]">
+              Robinhood Chain · you sign · non-custodial · 4663
+            </div>
           </div>
         </div>
         {!isConnected && <ConnectButton label="Connect" />}
@@ -248,35 +252,27 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
         </div>
       ) : (
         <>
-          {/* Preview: from → to */}
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[9px] text-slate-600">FROM</span>
-              {balance != null && (
-                <span className="text-[9px] text-slate-600">
-                  Bal {balance.toFixed(5)} {symbol}
-                </span>
-              )}
-            </div>
-            <div className="text-[12px] text-white truncate">{fromAddress ? shortAddr(fromAddress) : "—"}</div>
-          </div>
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="text-[9px] text-slate-600 mb-1">TO</div>
-            <div className="text-[12px] text-white truncate">{shortTo || "—"}</div>
-          </div>
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="text-[9px] text-slate-600 mb-1">AMOUNT</div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 text-[15px] text-white w-0 truncate">
-                {fmtAmount(initialAmt) || <span className="text-slate-700">0.0</span>}
-              </div>
-              <span className="text-[10px] text-slate-200 px-2 py-1 border border-[#1A1A2E] rounded-lg">{symbol}</span>
-            </div>
-            {overBalance && (
-              <div className="text-[9px] text-red-500 mt-1">Exceeds your {symbol} balance</div>
-            )}
+          {/* Confirm-only preview: amount → recipient. No editable field (#107). */}
+          <ConfirmPreview
+            left={{
+              glyph: <TokenGlyph symbol={symbol} />,
+              top: fmtAmount(initialAmt) || "0.0",
+              bottom: symbol,
+            }}
+            right={{
+              glyph: <AddrGlyph address={toAddress} />,
+              top: shortTo || "—",
+              bottom: "recipient",
+            }}
+          />
+
+          {/* Small meta: sender + balance. */}
+          <div className="text-[9px] text-slate-500 mb-2 flex items-center justify-between gap-2">
+            <span className="truncate">From {fromAddress ? shortAddr(fromAddress) : "—"}</span>
+            {balance != null && <span className="shrink-0">Bal {balance.toFixed(5)} {symbol}</span>}
           </div>
 
+          {overBalance && <p className="text-[10px] text-red-500 mb-2">Exceeds your {symbol} balance</p>}
           {loading && <p className="text-[9px] text-slate-600 mb-2">Preparing transaction…</p>}
           {!loading && prepErr && <p className="text-[10px] text-amber-400 mb-2">{prepErr}</p>}
           {step === "broadcasting" && (
@@ -297,7 +293,7 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
                     ? (step === "signing" ? "Confirm in wallet…" : "Broadcasting…")
                     : overBalance
                       ? "Insufficient balance"
-                      : `Sign & Send ${fmtAmount(initialAmt)} ${symbol}`}
+                      : `Confirm · Send ${fmtAmount(initialAmt)} ${symbol}`}
           </button>
         </>
       )}

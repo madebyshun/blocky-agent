@@ -1,0 +1,108 @@
+"use client";
+// Shared presentational parts for the confirm-only action cards (send / swap /
+// bridge). #107: these cards are CONFIRM-ONLY — the amount and route come from
+// the LLM's tool call and are display-only. No editable fields = no drift from
+// the chat context (Issue 1). If a value is wrong the user re-chats.
+//
+// Purely presentational — no hooks, no wallet coupling. Each card keeps its own
+// tx state machine and passes already-computed strings/nodes into these parts,
+// so "design once, apply to all 3" holds without abstracting the money path.
+
+import React from "react";
+
+// Recognisable accents for well-known tickers; everything else hashes into a
+// stable palette so the same symbol always gets the same colour.
+const KNOWN: Record<string, string> = {
+  ETH: "#627EEA", WETH: "#627EEA",
+  USDC: "#2775CA", USDG: "#2775CA", USDT: "#26A17B", DAI: "#F5AC37",
+  BLUEAGENT: "#4FC3F7", VIRTUAL: "#4FC3F7",
+};
+const PALETTE = [
+  "#4FC3F7", "#34D399", "#F59E0B", "#A78BFA",
+  "#F472B6", "#22C55E", "#E879F9", "#60A5FA",
+];
+
+/** Stable accent colour for a token symbol (or any short string). */
+export function symbolColor(sym: string): string {
+  const s = (sym || "").replace(/^\$/, "").toUpperCase();
+  if (KNOWN[s]) return KNOWN[s];
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+}
+
+// A couple of tokens read better as a glyph than as two letters.
+const GLYPH: Record<string, string> = { ETH: "Ξ", WETH: "Ξ" };
+
+/**
+ * Monogram token chip. An honest placeholder — no fake logo CDN, so we never
+ * imply a verified logo we don't have. First 1-2 chars of the ticker on a
+ * stable-coloured circle (Ξ for ETH/WETH).
+ */
+export function TokenGlyph({ symbol, size = 22 }: { symbol: string; size?: number }) {
+  const s = (symbol || "?").replace(/^\$/, "").toUpperCase();
+  const label = GLYPH[s] ?? s.slice(0, 2);
+  return (
+    <span
+      className="inline-flex items-center justify-center rounded-full font-bold text-black shrink-0"
+      style={{ width: size, height: size, background: symbolColor(s), fontSize: Math.round(size * 0.42) }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Subtle gradient avatar derived from an address — for the "recipient" side. */
+export function AddrGlyph({ address, size = 22 }: { address: string; size?: number }) {
+  const seed = (address || "0x000000").slice(2, 8);
+  return (
+    <span
+      className="inline-block rounded-full shrink-0"
+      style={{ width: size, height: size, background: `linear-gradient(135deg, ${symbolColor(seed)}, #0a0a0f)` }}
+    />
+  );
+}
+
+/** Small filled dot in a chain accent — the bridge shows chains, not tokens. */
+export function ChainDot({ color }: { color: string }) {
+  return <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />;
+}
+
+export interface PreviewSide {
+  /** Leading avatar/glyph (TokenGlyph / AddrGlyph). */
+  glyph?: React.ReactNode;
+  /** Big line — the amount, or an address for a transfer. */
+  top: React.ReactNode;
+  /** Small line under it — symbol / chain / "recipient". */
+  bottom?: React.ReactNode;
+}
+
+/**
+ * The compact "IN → OUT" confirm preview line shared by all three cards.
+ * Left = what you pay, right = what you get (or the recipient). Display-only.
+ */
+export function ConfirmPreview({
+  left, right, arrow = "→",
+}: { left: PreviewSide; right: PreviewSide; arrow?: string }) {
+  return (
+    <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-3 mb-2 flex items-center gap-2">
+      <PreviewCol side={left} align="left" />
+      <span className="text-slate-500 text-[13px] px-0.5 shrink-0">{arrow}</span>
+      <PreviewCol side={right} align="right" />
+    </div>
+  );
+}
+
+function PreviewCol({ side, align }: { side: PreviewSide; align: "left" | "right" }) {
+  const right = align === "right";
+  return (
+    <div className={`flex items-center gap-1.5 min-w-0 flex-1 ${right ? "justify-end" : ""}`}>
+      {!right && side.glyph}
+      <div className={`min-w-0 ${right ? "text-right" : ""}`}>
+        <div className="text-[13px] text-white truncate">{side.top}</div>
+        {side.bottom != null && <div className="text-[9px] text-slate-500 truncate">{side.bottom}</div>}
+      </div>
+      {right && side.glyph}
+    </div>
+  );
+}
