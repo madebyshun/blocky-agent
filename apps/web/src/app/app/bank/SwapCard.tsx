@@ -20,6 +20,12 @@ const TOKENS: Token[] = [
   { sym: "WETH",  addr: "0x4200000000000000000000000000000000000006", decimals: 18 },
   { sym: "cbBTC", addr: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", decimals: 8 },
 ];
+const USDC = TOKENS[1];
+
+// A quick-sell pre-fill pushed in from the portfolio token table: an arbitrary
+// sell token (beyond the 4 majors) + a concrete amount. `nonce` bumps on every
+// click so re-selling the same token re-applies.
+export type SellPreset = { addr: string; sym: string; decimals: number; amount: string; nonce: number };
 
 const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 6 });
 
@@ -30,7 +36,7 @@ type Quote = {
   issues?: { allowance?: { spender: `0x${string}` } | null };
 };
 
-export default function SwapCard({ account }: { account?: `0x${string}` }) {
+export default function SwapCard({ account, preset }: { account?: `0x${string}`; preset?: SellPreset | null }) {
   const { isConnected } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
@@ -76,6 +82,19 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
     return () => clearTimeout(t);
   }, [sellBase, sell.addr, buy.addr, account]);
 
+  // Apply a quick-sell pre-fill from the token table: set the (possibly
+  // non-major) sell token + amount and default the buy side to USDC — but sell
+  // *to ETH* when the token being sold IS USDC. Keyed on nonce so repeat clicks
+  // re-fill. The user still reviews and signs via the normal Convert button.
+  useEffect(() => {
+    if (!preset) return;
+    setSell({ sym: preset.sym, addr: preset.addr, decimals: preset.decimals });
+    setBuy(preset.addr.toLowerCase() === USDC.addr.toLowerCase() ? TOKENS[0] : USDC);
+    setAmount(preset.amount);
+    setQuote(null); setStep("idle"); setErr("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.nonce]);
+
   const buyAmount = quote?.buyAmount ? Number(formatUnits(BigInt(quote.buyAmount), buy.decimals)) : null;
   const minBuy = quote?.minBuyAmount ? Number(formatUnits(BigInt(quote.minBuyAmount), buy.decimals)) : null;
   const rate = buyAmount != null && amt > 0 ? buyAmount / amt : null;
@@ -85,12 +104,16 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
     if (balance == null) return;
     setAmount(String(sell.native ? Math.max(0, balance - 0.00005) : balance));
   }
-  function pick(side: "sell" | "buy", sym: string) {
-    const tok = TOKENS.find(t => t.sym === sym)!;
+  function pick(side: "sell" | "buy", addr: string) {
+    const tok = [sell, buy, ...TOKENS].find(t => t.addr.toLowerCase() === addr.toLowerCase());
+    if (!tok) return;
     if (side === "sell") { if (tok.addr === buy.addr) setBuy(sell); setSell(tok); }
     else { if (tok.addr === sell.addr) setSell(buy); setBuy(tok); }
     setAmount(""); setQuote(null);
   }
+  // Sell-side options include an injected non-major token so it renders + stays selectable.
+  const inMajors = (t: Token) => TOKENS.some(x => x.addr.toLowerCase() === t.addr.toLowerCase());
+  const sellOptions = inMajors(sell) ? TOKENS : [sell, ...TOKENS];
 
   const canSwap = !!account && !!quote?.transaction && amt > 0 && !overBalance && !loading;
   const busy = step === "approving" || step === "swapping";
@@ -141,10 +164,10 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
     );
   }
 
-  const TokenSelect = ({ side, value }: { side: "sell" | "buy"; value: Token }) => (
-    <select value={value.sym} onChange={e => pick(side, e.target.value)}
+  const TokenSelect = ({ side, value, options }: { side: "sell" | "buy"; value: Token; options: Token[] }) => (
+    <select value={value.addr} onChange={e => pick(side, e.target.value)}
       className="bg-[#050508] border border-[#1A1A2E] rounded-lg px-2 py-1.5 font-mono text-[11px] text-slate-200 outline-none">
-      {TOKENS.map(t => <option key={t.sym} value={t.sym}>{t.sym}</option>)}
+      {options.map(t => <option key={t.addr} value={t.addr}>{t.sym}</option>)}
     </select>
   );
 
@@ -167,7 +190,7 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
         <div className="flex items-center gap-2">
           <input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.0"
             className="flex-1 bg-transparent font-mono text-[16px] text-white outline-none placeholder:text-slate-700 w-0" />
-          <TokenSelect side="sell" value={sell} />
+          <TokenSelect side="sell" value={sell} options={sellOptions} />
         </div>
         {overBalance && <div className="font-mono text-[9px] text-red-500 mt-1">Exceeds your {sell.sym} balance</div>}
       </div>
@@ -184,7 +207,7 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
           <div className="flex-1 font-mono text-[16px] text-white w-0 truncate">
             {loading ? <span className="text-slate-600">…</span> : buyAmount != null ? fmt(buyAmount) : <span className="text-slate-700">0.0</span>}
           </div>
-          <TokenSelect side="buy" value={buy} />
+          <TokenSelect side="buy" value={buy} options={TOKENS} />
         </div>
       </div>
 
