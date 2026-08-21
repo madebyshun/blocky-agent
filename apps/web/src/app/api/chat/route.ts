@@ -1326,7 +1326,14 @@ async function callHubTool(
     if (!rawToken) {
       error = "Need a token — pass an address or a ticker symbol.";
     } else {
-      const out = await resolveRHToken(rawToken);
+      // Resolve tokenOut and (when present) tokenIn CONCURRENTLY — they're
+      // independent GeckoTerminal lookups, so a token↔token swap (e.g. USAR→USDG)
+      // no longer pays two sequential round-trips. Error precedence is unchanged:
+      // tokenOut's error still wins and short-circuits tokenIn.
+      const [out, inTok] = await Promise.all([
+        resolveRHToken(rawToken),
+        rawTokenIn ? resolveRHToken(rawTokenIn) : Promise.resolve(null),
+      ]);
       if (out.error) {
         error = out.error;
       } else {
@@ -1334,16 +1341,15 @@ async function callHubTool(
         token_symbol = out.symbol;
         token_name = out.name;
         if (out.note) note = out.note;
-      }
-    }
-    if (!error && rawTokenIn) {
-      const inTok = await resolveRHToken(rawTokenIn);
-      if (inTok.error) {
-        error = inTok.error;
-      } else {
-        token_in_address = inTok.address;
-        token_in_symbol = inTok.symbol;
-        if (inTok.note) note = note ? `${note}. ${inTok.note}` : inTok.note;
+        if (inTok) {
+          if (inTok.error) {
+            error = inTok.error;
+          } else {
+            token_in_address = inTok.address;
+            token_in_symbol = inTok.symbol;
+            if (inTok.note) note = note ? `${note}. ${inTok.note}` : inTok.note;
+          }
+        }
       }
     }
 
@@ -1499,9 +1505,18 @@ async function callHubTool(
   if (toolName === "check_wallet") {
     // Server-executed read of the CONNECTED wallet's FULL token list (Moralis,
     // RPC fallback). No payment, no signing. Honest: only tokens held (balance>0).
+    //
+    // Speed: check_wallet sets a `staticReply` on EVERY branch so the pure-marker
+    // short-circuit (see veniceToolStream) skips the ~3-4s Phase 2 synthesis. The
+    // WalletCard already shows the full grouped list, so the model re-describing
+    // it under the card was redundant latency. staticReply is honest — every
+    // number in it comes from the real fetch, never fabricated. `text` is kept as
+    // a fallback for the rare case check_wallet runs ALONGSIDE a non-marker tool
+    // (then .every() is false, Phase 2 runs, and it reads `text`).
     if (!userAddress || !/^0x[a-fA-F0-9]{40}$/.test(userAddress)) {
       return {
         text: "No wallet is connected. Reply with one short line asking the user to connect their wallet first — do NOT invent any balance.",
+        staticReply: "No wallet is connected — connect one to see your holdings.",
         result: { kind: "wallet_result", connected: false, address: "", network: "mainnet", holdings: [] },
       };
     }
@@ -1522,8 +1537,16 @@ async function callHubTool(
       : totalHoldings === 0
         ? "The connected wallet holds no tokens on Base or Robinhood Chain. Reply with one short line saying so — do NOT invent any token."
         : `The wallet holds ${r.holdings.length} token(s) on Base + ${rhHoldings.length} on Robinhood: ${combinedTop}${totalHoldings > 5 ? ", …" : ""}. The result card lists them all (small dust <$1 hidden by default). Reply with ONE short line referencing the holdings across both chains — never invent tokens or numbers and never add a USD total of your own.`;
+    // Fixed one-liner shown under the card (skips Phase 2). Counts are the real
+    // per-chain held-token counts; the card is the source of truth for the list.
+    const staticReply = r.error && totalHoldings === 0
+      ? "Couldn't read the wallet right now — please try again in a moment."
+      : totalHoldings === 0
+        ? "This wallet holds no tokens on Base or Robinhood Chain."
+        : `Holdings above: ${r.holdings.length} on Base, ${rhHoldings.length} on Robinhood Chain.`;
     return {
       text,
+      staticReply,
       result: {
         kind: "wallet_result", connected: true,
         address: r.address, network: r.network, explorer: r.explorer, addressUrl: r.addressUrl,
@@ -1616,6 +1639,16 @@ interface VeniceToolCall {
 }
 interface VenicePhase1Resp {
   choices: Array<{ message: { tool_calls?: VeniceToolCall[] }; finish_reason: string }>;
+}
+
+// Synthesize a tool_call for a server-DECIDED (forced) tool, so we can run it
+// WITHOUT a Phase 1 LLM round-trip. Only valid for tools whose arguments are
+// fully known server-side — today that's `check_wallet`, which auto-uses the
+// connected wallet and takes no LLM-authored args. When `wantsWalletBalance`
+// already picked the tool, forcing the model to echo it back was a wasted
+// ~4-5s call; this replaces it with a zero-latency local stub.
+function forcedToolCall(name: string): VeniceToolCall {
+  return { id: `forced_${name}`, type: "function", function: { name, arguments: "{}" } };
 }
 
 async function callVenicePhase1(
@@ -2379,8 +2412,13 @@ export async function POST(req: NextRequest) {
         address && /^0x[a-fA-F0-9]{40}$/.test(address) && wantsWalletBalance(cleanMessages)
           ? "check_wallet"
           : undefined;
-      const phase1    = await callVenicePhase1(apiKey, modelId, openaiMsgs, maxTok, autoSearch, forceTool);
-      const toolCalls = phase1?.choices?.[0]?.message?.tool_calls;
+      // Forced tool → skip Phase 1 entirely: we already decided the tool and it
+      // takes no LLM-authored args, so a full detection round-trip would only
+      // echo back what we're forcing. Synthesize the tool_call locally instead.
+      const toolCalls = forceTool
+        ? [forcedToolCall(forceTool)]
+        : (await callVenicePhase1(apiKey, modelId, openaiMsgs, maxTok, autoSearch))
+            ?.choices?.[0]?.message?.tool_calls;
       if (toolCalls?.length) {
         return veniceToolStream(apiKey, modelId, openaiMsgs, toolCalls, maxTok, autoSearch, address);
       }
@@ -2453,10 +2491,13 @@ export async function POST(req: NextRequest) {
       address && /^0x[a-fA-F0-9]{40}$/.test(address) && wantsWalletBalance(cleanMessages)
         ? "check_wallet"
         : undefined;
-    const phase1 = await callVenicePhase1(
-      virtualsKey, virtualsModel, openaiMsgs, virtualsMax, virtualsAutoSearch, forceTool, cfg,
-    );
-    const toolCalls = phase1?.choices?.[0]?.message?.tool_calls;
+    // Forced tool → synthesize the tool_call and skip the Phase 1 LLM round-trip
+    // (see the Venice branch above for the full rationale).
+    const toolCalls = forceTool
+      ? [forcedToolCall(forceTool)]
+      : (await callVenicePhase1(
+          virtualsKey, virtualsModel, openaiMsgs, virtualsMax, virtualsAutoSearch, undefined, cfg,
+        ))?.choices?.[0]?.message?.tool_calls;
     if (toolCalls?.length) {
       return veniceToolStream(
         virtualsKey, virtualsModel, openaiMsgs, toolCalls, virtualsMax, virtualsAutoSearch, address, cfg,
