@@ -18,12 +18,13 @@ import {
 import { MoveToYieldCard, SendCard } from "@/app/chat/components/ToolCards";
 import { useBasename, shortAddr } from "@/lib/useBasename";
 import QrScanner from "./QrScanner";
-import SwapCard from "./SwapCard";
+import SwapCard, { type SellPreset } from "./SwapCard";
 import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payment-qr";
 import OrdersPanel from "./OrdersPanel";
 import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
 import TokenTable from "./TokenTable";
+import type { WalletHolding } from "@/lib/wallet/holdings";
 import { buildWalletState } from "@/lib/state";
 
 const usd = (n: number | null | undefined) =>
@@ -67,6 +68,21 @@ export default function BankPage() {
   const openAction = (p: Panel) => {
     if (p === "send") { setScanPrefill(null); setScanKey(k => k + 1); }
     setPanel(p); setActionOpen(true);
+  };
+
+  // Quick-sell from the token table → pre-fill + open the Convert panel. Amount
+  // is computed from the exact base-unit balance (Moralis `raw`), leaving a small
+  // gas buffer when selling 100% of native ETH. The user reviews and signs in the
+  // Convert card — this only pre-fills it, it never auto-executes.
+  const [sellPreset, setSellPreset] = useState<SellPreset | null>(null);
+  const quickSell = (h: WalletHolding, pct: number) => {
+    try {
+      let sellRaw = (BigInt(h.raw) * BigInt(pct)) / 100n;
+      if (h.isNative && pct === 100) { const buf = 50_000_000_000_000n; sellRaw = sellRaw > buf ? sellRaw - buf : 0n; } // ~0.00005 ETH
+      if (sellRaw <= 0n) return;
+      setSellPreset({ addr: h.address, sym: h.symbol, decimals: h.decimals, amount: formatUnits(sellRaw, h.decimals), nonce: Date.now() });
+      openAction("convert");
+    } catch { /* malformed raw — ignore */ }
   };
 
   // Scan-to-pay
@@ -815,7 +831,7 @@ export default function BankPage() {
           </div>
 
           {/* ── Section 2.5: Token holdings — full live portfolio ──────────── */}
-          <TokenTable address={acct} />
+          <TokenTable address={acct} onQuickSell={quickSell} />
 
           {/* ── Section 3: Transaction History ─────────────────────────────── */}
           <TransactionHistory
@@ -874,7 +890,7 @@ export default function BankPage() {
                   </div>
                 )}
                 {panel === "earn" && <MoveToYieldCard result={{ network }} account={acct} />}
-                {panel === "convert" && <SwapCard account={acct} />}
+                {panel === "convert" && <SwapCard account={acct} preset={sellPreset} />}
                 {panel === "orders" && <OrdersPanel />}
                 {panel === "send" && (
                   <div>
