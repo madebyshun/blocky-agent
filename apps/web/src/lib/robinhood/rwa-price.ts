@@ -10,8 +10,38 @@
 // Never let an LLM invent a stock price. If both sources fail, return null +
 // note so the tool can honestly say "insufficient data".
 
-import { createPublicClient, http, type Address } from "viem";
+import { createPublicClient, http, type Address, type Chain } from "viem";
 import { robinhoodMainnet } from "@/lib/robinhood/chains";
+
+/**
+ * PriceSource — the per-chain adapter that makes every read in this file
+ * chain-agnostic. This module used to be hardcoded to Robinhood Chain in FOUR
+ * places: the RPC chain, the GeckoTerminal tokens URL, the GT token-id prefix,
+ * and the GT pool permalink. Three of those four are the SAME GeckoTerminal
+ * network slug ("robinhood") appearing in three URL/id contexts — they must
+ * always agree (you cannot read the tokens API on `base` but build a pool link
+ * on `robinhood`), so they collapse into a single `gtNetwork` field. Keeping
+ * them as one field structurally prevents the misconfiguration where the three
+ * drift apart — which would be a silent wrong-chain price bug.
+ *
+ *   RH   → { chain: robinhoodMainnet, gtNetwork: "robinhood" }
+ *   Base → { chain: base,             gtNetwork: "base" }   (added in Phase 2)
+ *
+ * Every exported reader takes `source` as a trailing optional arg defaulting to
+ * `RH_PRICE_SOURCE`, so all pre-existing RH callers are byte-identical.
+ */
+export interface PriceSource {
+  /** viem chain used for on-chain reads (Chainlink feed, ERC-20 metadata). */
+  chain: Chain;
+  /** GeckoTerminal network slug — used in the tokens URL, the `<net>_<addr>`
+   *  token-id prefix GT prepends, and the pool permalink. */
+  gtNetwork: string;
+}
+
+export const RH_PRICE_SOURCE: PriceSource = {
+  chain: robinhoodMainnet,
+  gtNetwork: "robinhood",
+};
 
 const AGGREGATOR_V3_ABI = [
   {
@@ -31,11 +61,16 @@ const AGGREGATOR_V3_ABI = [
   },
 ] as const;
 
-let _client: ReturnType<typeof createPublicClient> | null = null;
-function rpc() {
-  if (_client) return _client;
-  _client = createPublicClient({ chain: robinhoodMainnet, transport: http() });
-  return _client;
+// One cached viem client PER chain id. RH callers still resolve to a single
+// shared client (identical to the pre-multichain behaviour); a Base source gets
+// its own client keyed by chain id, so the two never cross-talk.
+const _clients = new Map<number, ReturnType<typeof createPublicClient>>();
+function rpc(source: PriceSource = RH_PRICE_SOURCE) {
+  const existing = _clients.get(source.chain.id);
+  if (existing) return existing;
+  const client = createPublicClient({ chain: source.chain, transport: http() });
+  _clients.set(source.chain.id, client);
+  return client;
 }
 
 export type OnchainQuote = {
@@ -50,11 +85,15 @@ export type OnchainQuote = {
   is_stale: boolean;    // updated_at more than 2× heartbeat ago
 };
 
-export async function chainlinkLatest(feed: Address, heartbeat = 86400): Promise<OnchainQuote | null> {
+export async function chainlinkLatest(
+  feed: Address,
+  heartbeat = 86400,
+  source: PriceSource = RH_PRICE_SOURCE,
+): Promise<OnchainQuote | null> {
   try {
     const [data, decRaw] = await Promise.all([
-      rpc().readContract({ address: feed, abi: AGGREGATOR_V3_ABI, functionName: "latestRoundData" }),
-      rpc().readContract({ address: feed, abi: AGGREGATOR_V3_ABI, functionName: "decimals" }),
+      rpc(source).readContract({ address: feed, abi: AGGREGATOR_V3_ABI, functionName: "latestRoundData" }),
+      rpc(source).readContract({ address: feed, abi: AGGREGATOR_V3_ABI, functionName: "decimals" }),
     ]);
     // latestRoundData tuple: [roundId, answer, startedAt, updatedAt, answeredInRound]
     const answer   = data[1] as bigint;
@@ -93,10 +132,14 @@ export type DexQuote = {
 /** GeckoTerminal RH Chain price + pool metadata for a token. Free, no key.
  *  Picks whichever side (base / quote) the queried token sits on, so the
  *  returned price is always for our token — never the pool's counter-asset. */
-export async function dexPrice(contract: Address): Promise<DexQuote | null> {
+export async function dexPrice(
+  contract: Address,
+  source: PriceSource = RH_PRICE_SOURCE,
+): Promise<DexQuote | null> {
+  const net = source.gtNetwork;
   try {
     const r = await fetch(
-      `https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${contract.toLowerCase()}/pools?page=1`,
+      `https://api.geckoterminal.com/api/v2/networks/${net}/tokens/${contract.toLowerCase()}/pools?page=1`,
       { signal: AbortSignal.timeout(6000), headers: { accept: "application/json" } },
     );
     if (!r.ok) return null;
@@ -120,8 +163,9 @@ export async function dexPrice(contract: Address): Promise<DexQuote | null> {
       }>;
     };
     const target = contract.toLowerCase();
+    const prefix = `${net}_`;
     const strip = (id: string | undefined) =>
-      id ? (id.startsWith("robinhood_") ? id.slice("robinhood_".length).toLowerCase() : id.toLowerCase()) : "";
+      id ? (id.startsWith(prefix) ? id.slice(prefix.length).toLowerCase() : id.toLowerCase()) : "";
     // Materialize each pool with the correct side selected + non-null price.
     const enriched = (d.data ?? []).flatMap((p) => {
       const attr = p.attributes;
@@ -147,7 +191,7 @@ export async function dexPrice(contract: Address): Promise<DexQuote | null> {
       volume_24h_usd: attr.volume_usd?.h24 ? parseFloat(attr.volume_usd.h24) : null,
       liquidity_usd: attr.reserve_in_usd ? parseFloat(attr.reserve_in_usd) : null,
       change_24h: attr.price_change_percentage?.h24 ? parseFloat(attr.price_change_percentage.h24) : null,
-      pool_url: poolAddr ? `https://www.geckoterminal.com/robinhood/pools/${poolAddr}` : null,
+      pool_url: poolAddr ? `https://www.geckoterminal.com/${net}/pools/${poolAddr}` : null,
     };
   } catch {
     return null;
@@ -170,13 +214,16 @@ export type OnchainErc20 = {
   total_supply: string | null;
 };
 
-export async function readErc20Meta(contract: Address): Promise<OnchainErc20 | null> {
+export async function readErc20Meta(
+  contract: Address,
+  source: PriceSource = RH_PRICE_SOURCE,
+): Promise<OnchainErc20 | null> {
   try {
     const [name, symbol, decimals, totalSupply] = await Promise.allSettled([
-      rpc().readContract({ address: contract, abi: ERC20_META_ABI, functionName: "name" }),
-      rpc().readContract({ address: contract, abi: ERC20_META_ABI, functionName: "symbol" }),
-      rpc().readContract({ address: contract, abi: ERC20_META_ABI, functionName: "decimals" }),
-      rpc().readContract({ address: contract, abi: ERC20_META_ABI, functionName: "totalSupply" }),
+      rpc(source).readContract({ address: contract, abi: ERC20_META_ABI, functionName: "name" }),
+      rpc(source).readContract({ address: contract, abi: ERC20_META_ABI, functionName: "symbol" }),
+      rpc(source).readContract({ address: contract, abi: ERC20_META_ABI, functionName: "decimals" }),
+      rpc(source).readContract({ address: contract, abi: ERC20_META_ABI, functionName: "totalSupply" }),
     ]);
     // If nothing resolved we treat the address as not a token.
     if (name.status !== "fulfilled" && symbol.status !== "fulfilled") return null;
