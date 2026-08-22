@@ -10,7 +10,8 @@
 // Never let an LLM invent a stock price. If both sources fail, return null +
 // note so the tool can honestly say "insufficient data".
 
-import { createPublicClient, http, type Address, type Chain } from "viem";
+import { createPublicClient, http, fallback, type Address, type Chain } from "viem";
+import { base } from "viem/chains";
 import { robinhoodMainnet } from "@/lib/robinhood/chains";
 
 /**
@@ -36,11 +37,58 @@ export interface PriceSource {
   /** GeckoTerminal network slug — used in the tokens URL, the `<net>_<addr>`
    *  token-id prefix GT prepends, and the pool permalink. */
   gtNetwork: string;
+  /** Explicit RPC endpoints. When set, reads use a viem `fallback` transport
+   *  across them (cross-endpoint failover) instead of the chain's single default
+   *  RPC. RH omits this — its default RPC is reliable and singular. Base sets a
+   *  list because the free public Base endpoints rate-limit hard under the
+   *  poller's concurrent reads (a single endpoint drops calls; a fallback list
+   *  survives). Override via `BASE_RPC_URLS` / `BASE_RPC_URL` env. */
+  rpcUrls?: string[];
+  /** Enable viem multicall batching (collapses concurrent `eth_call`s into one
+   *  Multicall3 call — ~5× fewer requests). ONLY safe where Multicall3 is
+   *  deployed at the canonical address: true for Base, OMITTED for RH (no
+   *  Multicall3 there yet — task #88), so RH client construction stays
+   *  byte-identical to the pre-multichain path. */
+  multicall?: boolean;
+}
+
+// Reliable keyless Base RPCs, in fallback order. Verified 2026-08-23 to serve
+// contract reads (NVDA `multiplier()` → 1e18). `base.llamarpc.com` (CF 521) and
+// `base.meowrpc.com` (eth_call disabled) were rejected during that check.
+const DEFAULT_BASE_RPCS = [
+  "https://base-rpc.publicnode.com",
+  "https://base.drpc.org",
+  "https://mainnet.base.org",
+  "https://1rpc.io/base",
+];
+function baseRpcUrls(): string[] {
+  const env =
+    (typeof process !== "undefined" &&
+      (process.env.BASE_RPC_URLS || process.env.BASE_RPC_URL)) ||
+    "";
+  const fromEnv = env.split(",").map((s) => s.trim()).filter(Boolean);
+  return fromEnv.length ? fromEnv : DEFAULT_BASE_RPCS;
 }
 
 export const RH_PRICE_SOURCE: PriceSource = {
   chain: robinhoodMainnet,
   gtNetwork: "robinhood",
+};
+
+/**
+ * Base mainnet (chainId 8453) source for Coinbase B20 tokenized stocks.
+ * `gtNetwork: "base"` is GeckoTerminal's slug for Base — verified indexing
+ * Aerodrome Slipstream pools for the B20 tickers. Unlike RH, Base stocks carry
+ * a `multiplier()` rebase layer on their Chainlink feed (total-return value),
+ * so the raw Chainlink answer is NOT the share price — see
+ * `@/lib/base-stocks/b20-quote`, which divides it out. This source only wires
+ * the chain + GT slug; the multiplier math lives in the Base-stocks module.
+ */
+export const BASE_PRICE_SOURCE: PriceSource = {
+  chain: base,
+  gtNetwork: "base",
+  rpcUrls: baseRpcUrls(),
+  multicall: true,
 };
 
 const AGGREGATOR_V3_ABI = [
@@ -63,15 +111,29 @@ const AGGREGATOR_V3_ABI = [
 
 // One cached viem client PER chain id. RH callers still resolve to a single
 // shared client (identical to the pre-multichain behaviour); a Base source gets
-// its own client keyed by chain id, so the two never cross-talk.
+// its own client keyed by chain id, so the two never cross-talk. Exported as
+// `clientForSource` so the Base-stocks module reads B20 multiplier/pause/isB20
+// on the SAME cached client — letting viem multicall-batch those reads together
+// with the Chainlink feed read in a single cycle.
 const _clients = new Map<number, ReturnType<typeof createPublicClient>>();
-function rpc(source: PriceSource = RH_PRICE_SOURCE) {
+export function clientForSource(source: PriceSource = RH_PRICE_SOURCE) {
   const existing = _clients.get(source.chain.id);
   if (existing) return existing;
-  const client = createPublicClient({ chain: source.chain, transport: http() });
+  const transport = source.rpcUrls?.length
+    ? fallback(source.rpcUrls.map((u) => http(u)))
+    : http();
+  const client = createPublicClient({
+    chain: source.chain,
+    transport,
+    // Multicall batching only where Multicall3 exists (Base). Omitting the
+    // `batch` key entirely on RH keeps its client byte-identical to before.
+    ...(source.multicall ? { batch: { multicall: true } } : {}),
+  });
   _clients.set(source.chain.id, client);
   return client;
 }
+// Back-compat local alias — every existing reader in this file calls `rpc()`.
+const rpc = clientForSource;
 
 export type OnchainQuote = {
   source: "chainlink";
