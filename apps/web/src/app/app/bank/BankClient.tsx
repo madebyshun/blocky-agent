@@ -8,6 +8,8 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useAccount, useReadContract, useBalance } from "wagmi";
 import { useWalletDisconnect } from "@/lib/walletSession";
 import { useWallet } from "@/hooks/useWallet";
+import PrivyLoginButton from "@/components/PrivyLoginButton";
+import { PRIVY_ENABLED } from "@/lib/privy/config";
 import { formatUnits } from "viem";
 import { QRCodeSVG } from "qrcode.react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
@@ -1254,6 +1256,22 @@ function ConnectButton() {
           <div className="flex items-center justify-center gap-2 mt-2 font-mono text-[9px] text-slate-500">
             <span>Face ID</span><span>·</span><span>no seed phrase</span><span>·</span><span>no app to install</span>
           </div>
+        </>
+      )}
+      {/* Email → embedded wallet, same control the shared WalletPickerModal
+          shows. Guarded by PRIVY_ENABLED so this is a no-op (and PrivyLoginButton
+          never mounts outside its provider) when NEXT_PUBLIC_PRIVY_APP_ID is
+          unset — the onboarding is then byte-identical to the pre-Privy funnel.
+          Placed under the Coinbase CTA so the no-wallet paths sit together, above
+          the external-wallet toggle. */}
+      {PRIVY_ENABLED && (
+        <>
+          <div className="flex items-center gap-2 my-3">
+            <div className="h-px flex-1 bg-[#1A1A2E]" />
+            <span className="font-mono text-[9px] text-slate-600 uppercase tracking-widest">or</span>
+            <div className="h-px flex-1 bg-[#1A1A2E]" />
+          </div>
+          <PrivyLoginButton />
         </>
       )}
       <button onClick={() => setOpen(o => !o)} disabled={isPending}

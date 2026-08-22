@@ -29,6 +29,24 @@ export const privyClientConfig: PrivyClientConfig = {
   embeddedWallets: {
     ethereum: { createOnLogin: "users-without-wallets" },
   },
+  // Make Privy's hosted modal match the rest of the app's wallet UI.
+  //   - `theme: "dark"` + our brand accent: Privy defaults to a LIGHT modal,
+  //     which clashed with every other (dark) wallet surface — this is the fix
+  //     for that visual mismatch.
+  //   - `walletList: []`: suppress Privy's own external-wallet buttons
+  //     (MetaMask / Coinbase / WalletConnect …). External wallets are already
+  //     handled by our shared WalletPickerModal + the BankClient onboarding, so
+  //     re-listing them here (with a WalletConnect option the app deliberately
+  //     doesn't register elsewhere) was redundant and inconsistent. Privy's
+  //     modal is now EMAIL-ONLY — the one thing it uniquely provides.
+  //     (External wallets are governed by `walletList`, not `loginMethods`;
+  //     the LoginMethod union has no "wallet" value.)
+  appearance: {
+    theme: "dark",
+    accentColor: "#4FC3F7",
+    showWalletLoginFirst: false,
+    walletList: [],
+  },
   // Base mainnet is the default target; testnet + Robinhood Chain registered so
   // the embedded wallet can operate on the same chains the app already supports.
   defaultChain: base,
