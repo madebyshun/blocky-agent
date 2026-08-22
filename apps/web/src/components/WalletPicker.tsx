@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
+import PrivyLoginButton from "./PrivyLoginButton";
+import { PRIVY_ENABLED } from "@/lib/privy/config";
 
 /**
  * WalletPickerModal — the standard wallet-selection modal.
@@ -39,6 +41,19 @@ export function WalletPickerModal({
         className="w-full max-w-xs rounded-2xl border border-[#1A1A2E] bg-[#0D0D1A] shadow-2xl shadow-black/80 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Email → embedded wallet, above the external-wallet list. Renders only
+            when NEXT_PUBLIC_PRIVY_APP_ID is set; otherwise the modal is
+            byte-identical to the pre-Privy picker. */}
+        {PRIVY_ENABLED && (
+          <div className="px-4 pt-4">
+            <PrivyLoginButton onDone={onClose} />
+            <div className="flex items-center gap-2 mt-3 mb-1">
+              <div className="h-px flex-1 bg-[#1A1A2E]" />
+              <span className="font-mono text-[9px] text-slate-600 uppercase tracking-widest">or</span>
+              <div className="h-px flex-1 bg-[#1A1A2E]" />
+            </div>
+          </div>
+        )}
         <p className="font-mono text-[10px] text-slate-600 px-4 pt-4 pb-2 tracking-widest uppercase">
           Select Wallet
         </p>
