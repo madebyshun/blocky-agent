@@ -22,6 +22,7 @@
     "pledge:verify": "tsx scripts/pledge-verify.ts",
     "rwa:verify": "tsx scripts/rwa-verify.ts",
     "rwa:generate": "tsx scripts/rwa-generate.ts",
+    "test:base-stocks": "tsx scripts/base-stocks-probe.ts",
     "verify:build": "NEXT_DIST_DIR=.next-verify next build"
   },
   "dependencies": {
