@@ -23,6 +23,7 @@ import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payme
 import OrdersPanel from "./OrdersPanel";
 import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
+import TokenTable from "./TokenTable";
 import { buildWalletState } from "@/lib/state";
 
 const usd = (n: number | null | undefined) =>
@@ -812,6 +813,9 @@ export default function BankPage() {
 
             </div>
           </div>
+
+          {/* ── Section 2.5: Token holdings — full live portfolio ──────────── */}
+          <TokenTable address={acct} />
 
           {/* ── Section 3: Transaction History ─────────────────────────────── */}
           <TransactionHistory
