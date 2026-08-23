@@ -139,9 +139,10 @@ export const zh: Dict = {
     cron: "定时任务",
     usage: "用量",
     plans: "套餐",
-    // 侧边栏分组标题。
-    group_workspace: "工作区",
-    group_control: "控制台",
+    // 侧边栏分组标题 — 3 大 Agent-OS 支柱 + 账户分组。
+    group_agent: "智能体",
+    group_explore: "探索",
+    group_hub: "中心",
     group_account: "账户",
   },
   chat: {
