@@ -110,10 +110,15 @@ async function main() {
   console.log("\n── registry denominator ──");
   must(HOOD_REGISTRY_STATS.rwa_candidates > 0, "rwa_candidates > 0");
   must(HOOD_REGISTRY_STATS.watched > 0, "watched > 0");
+  // RWA_CANDIDATES partitions into: watched (feed + enrolled) + no_chainlink_feed
+  // (no feed) + not_enabled (feed, outside the poll budget). The `not_enabled`
+  // bucket was added 2026-08-18 (commit 0bfa63d); before that this identity was
+  // watched + no_feed alone, which now under-counts. `utility` (stable/wrapped)
+  // is a disjoint set — not an RWA candidate — so it is correctly NOT in the sum.
   must(
-    HOOD_REGISTRY_STATS.watched + HOOD_REGISTRY_STATS.no_chainlink_feed === HOOD_REGISTRY_STATS.rwa_candidates,
-    "watched + no_feed = rwa_candidates",
-    `${HOOD_REGISTRY_STATS.watched} + ${HOOD_REGISTRY_STATS.no_chainlink_feed} vs ${HOOD_REGISTRY_STATS.rwa_candidates}`,
+    HOOD_REGISTRY_STATS.watched + HOOD_REGISTRY_STATS.no_chainlink_feed + HOOD_REGISTRY_STATS.not_enabled === HOOD_REGISTRY_STATS.rwa_candidates,
+    "watched + no_feed + not_enabled = rwa_candidates",
+    `${HOOD_REGISTRY_STATS.watched} + ${HOOD_REGISTRY_STATS.no_chainlink_feed} + ${HOOD_REGISTRY_STATS.not_enabled} vs ${HOOD_REGISTRY_STATS.rwa_candidates}`,
   );
   must(HOOD_REGISTRY_STATS.no_chainlink_feed >= 1, "at least one row is drop-with-reason (surface honesty)");
 }

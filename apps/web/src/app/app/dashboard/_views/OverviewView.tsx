@@ -503,9 +503,11 @@ export default function OverviewView({ onSwitchTab }: Props) {
               <div className="text-[10px] text-slate-500 tracking-widest font-bold mb-3">QUICK ACTIONS</div>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: "Chat",      icon: "💬", href: "/chat",  color: "#4FC3F7" },
-                  { label: "Hub",       icon: "🧰", href: "/hub",   color: "#22C55E" },
-                  { label: "Blue Bank", icon: "🏦", href: "/bank",  color: "#818CF8" },
+                  { label: "Chat",      icon: "💬", href: "/chat",   color: "#4FC3F7" },
+                  { label: "Hub",       icon: "🧰", href: "/hub",    color: "#22C55E" },
+                  // Was "Blue Bank" → /bank, but /bank 301s to /chat (Bank archived in
+                  // the Agent-OS relaunch). Point at the Wallet pillar instead.
+                  { label: "Wallet",    icon: "👛", href: "/wallet", color: "#818CF8" },
                   // Blue Feed hidden while rebuilding — re-add when /feed relaunches.
                 ].map(a => (
                   <Link key={a.label} href={a.href}
