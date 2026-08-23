@@ -6,11 +6,13 @@ const MAIN_HOST = "blueagent.dev";
 
 // Root routes that legitimately live on the app subdomain even though they're
 // outside the /app/* tree: public links generated with the app origin
-// (/pay from BlueBank, /share from chat) and public embeds (/badge). Everything
-// else outside APP_SEGMENTS is marketing — its canonical home is the main host,
-// so on the app subdomain it 301s to blueagent.dev to avoid duplicate pages
+// (/pay from BlueBank, /share from chat), public embeds (/badge), and the
+// /waitlist gate landing (served on the app host so appWaitlistGate can bounce
+// to it same-origin instead of 301'ing off to marketing). Everything else
+// outside APP_SEGMENTS is marketing — its canonical home is the main host, so on
+// the app subdomain it 301s to blueagent.dev to avoid duplicate pages
 // (e.g. app.blueagent.dev/docs was duplicating blueagent.dev/docs).
-const APP_PUBLIC = new Set(["pay", "share", "badge"]);
+const APP_PUBLIC = new Set(["pay", "share", "badge", "waitlist"]);
 
 // Top-level segments that belong to the in-app surface (src/app/app/*). On the
 // app subdomain these are served from the internal /app/* tree while the URL
@@ -164,6 +166,58 @@ function bankGate(
   return null;
 }
 
+// Public product surfaces that stay open even when the waitlist gate is armed:
+// Blue Chat (also the farcaster / Base-App deep-link target, homeUrl=/app/chat),
+// Blue Hood (public track record) and Blue Hub (builder marketplace + publish
+// flow). Everything else in APP_SEGMENTS is the private workspace and is walled.
+const WAITLIST_EXEMPT = new Set(["chat", "hood", "hub"]);
+
+/**
+ * BlueAgent Agent-OS waitlist gate. OFF by default — arms only when
+ * `APP_WAITLIST=1`, so merging this changes nothing live until the flag is
+ * flipped. When armed it walls the private in-app workspace behind /waitlist,
+ * while WAITLIST_EXEMPT surfaces (Chat/Hood/Hub) and the farcaster deep-link
+ * stay public. `?key=<APP_WAITLIST_TOKEN>` on any in-app path drops a 30-day
+ * unlock cookie (same shape as bankGate) so the team + invited testers pass.
+ * Only ever fires on in-app segments; static files, /api and marketing routes
+ * (firstSeg not in APP_SEGMENTS) fall straight through, so /waitlist itself
+ * never loops.
+ */
+function appWaitlistGate(request: NextRequest, firstSeg: string): NextResponse | null {
+  if (process.env.APP_WAITLIST !== "1") return null; // flag off → inert
+  if (!APP_SEGMENTS.has(firstSeg)) return null;      // only gate in-app segments
+
+  const token = process.env.APP_WAITLIST_TOKEN;
+  const COOKIE = "app_waitlist";
+
+  // Valid ?key=<token> on ANY in-app path (incl. exempt ones like /chat) → drop
+  // the unlock cookie, bounce to the clean URL. Checked before the exempt short-
+  // circuit so the waitlist page's "Have a code?" → /chat?key=… works.
+  const queryKey = request.nextUrl.searchParams.get("key");
+  if (token && queryKey && queryKey === token) {
+    const clean = request.nextUrl.clone();
+    clean.searchParams.delete("key");
+    const res = NextResponse.redirect(clean);
+    res.cookies.set(COOKIE, token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+    });
+    return res;
+  }
+
+  if (WAITLIST_EXEMPT.has(firstSeg)) return null; // public surfaces stay open
+  const unlocked = !!token && request.cookies.get(COOKIE)?.value === token;
+  if (unlocked) return null; // invited → pass
+
+  // Not invited → the waitlist. 307 (temporary) so flipping the flag off later
+  // isn't defeated by a cached permanent redirect. Same-origin URL resolves to
+  // app.blueagent.dev/waitlist on prod and /waitlist on localhost/preview.
+  return NextResponse.redirect(new URL("/waitlist", request.url), { status: 307 });
+}
+
 export function middleware(request: NextRequest) {
   const host = request.headers.get("host") || "";
   const { pathname } = request.nextUrl;
@@ -216,6 +270,12 @@ export function middleware(request: NextRequest) {
     //
     // API routes, framework internals and static files are never rewritten:
     // their first segment isn't in APP_SEGMENTS, so they fall through.
+    //
+    // Waitlist gate (env-flagged; see appWaitlistGate). Runs before the rewrite
+    // so a gated segment bounces to /waitlist instead of rendering.
+    const wl = appWaitlistGate(request, firstSeg);
+    if (wl) return wl;
+
     if (APP_SEGMENTS.has(firstSeg)) {
       const url = request.nextUrl.clone();
       url.pathname = `/app${pathname}`;
@@ -253,6 +313,11 @@ export function middleware(request: NextRequest) {
       pathname.startsWith("/pay/");
     const gate = bankGate(request, isBankSurface, "/bank/access");
     if (gate) return gate;
+
+    // Waitlist gate — walls the private workspace when APP_WAITLIST=1; Chat,
+    // Hood, Hub (WAITLIST_EXEMPT) stay open, as does the ?key unlock path.
+    const wl = appWaitlistGate(request, firstSeg);
+    if (wl) return wl;
 
     // Root of the app host → Blue Chat (product home). Rewrite straight to
     // /app/chat so the URL stays "/" with no redirect hop through /app.
