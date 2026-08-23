@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { persistSnapshot, runPollCycle } from "@/lib/blue-hood/poller";
+import { pollBaseStocks } from "@/lib/base-stocks/base-poller";
 import { runRuleEngine } from "@/lib/blue-hood/rule-engine";
 import { runGrader, backfillVoidGrades, backfillDriftRegrade } from "@/lib/blue-hood/grader";
 import { refreshTickerConfidence } from "@/lib/blue-hood/ticker-confidence";
@@ -89,13 +90,49 @@ async function handle(req: NextRequest) {
   }
 
   try {
-    // 1. Fresh snapshot (M5 for the whole watchlist).
+    // 1. Fresh snapshot (M5 for the whole RH watchlist).
     const snap = await runPollCycle();
+    // Persist the RH-ONLY snapshot. This is deliberate: `persistSnapshot`
+    // writes the /hood board latest, the hour ring, AND the PERMANENT series
+    // archive — which is keyed by bare ticker. NVDA/META/GOOGL exist on both
+    // chains, so a Base row here would corrupt the RH series irreversibly.
+    // Base rows are merged into the engine's in-memory snapshot only (below).
     await persistSnapshot(snap);
 
-    // 2. Rule engine — fires arrows for any row that matches drift/arb rules.
-    //    Deduped against open arrows via `bh:arrow:open:{ticker}:{type}`.
-    const engine = await runRuleEngine(snap);
+    // 1b. Base desk (Base P3) — poll the 3 verified B20 stocks into snapshot
+    //     rows. Wrapped so a Base-side failure DEGRADES to RH-only rather than
+    //     taking down the whole poll cycle (the RH board is the heartbeat).
+    let baseRows: Awaited<ReturnType<typeof pollBaseStocks>> = [];
+    try {
+      // Anchor Base `polled_at_ms` to the SAME cycle start the RH poller used,
+      // so freshness maths line up across both desks in one snapshot.
+      const cycleStart = new Date(snap.started_at).getTime();
+      baseRows = await pollBaseStocks(cycleStart);
+    } catch (e) {
+      console.error(`[poller] base desk failed, degrading to RH-only: ${(e as Error).message}`);
+      baseRows = [];
+    }
+    const baseErrored = baseRows.filter((r) => r.verdict === "ERROR").length;
+
+    // 2. Rule engine — fires arrows for any row (RH or Base) that matches
+    //    drift/arb rules. The engine is chain-agnostic; Base rows carry
+    //    `chain:"base"` so fireArrow/grader qualify their KV keys and never
+    //    collide with the same-named RH ticker.
+    //
+    //    ⚠️ Metrics MUST be bumped by the Base row counts or the engine's
+    //    conservation identity breaks: `runRuleEngine` returns
+    //    tokens_watched/tokens_errored straight from `snap.metrics` while its
+    //    loop walks `snap.tickers`, so the two must describe the SAME rows.
+    const mergedSnap = {
+      ...snap,
+      tickers: [...snap.tickers, ...baseRows],
+      metrics: {
+        ...snap.metrics,
+        tokens_watched: snap.metrics.tokens_watched + baseRows.length,
+        tokens_errored: snap.metrics.tokens_errored + baseErrored,
+      },
+    };
+    const engine = await runRuleEngine(mergedSnap);
 
     // 3. Grader — closes any arrow whose grading window has elapsed.
     //    Runs after the engine so a just-fired arrow can't be graded in the
@@ -139,6 +176,22 @@ async function handle(req: NextRequest) {
       market_is_open: snap.metrics.market_is_open,
       market_session: snap.metrics.market_session,
       tvl_scanned_usd: Math.round(snap.metrics.tvl_scanned_usd),
+      // Base desk (Base P3) — separate from the RH metrics above so the two
+      // chains are never conflated in the operator view. `gradeable` counts
+      // rows that passed every suppression gate (verdict != INSUFFICIENT_DATA
+      // and != ERROR); a bad-multiplier / paused / stale token shows here as
+      // NOT gradeable, which is the whole point of the guard.
+      base: {
+        watched: baseRows.length,
+        errored: baseErrored,
+        gradeable: baseRows.filter((r) => r.verdict !== "INSUFFICIENT_DATA" && r.verdict !== "ERROR").length,
+        rows: baseRows.map((r) => ({
+          ticker: r.ticker,
+          verdict: r.verdict,
+          drift_pct: r.drift_pct,
+          suppressed: r.warnings.find((w) => w.startsWith("base_suppressed_"))?.replace("base_suppressed_", "") ?? null,
+        })),
+      },
       engine: {
         // Matches the structured `[engine]` log line one-to-one so responses
         // and logs can never disagree.
