@@ -41,11 +41,16 @@ jobs:
             exit 1
           fi
           echo "Pinging poll…"
-          # Follow redirects, HTTP timeout 240s (poll cycle is ~250s on
-          # busy hours; lock-skip path returns 202 quickly).
+          # Follow redirects. HTTP timeout 295s: the poll route's server-side
+          # cap is maxDuration=300 and a busy-hour cycle runs ~290s, so the old
+          # 240s client timeout aborted (curl exit 28 → HTTP 000) on cycles the
+          # SERVER completed fine. 295s sits just under the 300s cap, giving the
+          # full cycle room to return its 200 while still failing fast if the
+          # function itself hangs past its own limit. Lock-skip path returns 202
+          # almost instantly, so this ceiling only bites the real work path.
           # `-w` prints http status on its own line at the end so we can
           # grep it below. Body streamed to stdout for the operator.
-          curl -sS -L --max-time 240 \
+          curl -sS -L --max-time 295 \
             -w '\nHTTP_STATUS=%{http_code}\n' \
             -H "Authorization: Bearer $CRON_SECRET" \
             -X POST 'https://blueagent.dev/api/cron/blue-hood/poll' \
