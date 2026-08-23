@@ -5,6 +5,19 @@
  * flushed without touching other KV-backed features. Do NOT hardcode
  * these strings anywhere else — always import from here.
  */
+import type { HoodChain } from "./types";
+
+/**
+ * Chain segment for the per-ticker arrow keys. `"robinhood"` (the default and
+ * the origin chain) yields the EMPTY string, so every RH key stays byte-for-byte
+ * what it was before the Base desk existed — the live open-arrow + cooldown keys
+ * already in KV keep resolving. `"base"` inserts a `base:` segment so a Base
+ * NVDA arrow can't collide with the RH NVDA arrow on the same ticker (both
+ * chains list NVDA/META/GOOGL). Never reorder: a value here becomes a KV key.
+ */
+function chainSeg(chain: HoodChain = "robinhood"): string {
+  return chain === "robinhood" ? "" : `${chain}:`;
+}
 
 /** Latest completed snapshot (written by the 60s poller). Readers of /hood + the alert engine hit this. */
 export const KV_SNAPSHOT_LATEST = "bh:snapshot:latest";
@@ -18,9 +31,10 @@ export const KV_ARROW_SERIAL_COUNTER = "bh:arrow:serial";
 /** Individual arrow record. */
 export const kvArrow = (id: string) => `bh:arrow:${id}`;
 
-/** Index of currently-open (not yet graded) arrow ids per (ticker, type) — used for de-dup. */
-export const kvArrowOpenIndex = (ticker: string, type: string) =>
-  `bh:arrow:open:${ticker.toLowerCase()}:${type}`;
+/** Index of currently-open (not yet graded) arrow ids per (ticker, type) — used for de-dup.
+ *  `chain` defaults to robinhood → RH key unchanged; base gets a `base:` segment. */
+export const kvArrowOpenIndex = (ticker: string, type: string, chain: HoodChain = "robinhood") =>
+  `bh:arrow:open:${chainSeg(chain)}${ticker.toLowerCase()}:${type}`;
 
 /**
  * P3.1 (v3 spec, 2026-07-24): index of currently-open arrows keyed by
@@ -30,18 +44,25 @@ export const kvArrowOpenIndex = (ticker: string, type: string) =>
  * COIN drift + COIN arb 42min apart) and it looked spammy.
  *
  * Same 30d TTL as the typed key so we're consistent.
+ *
+ * `chain` defaults to robinhood → RH key unchanged. On base the `base:` segment
+ * keeps a Base NVDA arrow independent of the RH NVDA arrow (both chains list it).
  */
-export const kvArrowOpenByTicker = (ticker: string) =>
-  `bh:arrow:open_ticker:${ticker.toLowerCase()}`;
+export const kvArrowOpenByTicker = (ticker: string, chain: HoodChain = "robinhood") =>
+  `bh:arrow:open_ticker:${chainSeg(chain)}${ticker.toLowerCase()}`;
 
 /**
  * P3.1: per-ticker cooldown key. Set when an arrow closes (graded),
  * TTL = 4h. `fireArrow` refuses if this key exists — no follow-up
  * arrow on the same ticker until the cooldown expires. Prevents the
  * "one ticker fires arb 15min after drift grade" pattern.
+ *
+ * `chain` defaults to robinhood → RH key unchanged; base gets a `base:` segment
+ * so a Base cooldown never suppresses the RH ticker of the same name (or vice
+ * versa) — they are independent signals on independent chains.
  */
-export const kvArrowTickerCooldown = (ticker: string) =>
-  `bh:arrow:cooldown:${ticker.toLowerCase()}`;
+export const kvArrowTickerCooldown = (ticker: string, chain: HoodChain = "robinhood") =>
+  `bh:arrow:cooldown:${chainSeg(chain)}${ticker.toLowerCase()}`;
 
 /** Rolling list of all arrow ids (newest first) — used by /hood feed + hit-rate math. */
 export const KV_ARROW_FEED = "bh:arrow:feed";

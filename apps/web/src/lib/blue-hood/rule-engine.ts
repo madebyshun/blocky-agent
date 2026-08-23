@@ -28,6 +28,7 @@ import {
   TTL_ARROW_INDEX,
 } from "./kv-keys";
 import { getTickerConfidence, confidenceForFire, type TickerConfidenceTable } from "./ticker-confidence";
+import { chainOf } from "./types";
 import type { Arrow, ArrowType, HoodSnapshot, TickerSnapshot } from "./types";
 
 // ── Thresholds (from spec Block 1.2) ─────────────────────────────────────
@@ -249,24 +250,31 @@ export async function fireArrow(
     confidence?: TickerConfidenceTable | null;
   } = {},
 ): Promise<{ arrow: Arrow | null; skipReason?: "dedup_ticker" | "dedup_type" | "cooldown" }> {
+  // Base-stocks P3: every dedup/cooldown/open-index key is chain-qualified
+  // so the Base NVDA/META/GOOGL arrows do NOT collide with the RH tickers of
+  // the same name. `chainOf` defaults absent⟹"robinhood", so RH keys stay
+  // byte-identical (no migration of live keys). The triggering poll row is
+  // the source of truth for the chain; seed/test callers pass no row ⟹ RH.
+  const chain = chainOf(opts.row);
+
   // P3.1 (v3, 2026-07-24): dedup escalated from (ticker, type) to
   // (ticker) — one arrow per ticker at a time, regardless of type.
   // The 15-minute drift→arb cascade on COIN (#0061→#0062) and the
   // single-cycle burst #0062–#0065 were the exact patterns to kill.
-  const tickerIdxKey = kvArrowOpenByTicker(ticker);
+  const tickerIdxKey = kvArrowOpenByTicker(ticker, chain);
   const existingByTicker = await kvGet<OpenIndex>(tickerIdxKey);
   if (existingByTicker) return { arrow: null, skipReason: "dedup_ticker" };
 
   // Cooldown check — set by the grader when an arrow closes (any
   // outcome). 4h TTL. Prevents a fresh signal immediately after a
   // close on the same ticker.
-  const cooldownKey = kvArrowTickerCooldown(ticker);
+  const cooldownKey = kvArrowTickerCooldown(ticker, chain);
   const cooldownActive = await kvGet<{ ts: string }>(cooldownKey);
   if (cooldownActive) return { arrow: null, skipReason: "cooldown" };
 
   // Legacy (ticker, type) index stays for back-compat + as a defensive
   // second guard — grader.ts still writes to this key when arrows close.
-  const idxKey = kvArrowOpenIndex(ticker, detected.type);
+  const idxKey = kvArrowOpenIndex(ticker, detected.type, chain);
   const existing = await kvGet<OpenIndex>(idxKey);
   if (existing) return { arrow: null, skipReason: "dedup_type" };
 
@@ -291,6 +299,7 @@ export async function fireArrow(
     id,
     serial,
     ticker,
+    chain,
     type: detected.type,
     expected_direction: detected.expected_direction,
     grading_window_h: detected.grading_window_h,

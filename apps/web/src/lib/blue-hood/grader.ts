@@ -37,7 +37,14 @@ import {
   KV_ARROW_FEED,
   TTL_TICKER_COOLDOWN,
 } from "./kv-keys";
+import { chainOf } from "./types";
 import type { Arrow, ArrowOutcome, M5Verdict, ArrowType } from "./types";
+// Base-stocks P3 — chain-aware grade-time reprice. A Base arrow MUST be graded
+// against the Base B20 quote, never against rh-stock-arb (the wrong-chain
+// hazard: RH and Base share the NVDA/META/GOOGL tickers but are different
+// assets with different oracles).
+import { readBaseStockQuote } from "@/lib/base-stocks/b20-quote";
+import { findBaseStock } from "@/lib/base-stocks/registry";
 
 // Nullable everywhere — M5 can return a shape with `verdict: "ERROR"` or
 // `INSUFFICIENT_DATA` where these nested objects are missing/undefined.
@@ -159,13 +166,17 @@ export async function runGrader(): Promise<GraderReport> {
       const closed: Arrow = { ...arrow, status: "graded", outcome: outcome.outcome, graded_at: nowIso, outcome_detail: outcome.detail, grading_math: outcome.math ?? null };
       await kvSet(kvArrow(id), closed);
       // Clear both open indexes so a new arrow can fire on this ticker.
-      await kvSet(kvArrowOpenIndex(arrow.ticker, arrow.type), null, 1);
-      await kvSet(kvArrowOpenByTicker(arrow.ticker),         null, 1);
+      // Keys are chain-qualified (Base P3) — clearing must use the SAME chain
+      // the arrow fired on, or a Base close would wrongly free the RH ticker's
+      // open slot (and vice-versa). `chainOf` defaults absent⟹robinhood.
+      const arrowChain = chainOf(arrow);
+      await kvSet(kvArrowOpenIndex(arrow.ticker, arrow.type, arrowChain), null, 1);
+      await kvSet(kvArrowOpenByTicker(arrow.ticker, arrowChain),          null, 1);
       // P3.1 — start the 4h cooldown on this ticker so we don't fire a
       // drift right after grading an arb (or vice versa) on the same
       // symbol. Downstream engine reads this key + refuses.
       await kvSet(
-        kvArrowTickerCooldown(arrow.ticker),
+        kvArrowTickerCooldown(arrow.ticker, arrowChain),
         { arrow_id: id, closed_at: nowIso },
         TTL_TICKER_COOLDOWN,
       );
@@ -356,7 +367,49 @@ export async function backfillDriftRegrade(): Promise<DriftRegradeReport> {
 // ── Per-arrow grading ──────────────────────────────────────────────────────
 type GradingMath = NonNullable<Arrow["grading_math"]>;
 
-async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: string; math?: GradingMath } | null> {
+/**
+ * Chain-aware grade-time price read. The grading MATH downstream is byte-for-byte
+ * identical on both chains once we hold `{dex, oracle, deltaPct}` — only the
+ * SOURCE differs:
+ *   • robinhood → rh-stock-arb M5 (chainlink.price_usd is the oracle level).
+ *   • base      → readBaseStockQuote, where `share_price_usd` is the
+ *                 MULTIPLIER-ADJUSTED share price (the true oracle level, NOT the
+ *                 raw total-return feed answer — hazard #1) and `drift_pct`
+ *                 already uses the SAME sign convention as M5 delta.pct
+ *                 (positive ⟹ DEX above oracle), so the two are directly
+ *                 comparable with no sign flip.
+ *
+ * Returns null on ANY unusable read (soft skip — the grader retries next cycle);
+ * NEVER throws, and NEVER grades a Base arrow against the RH price. If a Base
+ * token is paused / has a bad multiplier AT GRADE TIME, `share_price_usd` comes
+ * back null ⟹ oracle null ⟹ we soft-skip rather than grade off a hazardous read.
+ *
+ * Exported ONLY so the Base P3 checkpoint probe (`scripts/base-hood-wire-probe.ts`,
+ * gate 4) can prove a Base arrow reprices against the Base B20 quote and NOT
+ * rh-stock-arb. Nothing in the app imports it — `gradeOne` is the sole caller.
+ */
+export async function readGradePrices(
+  arrow: Arrow,
+): Promise<{ dex: number; oracle: number; deltaPct: number } | null> {
+  if (chainOf(arrow) === "base") {
+    const stock = findBaseStock(arrow.ticker);
+    if (!stock) {
+      // Ticker isn't in the verified Base allowlist — cannot reprice on Base.
+      // Do NOT fall through to rh-stock-arb (that would be the wrong-chain bug).
+      console.warn(`[grader] base arrow ${arrow.id} ticker ${arrow.ticker} not in BASE_STOCKS — skipping`);
+      return null;
+    }
+    const q = await readBaseStockQuote(stock); // never throws by contract
+    const dex = q.dex_price_usd;
+    const oracle = q.share_price_usd; // multiplier-adjusted; null on hazard
+    const deltaPct = q.drift_pct;
+    if (typeof dex !== "number" || dex <= 0) return null;
+    if (typeof oracle !== "number" || oracle <= 0) return null;
+    if (typeof deltaPct !== "number") return null;
+    return { dex, oracle, deltaPct };
+  }
+
+  // robinhood (default) — the original M5 read.
   const r = await callTool<M5Response>("rh-stock-arb", { ticker: arrow.ticker });
   // Downgraded to a soft skip: throwing here dumped the arrow into
   // `errored[]` every cycle forever, and one bad ticker's rate-limit
@@ -379,6 +432,13 @@ async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: 
   if (typeof dex !== "number" || dex <= 0) return null;
   if (typeof oracle !== "number" || oracle <= 0) return null;
   if (deltaPct === null) return null;
+  return { dex, oracle, deltaPct };
+}
+
+async function gradeOne(arrow: Arrow): Promise<{ outcome: ArrowOutcome; detail: string; math?: GradingMath } | null> {
+  const prices = await readGradePrices(arrow);
+  if (!prices) return null;
+  const { dex, oracle, deltaPct } = prices;
 
   if (arrow.type === "arb") {
     const spreadPct = Math.abs(deltaPct);

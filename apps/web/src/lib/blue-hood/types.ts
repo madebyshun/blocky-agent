@@ -23,12 +23,37 @@ export type M5Verdict =
 
 export type MarketSession = "regular" | "premarket" | "afterhours" | "weekend" | "holiday";
 
+/**
+ * Which desk a snapshot row / arrow belongs to. `"robinhood"` is Blue Hood's
+ * origin chain (chainId 4663); `"base"` is the Coinbase B20 tokenized-stock desk
+ * (chainId 8453) wired in Base P3.
+ *
+ * ⚠️ ABSENT ⟹ `"robinhood"`, ALWAYS. Every arrow written before the Base desk
+ * landed carries no `chain` field, and NVDA/META/GOOGL exist on BOTH chains — so
+ * a reader that guesses instead of defaulting to robinhood would mis-attribute
+ * the entire historical record and re-price a legacy RH arrow against Base. The
+ * default is load-bearing, not cosmetic: `chainOf(x)` centralises it.
+ */
+export type HoodChain = "robinhood" | "base";
+
+/** The one place the "absent ⟹ robinhood" default lives. Import this rather
+ *  than writing `x.chain ?? "robinhood"` at each read site, so the back-compat
+ *  rule can never be spelled inconsistently. */
+export function chainOf(x: { chain?: HoodChain } | null | undefined): HoodChain {
+  return x?.chain ?? "robinhood";
+}
+
 export interface TickerSnapshot {
   /** Ticker symbol, uppercase. */
   ticker: string;
+  /** Which desk this row was polled from. Absent ⟹ "robinhood" (see `chainOf`).
+   *  On Base the same ticker (NVDA/META/GOOGL) is a DIFFERENT token + pool, so
+   *  every downstream key + grader read MUST be chain-qualified. */
+  chain?: HoodChain;
   /** Human-readable name from registry. */
   name: string;
-  /** ERC-20 contract on Robinhood Chain. */
+  /** ERC-20 contract on Robinhood Chain (chain=robinhood) or the Coinbase B20
+   *  token on Base (chain=base). Always the on-chain token for THIS row's chain. */
   contract: string;
   /** M5 verdict, or "ERROR" if the poll failed for this row. */
   verdict: M5Verdict | "ERROR";
@@ -220,6 +245,12 @@ export interface Arrow {
   serial: string;
   /** Ticker this arrow is about. */
   ticker: string;
+  /** Which desk fired this arrow. Absent ⟹ "robinhood" (see `chainOf`) — every
+   *  arrow persisted before the Base desk landed is RH. The grader routes its
+   *  fresh re-price on THIS field (a Base NVDA arrow must never grade against
+   *  the RH NVDA price), and the dedup / cooldown KV keys are qualified by it so
+   *  an RH and a Base arrow on the same ticker don't block each other. */
+  chain?: HoodChain;
   /** Arrow type — determines grading rule. */
   type: ArrowType;
   /** Which direction the arrow expects the DEX price to move. */

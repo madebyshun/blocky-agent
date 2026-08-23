@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Arrow } from "@/lib/blue-hood/types";
+import { chainOf, type Arrow } from "@/lib/blue-hood/types";
 import ArrowBriefBlock from "../ArrowBriefBlock";
 import HoodShellFrame from "../HoodShellFrame";
 import { useHoodShellData } from "../useHoodShellData";
@@ -20,6 +20,7 @@ const REFRESH_MS = 15_000;
 const PAGE_SIZE = 50;
 const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
+const BASE_BLUE = "#0052FF"; // Coinbase Base brand — the Base-desk chain badge
 const RED = "#ef4444";
 const GREEN = "#22c55e";
 const AMBER = "#f5b342";
@@ -449,7 +450,18 @@ function TrackRow({ a }: { a: Arrow }) {
           <span style={{ color: MUTED, marginRight: 4 }}>{open ? "▾" : "▸"}</span>
           {a.serial}
         </td>
-        <td className="px-3 py-2 text-left text-white">{a.ticker}</td>
+        <td className="px-3 py-2 text-left text-white">
+          {a.ticker}
+          {chainOf(a) === "base" && (
+            <span
+              className="ml-1.5 rounded px-1 py-0.5 align-middle font-mono text-[9px] font-semibold tracking-wider"
+              style={{ color: BASE_BLUE, backgroundColor: `${BASE_BLUE}22` }}
+              title="Coinbase B20 tokenized stock on Base (chainId 8453)"
+            >
+              BASE
+            </span>
+          )}
+        </td>
         <td className="px-3 py-2 text-left" style={{ color: "#9aa1ac" }}>{signal}</td>
         <td className="px-3 py-2 text-left" style={{ color: MUTED }}>{formatEtTime(a.fired_at)}</td>
         <td className="px-3 py-2 text-left" style={{ color: MUTED }}>{a.graded_at ? formatEtTime(a.graded_at) : "—"}</td>
