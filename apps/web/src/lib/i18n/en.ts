@@ -142,9 +142,10 @@ export const en = {
     cron: "Scheduled",
     usage: "Usage",
     plans: "Plans",
-    // Sidebar group headers.
-    group_workspace: "Workspace",
-    group_control: "Control",
+    // Sidebar group headers — the 3 Agent-OS pillars + account band.
+    group_agent: "Agent",
+    group_explore: "Explore",
+    group_hub: "Hub",
     group_account: "Account",
   },
   chat: {

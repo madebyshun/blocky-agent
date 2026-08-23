@@ -72,34 +72,43 @@ const IconHome = (
 );
 
 // ── Nav model ───────────────────────────────────────────────────────────────────
-// Grouped sidebar (AgentOS Control). Every destination is backed by REAL data —
-// no fabricated Health / Sessions / Agents pages. The three groups mirror the
-// mental model: Workspace = where you work, Control = manage the agent, Account
-// = billing + help.
+// Grouped sidebar mirroring the "onchain Agent OS" framing — three product
+// pillars + an account band. Every destination is backed by REAL data (no
+// fabricated Health / Sessions / Agents pages):
+//   AGENT   — the agent you operate: Chat + Wallet, plus its control pages
+//             (Overview, Connectors, Scheduled, Usage — all promoted Blue Chat
+//             tabs; see src/app/app/{dashboard,connectors,cron,usage}).
+//   EXPLORE — Blue Hood's public signals + receipted track record.
+//   HUB     — the Blue Hub marketplace + your installed agent-skills catalog.
+//   ACCOUNT — billing + help (Plans, Docs) — unchanged.
+// This is a relabel/regroup only: every href below is identical to before, so
+// no route, redirect, or deep link changes — only how items are grouped/named.
 type NavItem = { id: string; href: string; icon: ReactNode; badge?: "hood" };
 type NavGroup = { id: string; items: NavItem[] };
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    id: "group_workspace",
+    id: "group_agent",
     items: [
       { id: "chat", href: "/chat", icon: IconChat },
-      { id: "hub", href: "/hub", icon: IconHub },
-      { id: "hood", href: "/hood", icon: IconHood, badge: "hood" },
       { id: "wallet", href: "/wallet", icon: IconWallet },
-    ],
-  },
-  {
-    id: "group_control",
-    // Overview (/dashboard hosts Overview + Stake + Alerts tabs) · Skills ·
-    // Connectors · Scheduled · Usage — the last four are the Blue Chat tabs
-    // promoted to first-class pages (see src/app/app/{skills,connectors,cron,usage}).
-    items: [
       { id: "dashboard", href: "/dashboard", icon: IconOverview },
-      { id: "skills", href: "/skills", icon: IconSkills },
       { id: "connectors", href: "/connectors", icon: IconConnectors },
       { id: "cron", href: "/cron", icon: IconCron },
       { id: "usage", href: "/usage", icon: IconUsage },
+    ],
+  },
+  {
+    id: "group_explore",
+    items: [
+      { id: "hood", href: "/hood", icon: IconHood, badge: "hood" },
+    ],
+  },
+  {
+    id: "group_hub",
+    items: [
+      { id: "hub", href: "/hub", icon: IconHub },
+      { id: "skills", href: "/skills", icon: IconSkills },
     ],
   },
   {
