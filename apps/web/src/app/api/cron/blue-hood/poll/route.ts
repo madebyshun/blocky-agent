@@ -94,12 +94,12 @@ async function handle(req: NextRequest) {
     const snap = await runPollCycle();
     // Persist the RH-ONLY snapshot. This is deliberate: `persistSnapshot`
     // writes the /hood board latest, the hour ring, AND the PERMANENT series
-    // archive — which is keyed by bare ticker. NVDA/META/GOOGL exist on both
-    // chains, so a Base row here would corrupt the RH series irreversibly.
+    // archive — which is keyed by bare ticker. NVDA/META/GOOGL/AAPL exist on
+    // both chains, so a Base row here would corrupt the RH series irreversibly.
     // Base rows are merged into the engine's in-memory snapshot only (below).
     await persistSnapshot(snap);
 
-    // 1b. Base desk (Base P3) — poll the 3 verified B20 stocks into snapshot
+    // 1b. Base desk (Base P3) — poll the verified B20 stocks (BASE_STOCKS) into snapshot
     //     rows. Wrapped so a Base-side failure DEGRADES to RH-only rather than
     //     taking down the whole poll cycle (the RH board is the heartbeat).
     let baseRows: Awaited<ReturnType<typeof pollBaseStocks>> = [];

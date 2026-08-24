@@ -251,7 +251,7 @@ export async function fireArrow(
   } = {},
 ): Promise<{ arrow: Arrow | null; skipReason?: "dedup_ticker" | "dedup_type" | "cooldown" }> {
   // Base-stocks P3: every dedup/cooldown/open-index key is chain-qualified
-  // so the Base NVDA/META/GOOGL arrows do NOT collide with the RH tickers of
+  // so the Base NVDA/META/GOOGL/AAPL arrows do NOT collide with the RH tickers of
   // the same name. `chainOf` defaults absent⟹"robinhood", so RH keys stay
   // byte-identical (no migration of live keys). The triggering poll row is
   // the source of truth for the chain; seed/test callers pass no row ⟹ RH.

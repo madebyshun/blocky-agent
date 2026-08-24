@@ -4,14 +4,14 @@
  * TWO independent checks, both must pass (exits non-zero on any failure — a
  * check that always exits 0 is not a check):
  *
- *   A. LIVE — read NVDA/META/GOOGL end-to-end from Base mainnet and print the
+ *   A. LIVE — read every BASE_STOCKS ticker end-to-end from Base mainnet and print the
  *      multiplier-adjusted share price, the raw total-return value, the DEX
  *      spot, the drift, and every suppression gate. Assert each share price
  *      lands in a sane per-ticker band. This is the "sharePrice matches the
  *      REAL stock price (~$215), not $215 × multiplier" acceptance test.
  *
  *   B. SYNTHETIC — the multiplier hazard cannot be caught by the live test today
- *      because all three tokens currently report multiplier == 1e18, which makes
+ *      because every registered token currently reports multiplier == 1e18, which makes
  *      the division a no-op (share == total-return). So we feed a FIXED answer
  *      through `sharePriceFromFeed` with multipliers ≠ 1e18 and assert the
  *      division actually happens (2× multiplier ⟹ half price; 1.05× ⟹ 205, not
@@ -40,14 +40,19 @@ function approx(a: number, b: number, tolPct = 0.001) {
 // Sane per-ticker share-price bands. Wide enough to survive normal market drift
 // over days, tight enough that a ×multiplier / scale bug (which would 2×, 100×,
 // or 1e18× the value) blows straight through them.
+//
+// ⚠️ EVERY ticker in BASE_STOCKS needs a row here. A missing band used to SKIP
+// the assertion silently, so a newly-admitted ticker would have quietly lost the
+// single strongest check in this probe. Missing is now a hard FAIL (see below).
 const SANE_BAND: Record<string, [number, number]> = {
   NVDA: [120, 340],
   META: [320, 840],
   GOOGL: [190, 540],
+  AAPL: [170, 500], // ~$310 at admission 2026-08-24
 };
 
 async function liveChecks() {
-  console.log("\n=== A. LIVE Base reads (NVDA / META / GOOGL) ===\n");
+  console.log(`\n=== A. LIVE Base reads (${BASE_STOCKS.map((s) => s.ticker).join(" / ")}) ===\n`);
   for (const stock of BASE_STOCKS) {
     let q;
     try {
@@ -87,6 +92,11 @@ async function liveChecks() {
 
     // Acceptance assertions.
     const band = SANE_BAND[stock.ticker];
+    check(
+      `${stock.ticker} has a sane-price band defined`,
+      band !== undefined,
+      band ? "" : "add one to SANE_BAND — do not let a new ticker skip this check",
+    );
     check(
       `${stock.ticker} share price present`,
       q.share_price_usd !== null,

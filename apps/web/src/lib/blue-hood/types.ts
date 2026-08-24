@@ -29,7 +29,7 @@ export type MarketSession = "regular" | "premarket" | "afterhours" | "weekend" |
  * (chainId 8453) wired in Base P3.
  *
  * ⚠️ ABSENT ⟹ `"robinhood"`, ALWAYS. Every arrow written before the Base desk
- * landed carries no `chain` field, and NVDA/META/GOOGL exist on BOTH chains — so
+ * landed carries no `chain` field, and NVDA/META/GOOGL/AAPL exist on BOTH chains — so
  * a reader that guesses instead of defaulting to robinhood would mis-attribute
  * the entire historical record and re-price a legacy RH arrow against Base. The
  * default is load-bearing, not cosmetic: `chainOf(x)` centralises it.
@@ -47,7 +47,7 @@ export interface TickerSnapshot {
   /** Ticker symbol, uppercase. */
   ticker: string;
   /** Which desk this row was polled from. Absent ⟹ "robinhood" (see `chainOf`).
-   *  On Base the same ticker (NVDA/META/GOOGL) is a DIFFERENT token + pool, so
+   *  On Base the same ticker (NVDA/META/GOOGL/AAPL) is a DIFFERENT token + pool, so
    *  every downstream key + grader read MUST be chain-qualified. */
   chain?: HoodChain;
   /** Human-readable name from registry. */

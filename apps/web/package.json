@@ -24,6 +24,7 @@
     "rwa:generate": "tsx scripts/rwa-generate.ts",
     "test:base-stocks": "tsx scripts/base-stocks-probe.ts",
     "test:base-hood-wire": "tsx scripts/base-hood-wire-probe.ts",
+    "base:admit": "tsx scripts/base-stock-admission-probe.ts",
     "verify:build": "NEXT_DIST_DIR=.next-verify next build"
   },
   "dependencies": {

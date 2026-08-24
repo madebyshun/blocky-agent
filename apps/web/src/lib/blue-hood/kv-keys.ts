@@ -13,7 +13,7 @@ import type { HoodChain } from "./types";
  * what it was before the Base desk existed — the live open-arrow + cooldown keys
  * already in KV keep resolving. `"base"` inserts a `base:` segment so a Base
  * NVDA arrow can't collide with the RH NVDA arrow on the same ticker (both
- * chains list NVDA/META/GOOGL). Never reorder: a value here becomes a KV key.
+ * chains list NVDA/META/GOOGL/AAPL). Never reorder: a value here becomes a KV key.
  */
 function chainSeg(chain: HoodChain = "robinhood"): string {
   return chain === "robinhood" ? "" : `${chain}:`;

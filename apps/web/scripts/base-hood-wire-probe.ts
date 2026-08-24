@@ -45,7 +45,7 @@ import {
   readBaseStockQuote,
   type BaseStockQuote,
 } from "../src/lib/base-stocks/b20-quote";
-import { findBaseStock } from "../src/lib/base-stocks/registry";
+import { BASE_STOCKS, findBaseStock } from "../src/lib/base-stocks/registry";
 import { detectCandidate, detectArrow } from "../src/lib/blue-hood/rule-engine";
 import { readGradePrices } from "../src/lib/blue-hood/grader";
 import { chainOf, type Arrow } from "../src/lib/blue-hood/types";
@@ -230,7 +230,20 @@ async function gate3_liveLabelAndComparable() {
   console.log("\n=== GATE 3 — live: pool correct · M5-comparable · chain label ===\n");
 
   const rows = await pollBaseStocks(Date.now());
-  check("pollBaseStocks returned 3 rows (NVDA/META/GOOGL)", rows.length === 3, `got ${rows.length}`);
+  // Derived from the registry, never a literal — adding a ticker (AAPL,
+  // 2026-08-24) must not silently break this probe or, worse, keep passing
+  // while the poller quietly drops a row.
+  const expected = BASE_STOCKS.map((s) => s.ticker);
+  check(
+    `pollBaseStocks returned ${expected.length} rows (${expected.join("/")})`,
+    rows.length === expected.length,
+    `got ${rows.length}`,
+  );
+  check(
+    "pollBaseStocks covers every registry ticker, no extras",
+    expected.every((t) => rows.some((r) => r.ticker === t)) && rows.length === expected.length,
+    `rows=[${rows.map((r) => r.ticker).join(",")}]`,
+  );
 
   // A chain-less RH-style row must resolve to "robinhood" — proves the label
   // actually distinguishes the two desks (not a constant "base").
