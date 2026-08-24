@@ -4,12 +4,13 @@
  * The Robinhood poller (`blue-hood/poller.ts`) owns the RH watchlist, the
  * permanent series archive, and every snapshot KV write. This module is
  * deliberately SMALLER and side-effect-free: it only produces `TickerSnapshot`
- * rows for the 3 verified Coinbase B20 stocks (NVDA / META / GOOGL) so the
- * chain-agnostic rule engine can grade Base drift/arb alongside RH.
+ * rows for the verified Coinbase B20 stocks in `registry.ts::BASE_STOCKS`
+ * (NVDA / META / GOOGL / AAPL today — read the registry, never hardcode the
+ * list) so the chain-agnostic rule engine can grade Base drift/arb alongside RH.
  *
  * ⚠️ IT DOES NOT PERSIST SNAPSHOTS OR TOUCH THE SERIES ARCHIVE. Base rows are
  * merged into the engine's in-memory snapshot only. The permanent series is
- * keyed by bare `ticker`, and NVDA/META/GOOGL exist on BOTH chains — writing a
+ * keyed by bare `ticker`, and NVDA/META/GOOGL/AAPL exist on BOTH chains — writing a
  * Base "NVDA" row into that no-TTL, no-backfill archive would corrupt the RH
  * "NVDA" history irreversibly. So Base stays out of `persistSnapshot`/series by
  * construction; the dedup/cooldown/grader keys are chain-qualified instead
@@ -172,10 +173,12 @@ function baseErrorRow(
 }
 
 /**
- * Poll the 3 verified Base B20 stocks into `TickerSnapshot` rows. Never throws:
- * a per-ticker exception becomes an ERROR row (so the caller's metrics stay
- * balanced). No stagger delay — there are only 3 tokens and `readBaseStockQuote`
- * batches its on-chain reads via multicall, so we sit far under any rate limit.
+ * Poll every verified Base B20 stock in `BASE_STOCKS` into `TickerSnapshot`
+ * rows. Never throws: a per-ticker exception becomes an ERROR row (so the
+ * caller's metrics stay balanced). No stagger delay — the registry holds a
+ * handful of tokens and `readBaseStockQuote` batches its on-chain reads via
+ * multicall, so we sit far under any rate limit. (Revisit the no-stagger
+ * assumption if the admission gate ever admits a much longer list.)
  */
 export async function pollBaseStocks(cycleStart: number): Promise<TickerSnapshot[]> {
   const status = nyseMarketStatus();

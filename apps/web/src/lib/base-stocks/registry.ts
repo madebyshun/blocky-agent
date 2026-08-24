@@ -1,8 +1,8 @@
 /**
  * Base tokenized-stock registry — the Blue Hood "Base desk" address book.
  *
- * Scope is deliberately TINY: three Coinbase B20 tokenized stocks (NVDA, META,
- * GOOGL) that we have independently verified end-to-end on Base mainnet
+ * Scope is deliberately TINY: four Coinbase B20 tokenized stocks (NVDA, META,
+ * GOOGL, AAPL) that we have independently verified end-to-end on Base mainnet
  * (chainId 8453). This is NOT a general B20 catalog — it is the allowlist of
  * tickers whose oracle-vs-DEX drift Blue Hood is authorized to grade. Adding a
  * ticker here is a correctness decision, not a convenience: every address below
@@ -23,9 +23,34 @@
  * only records addresses + metadata.
  *
  * Verified on-chain 2026-08-23 via `cast` (token isB20/symbol/decimals/name +
- * feed decimals/description/answer + Aerodrome pool spot). All three tokens
- * currently report `multiplier() == 1e18` (no rebase) and `isPaused(TRANSFER) ==
- * false`.
+ * feed decimals/description/answer + Aerodrome pool spot); AAPL added and
+ * verified the same way 2026-08-24. All four tokens currently report
+ * `multiplier() == 1e18` (no rebase) and `isPaused(TRANSFER) == false`.
+ *
+ * ── ADMISSION GATE: the pool decides, NOT the feed ────────────────────────────
+ * A readable Chainlink feed is NOT sufficient evidence to add a ticker, and the
+ * gap is not hypothetical. Measured 2026-08-24: Chainlink publishes **13**
+ * "Coinbase <TICKER>" equity feeds on Base, but only **4** of those tickers have
+ * a real market. TSLAc's deepest pool held $1 and AMZNc's held $7 (both $0 24h
+ * volume); SNDK · INTC · COIN · CRCL · MSTR · MSFT · SPCX had no pool at all.
+ * Admitting on feed-existence would therefore have added 9 tickers whose drift
+ * is pure noise — the same disease that forced the RH dead-pool liveness gate
+ * (`rule-engine.ts::MIN_DEX_VOL_24H_USD`), where BABA was frozen 100% of hours
+ * and SPCX 98%. The public track record is the product; a thin-pool ticker
+ * poisons it. So the bar for a new row is:
+ *   1. address from the official `base.org/stocks` table — never ticker-matched;
+ *   2. on-chain `isB20` ∧ `decimals == 8` ∧ `symbol == "<TICKER>c"`;
+ *   3. `multiplier()` and `isPaused(TRANSFER)` readable;
+ *   4. a real Aerodrome pool — liquidity AND 24h volume printed, plus a 72h
+ *      hourly-candle check for zero-volume / flat-OHLC hours (the BABA test);
+ *   5. `readBaseStockQuote()` returns `can_fire: true`.
+ *
+ * ⚠️ Symbol-matching is actively dangerous here, not merely sloppy. Base carries
+ * live counterfeits using the exact `<TICKER>c` symbol: "TSLAc" at
+ * `0xb5be29124d8a97eb2df434444dd68c00b6c43fd7` and `0x8b012624874c556dadfa5c2b2de0b4eee4c3c1ef`,
+ * "AMZNc" at `0xd6aace315732c354a2c89e222699f2a467b7abf7` — all `isB20() == false`,
+ * all `decimals == 18`, with padded names like "Tesla Inc. ". Real B20 stocks
+ * carry the `0xb2000000…` vanity prefix AND answer `isB20() == true`.
  */
 import type { Address } from "viem";
 
@@ -45,9 +70,10 @@ export interface BaseStock {
 }
 
 /**
- * The three verified Base stocks. Do NOT add a ticker here without reading its
- * token + feed from an authoritative source and confirming the read-time gate
- * passes — an unverified row is a silent wrong-price risk, not a feature.
+ * The four verified Base stocks. Do NOT add a ticker here without walking the
+ * 5-step admission gate in the file header — an unverified row is a silent
+ * wrong-price risk, and a thin-pool row is track-record noise. Both are worse
+ * than a shorter list.
  */
 export const BASE_STOCKS: readonly BaseStock[] = [
   {
@@ -72,6 +98,22 @@ export const BASE_STOCKS: readonly BaseStock[] = [
     token: "0xb2000000000000000000002D0BA3164cc74f58B7",
     symbol: "GOOGLc",
     chainlinkFeed: "0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2",
+    chainlinkHeartbeat: 86400,
+  },
+  {
+    // Added 2026-08-24. Pool evidence at admission (Aerodrome slipstream
+    // AAPL/USDC `0xa3b1e3f9747065e2073722ff4c9027d3ea4994f0`): $671,452
+    // liquidity, $1,377,117 24h volume — the DEEPEST of the four, and 72/72
+    // hourly candles over 3 days had non-zero volume and a distinct close
+    // (no BABA-style freeze). `readBaseStockQuote` returned can_fire:true,
+    // drift 0.094%. NOTE: AAPL also exists on RH Chain (`0xaF3D76f1…`,
+    // 18 decimals) — a DIFFERENT token. Chain-qualified keys keep the two
+    // apart; see `base-poller.ts` header.
+    ticker: "AAPL",
+    name: "Apple Inc.",
+    token: "0xb200000000000000000000C2e324d24d7eEcd1fb",
+    symbol: "AAPLc",
+    chainlinkFeed: "0x787f13dEa48Db0897CbCDD985de77809D837F988",
     chainlinkHeartbeat: 86400,
   },
 ] as const;

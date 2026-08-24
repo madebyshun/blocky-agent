@@ -41,7 +41,7 @@ import { chainOf } from "./types";
 import type { Arrow, ArrowOutcome, M5Verdict, ArrowType } from "./types";
 // Base-stocks P3 — chain-aware grade-time reprice. A Base arrow MUST be graded
 // against the Base B20 quote, never against rh-stock-arb (the wrong-chain
-// hazard: RH and Base share the NVDA/META/GOOGL tickers but are different
+// hazard: RH and Base share the NVDA/META/GOOGL/AAPL tickers but are different
 // assets with different oracles).
 import { readBaseStockQuote } from "@/lib/base-stocks/b20-quote";
 import { findBaseStock } from "@/lib/base-stocks/registry";
