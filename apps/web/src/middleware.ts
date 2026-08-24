@@ -52,16 +52,21 @@ const APP_SEGMENTS = new Set([
   // Their src/app/**/{profile,rewards,terminal} page stubs are kept as dead
   // code (smaller diff, mirrors the /bank precedent).
   //
+  // `wallet` SHIPPED (#291) — the "Wallet support" pillar, live (noindex) at
+  // /app/wallet. It reuses the fully-built BlueBank dashboard (real wagmi
+  // balances, DefiLlama yield, Moralis tx, 0x swap, limit orders, Coinbase
+  // on/off-ramp) and has a nav entry in AppShell's AGENT group — it is a real
+  // page now, NOT a "coming soon" placeholder.
+  "wallet",
+  //
   // Reserved product URLs (0.1) — clean paths that resolve today to an
   // in-shell "coming soon" panel (src/app/app/<seg>/page.tsx, noindex) so the
   // canonical URL is stable before its provider ships:
   //   radar  → WatchlistProvider (drift/arb discovery)
-  //   wallet → WalletProvider (balances, $BLUE tier)
   //   trade  → ExecutionProvider (guarded swap engine; absorbs robinhood-router)
   //   bridge → bridge-flow entry (shares Wallet's bridge component)
   //   tasks  → automation (DCA / TP-SL / recurring via scoped session keys)
   "radar",
-  "wallet",
   "trade",
   "bridge",
   "tasks",
