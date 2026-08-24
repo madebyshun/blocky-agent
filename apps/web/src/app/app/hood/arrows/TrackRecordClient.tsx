@@ -563,8 +563,8 @@ function Footer() {
   return (
     <footer className="mt-12 border-t pt-6 text-[11px]" style={{ borderColor: BORDER, color: MUTED }}>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
-        <span>Oracle: Chainlink AggregatorV3 on RH Chain</span>
-        <span>DEX: GeckoTerminal (Uniswap V3/V4)</span>
+        <span>Oracle: Chainlink AggregatorV3 (RH) + B20 share price (Base)</span>
+        <span>DEX: GeckoTerminal (Uniswap V3/V4 · Aerodrome)</span>
         <span>
           Powered by 30 <span style={{ color: BLUE }}>Blue Hub</span> skills · x402 · $0.05/call
         </span>

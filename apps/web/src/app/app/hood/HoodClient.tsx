@@ -16,6 +16,9 @@
  *   • Blue Hood green #34D399 (emerald) is THIS page's interactive accent
  *     (spec: "this section's own accent"); blue #4FC3F7 shows only in the
  *     footer "powered by 30 Blue Hub skills" attribution.
+ *   • Base brand blue #0052FF is used NARROWLY for the venue (chain) axis
+ *     only — the per-row chain chip + the Base pill in the chain selector —
+ *     so emerald stays the primary accent while Base rows read at a glance.
  *
  * Two data fetches, both `no-store`:
  *   • /api/hood/snapshot — poller's latest snapshot
@@ -28,7 +31,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
-import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow } from "@/lib/blue-hood/types";
+import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow, HoodChain } from "@/lib/blue-hood/types";
+import { chainOf } from "@/lib/blue-hood/types";
 import HoodSidebar from "./HoodSidebar";
 import TickerDetailPanel from "./TickerDetailPanel";
 import ArrowBriefBlock from "./ArrowBriefBlock";
@@ -49,9 +53,18 @@ const BG = "#050508";
 const SURFACE = "#0B0D13";
 const BORDER = "#1A1A2E";
 const MUTED = "#6b7280";
+// Base P (Surface Base UI) — venue accents. Base brand blue drives the chain
+// selector's active Base pill; a lightened variant keeps the 9px per-row chip
+// legible on the near-black table surface.
+const BASE_BLUE = "#0052FF";
+const BASE_BLUE_TEXT = "#5b8cff";
 
 type SortKey = "drift" | "volume" | "tvl";
 type Filter = "tradable" | "drifting" | "flow" | "frozen" | "dust" | "no_data" | "all";
+// Orthogonal to `Filter` — a row is e.g. (tradable AND base), so the venue axis
+// is its own selector that composes with the status filter. Absent ⟹ robinhood
+// (see `chainOf`), so the default "all" and RH rows stay back-compatible.
+type ChainFilter = "all" | "base" | "robinhood";
 
 // T2 — dust floor matches the engine's arrow gate. Anything under this is
 // treated as untradable at the row level (verdict badged as DUST, drift
@@ -119,6 +132,9 @@ export default function HoodClient() {
   // T2 — default filter hides dust so the top of the board is tradable
   // rows, not COIN +132% on a $1k pool.
   const [filter, setFilter] = useState<Filter>("tradable");
+  // Base P — venue axis. Defaults to "all" so the board shows both desks
+  // (Coinbase B20 on Base + Robinhood Chain) until the reader narrows it.
+  const [chainFilter, setChainFilter] = useState<ChainFilter>("all");
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -167,19 +183,35 @@ export default function HoodClient() {
     return () => { ctl.abort(); clearInterval(t); };
   }, [load]);
 
+  // Base P — venue counts come from the FULL snapshot (never chain-scoped) so
+  // the chain selector always shows how many rows each desk has, even when a
+  // venue is currently the active filter.
+  const chainCounts = useMemo(() => {
+    const t = snap?.tickers ?? [];
+    return {
+      all: t.length,
+      base: t.filter((r) => chainOf(r) === "base").length,
+      robinhood: t.filter((r) => chainOf(r) === "robinhood").length,
+    };
+  }, [snap]);
+
   // T2 + T3 — categorize once so filter pill counts + row grouping stay in sync.
+  // Base P — the status buckets are computed over the CHAIN-SCOPED rows, so
+  // picking "Base" makes every downstream count (tradable/dust/no-data) and
+  // pill reflect just that desk.
   const buckets = useMemo(() => {
     if (!snap) return { tradable: [], dust: [], no_data: [] } as Record<"tradable" | "dust" | "no_data", TickerSnapshot[]>;
+    const inChain = chainFilter === "all" ? snap.tickers : snap.tickers.filter((r) => chainOf(r) === chainFilter);
     const tradable: TickerSnapshot[] = [];
     const dust: TickerSnapshot[] = [];
     const no_data: TickerSnapshot[] = [];
-    for (const r of snap.tickers) {
+    for (const r of inChain) {
       if (isNoData(r)) no_data.push(r);
       else if (isDust(r)) dust.push(r);
       else tradable.push(r);
     }
     return { tradable, dust, no_data };
-  }, [snap]);
+  }, [snap, chainFilter]);
 
   const filtered = useMemo<TickerSnapshot[]>(() => {
     let list: TickerSnapshot[];
@@ -214,14 +246,16 @@ export default function HoodClient() {
 
   const scrollToTicker = useCallback((ticker: string) => {
     // If the current filter is hiding the ticker, drop back to "all" first
-    // so the row is actually in the DOM to scroll to.
+    // so the row is actually in the DOM to scroll to. Same for the venue
+    // axis — a Base-only view would hide an RH target (and vice versa).
     if (filter !== "all") setFilter("all");
+    if (chainFilter !== "all") setChainFilter("all");
     // rAF because setFilter's re-render hasn't landed yet on same tick.
     requestAnimationFrame(() => {
       const el = rowRefs.current[ticker];
       if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
     });
-  }, [filter]);
+  }, [filter, chainFilter]);
 
   return (
     <HealthProvider>
@@ -279,6 +313,7 @@ export default function HoodClient() {
 
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <FilterPills value={filter} onChange={setFilter} buckets={buckets} />
+            <ChainToggle value={chainFilter} onChange={setChainFilter} counts={chainCounts} />
             <div className="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest" style={{ color: MUTED }}>
               <span>sort</span>
               <SortToggle value={sort} onChange={setSort} />
@@ -586,6 +621,54 @@ function FilterPills({
   );
 }
 
+// Base P — venue selector. Orthogonal to the status FilterPills (a row is e.g.
+// tradable AND base), so it's a separate control that composes with the filter.
+// Active Base wears Base brand blue, active RH the page emerald, "All chains"
+// neutral. Counts come from the FULL snapshot so the reader always sees how many
+// rows each desk carries; an empty venue grays out (matching FilterPills) rather
+// than vanishing — the desk still exists, it's just quiet this cycle.
+function ChainToggle({
+  value,
+  onChange,
+  counts,
+}: {
+  value: ChainFilter;
+  onChange: (v: ChainFilter) => void;
+  counts: { all: number; base: number; robinhood: number };
+}) {
+  const opts: { key: ChainFilter; label: string; count: number; accent: string }[] = [
+    { key: "all", label: "All chains", count: counts.all, accent: "#E7E9EE" },
+    { key: "base", label: "Base", count: counts.base, accent: BASE_BLUE },
+    { key: "robinhood", label: "RH", count: counts.robinhood, accent: RH_GREEN },
+  ];
+  return (
+    <div className="flex items-center gap-1">
+      <span className="mr-1 font-mono text-[10px] uppercase tracking-widest" style={{ color: MUTED }}>chain</span>
+      {opts.map((o) => {
+        const active = o.key === value;
+        const empty = o.count === 0;
+        return (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            disabled={empty && !active}
+            className="rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed"
+            style={{
+              borderColor: active ? o.accent : BORDER,
+              backgroundColor: active ? `${o.accent}1A` : "transparent",
+              color: active ? o.accent : empty ? "#3f4550" : "#9aa1ac",
+              opacity: empty && !active ? 0.55 : 1,
+            }}
+          >
+            <span>{o.label}</span>
+            <span className="ml-1 font-mono tabular-nums" style={{ opacity: 0.65 }}>({o.count})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function SortToggle({ value, onChange }: { value: SortKey; onChange: (v: SortKey) => void }) {
   const opts: { key: SortKey; label: string }[] = [
     { key: "drift", label: "Drift" },
@@ -650,7 +733,7 @@ function DriftBoard({
                 and every numeric column is right-aligned consistently.
                 User feedback 2026-07-23: "24h chart could be wider,
                 inconsistent left/right alignment across columns" */}
-            <th className="px-3 py-2 text-left w-[96px]">Ticker</th>
+            <th className="px-3 py-2 text-left w-[132px]">Ticker</th>
             <th className="px-3 py-2 text-right w-[120px]">Oracle</th>
             <th className="px-3 py-2 text-right w-[120px]">DEX</th>
             <th className="px-3 py-2 text-right w-[96px]">Drift</th>
@@ -764,13 +847,14 @@ function DriftRow({
       >
         <td className="px-3 py-2 text-left">
           <a
-            href={`https://robinhoodchain.blockscout.com/token/${r.contract}`}
+            href={tokenExplorerUrl(r)}
             target="_blank"
             rel="noreferrer"
             className="font-medium text-slate-500 hover:text-slate-300"
           >
             {r.ticker}
           </a>
+          <ChainTag chain={chainOf(r)} />
           {isHeld && (
             <span
               className="ml-2 font-mono text-[9px] uppercase tracking-widest"
@@ -830,7 +914,7 @@ function DriftRow({
         <td className="px-3 py-2 text-left">
           <span style={{ color: MUTED, marginRight: 4 }}>{chevron}</span>
           <a
-            href={`https://robinhoodchain.blockscout.com/token/${r.contract}`}
+            href={tokenExplorerUrl(r)}
             target="_blank"
             rel="noreferrer"
             onClick={(e) => e.stopPropagation()}
@@ -840,6 +924,7 @@ function DriftRow({
           >
             {r.ticker}
           </a>
+          <ChainTag chain={chainOf(r)} />
           {isHeld && (
             <span
               className="ml-2 font-mono text-[9px] uppercase tracking-widest"
@@ -857,7 +942,7 @@ function DriftRow({
         <td className="px-3 py-2 text-right">
           {r.pool_ref ? (
             <a
-              href={poolUrl(r.pool_ref)}
+              href={poolUrl(r.pool_ref, chainOf(r))}
               target="_blank"
               rel="noreferrer"
               onClick={(e) => e.stopPropagation()}
@@ -981,6 +1066,28 @@ function WatchToggle({ ticker }: { ticker: string }) {
     >
       {watching ? "★" : "☆"}
     </button>
+  );
+}
+
+// Base P — per-row venue chip. Base rows wear Base blue (lightened for legible
+// 9px text on near-black); RH rows wear the page emerald. `chainOf` supplies the
+// value (absent ⟹ robinhood), so the legacy RH-only board reads unchanged and
+// the 3 Coinbase-B20 Base rows now stand out at a glance.
+function ChainTag({ chain }: { chain: HoodChain }) {
+  const isBase = chain === "base";
+  return (
+    <span
+      className="ml-2 rounded px-1.5 py-0.5 align-middle font-mono text-[9px] font-semibold uppercase tracking-wider"
+      style={{
+        color: isBase ? BASE_BLUE_TEXT : RH_GREEN,
+        backgroundColor: isBase ? "rgba(0,82,255,0.16)" : "rgba(52,211,153,0.12)",
+      }}
+      title={isBase
+        ? "Coinbase B20 tokenized stock on Base (chain 8453)"
+        : "Tokenized stock on Robinhood Chain (chain 4663)"}
+    >
+      {isBase ? "BASE" : "RH"}
+    </span>
   );
 }
 
@@ -1269,8 +1376,8 @@ function Footer() {
   return (
     <footer className="mt-12 border-t pt-6 text-[11px]" style={{ borderColor: BORDER, color: MUTED }}>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
-        <span>Oracle: Chainlink AggregatorV3 on RH Chain</span>
-        <span>DEX: GeckoTerminal (Uniswap V3/V4)</span>
+        <span>Oracle: Chainlink AggregatorV3 (RH) + B20 share price (Base)</span>
+        <span>DEX: GeckoTerminal (Uniswap V3/V4 · Aerodrome)</span>
         <span>
           Powered by 30 <span style={{ color: BLUE }}>Blue Hub</span> skills · x402 · $0.05/call
         </span>
@@ -1337,8 +1444,22 @@ function formatUsd(n: number | null | undefined): string {
   return "$0";
 }
 
-function poolUrl(poolRef: string): string {
-  return `https://www.geckoterminal.com/robinhood/pools/${poolRef}`;
+// Base P — chain-aware token explorer. A Base B20 token lives on Basescan
+// (8453); an RH token on the RH Blockscout (4663). The Base contract does not
+// exist on RH's explorer, so this must key off the row's chain, never a
+// hardcoded host.
+function tokenExplorerUrl(r: TickerSnapshot): string {
+  return chainOf(r) === "base"
+    ? `https://basescan.org/token/${r.contract}`
+    : `https://robinhoodchain.blockscout.com/token/${r.contract}`;
+}
+
+// Base P — GeckoTerminal indexes both desks: Aerodrome pools under `base`, the
+// RWA pools under `robinhood`. Build the network segment from the row's chain so
+// a Base pool link never points at the RH index (and vice versa).
+function poolUrl(poolRef: string, chain: HoodChain): string {
+  const network = chain === "base" ? "base" : "robinhood";
+  return `https://www.geckoterminal.com/${network}/pools/${poolRef}`;
 }
 
 function formatRelTime(iso: string): string {
