@@ -1,7 +1,8 @@
 /**
  * /hood — Blue Hood public terminal.
  *
- * 24/7 onchain copilot for Robinhood Chain RWA tokens. Public read-only —
+ * Oracle-vs-DEX drift signals for tokenized stocks on Base (Coinbase B20)
+ * and Robinhood Chain — every call graded in public. Public read-only —
  * no auth required. Wrapped by /app/layout AppShell so the sidebar +
  * mobile drawer render consistently with Chat / Hub / Launches.
  *
@@ -13,13 +14,13 @@ import type { Metadata } from "next";
 import HoodClient from "./HoodClient";
 
 export const metadata: Metadata = {
-  title: "Blue Hood · 24/7 copilot for Robinhood Chain",
+  title: "Blue Hood · Oracle-vs-DEX signals for tokenized stocks",
   description:
-    "Live drift board for 24 tokenized-stock tokens on Robinhood Chain. Chainlink oracle vs DEX pool spot, market-hours aware, arrows every 60s. Non-custodial.",
+    "Live drift board for tokenized stocks on Base (Coinbase B20) and Robinhood Chain. Chainlink oracle vs DEX pool spot, market-hours aware, every call graded in public — misses included. Non-custodial.",
   openGraph: {
-    title: "Blue Hood · 24/7 copilot for Robinhood Chain",
+    title: "Blue Hood · Oracle-vs-DEX signals for tokenized stocks",
     description:
-      "Chainlink oracle vs DEX. 24 RWA tokens. 30 x402 skills under the hood.",
+      "Chainlink oracle vs DEX drift on Base & Robinhood Chain. Every call graded in public — misses included.",
   },
 };
 

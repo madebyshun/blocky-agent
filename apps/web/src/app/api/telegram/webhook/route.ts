@@ -115,7 +115,7 @@ async function handleStart(rest: string, from?: TgUser): Promise<string> {
   const hood = absoluteUrl("/hood");
   return [
     `🎯 <b>Blue Hood</b>`,
-    `Drift & arbitrage signals for tokenized stocks on Robinhood Chain — every signal graded in public, misses included.`,
+    `Drift & arbitrage signals for tokenized stocks on Base and Robinhood Chain — every signal graded in public, misses included.`,
     ``,
     `🔔 You'll now get <b>every tradable signal</b> as it fires. Want only <i>your</i> tickers? Link your wallet in the app — one tap, no code to type.`,
     ``,

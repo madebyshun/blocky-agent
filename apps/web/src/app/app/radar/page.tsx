@@ -13,7 +13,7 @@ export default function Page() {
     <ComingSoon
       label="RADAR"
       title="Radar"
-      blurb="Live watchlist + drift/arbitrage discovery across tokenized stocks on Robinhood Chain."
+      blurb="Live watchlist + drift/arbitrage discovery across tokenized stocks on Base and Robinhood Chain."
     />
   );
 }

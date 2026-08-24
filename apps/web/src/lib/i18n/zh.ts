@@ -34,7 +34,7 @@ export const zh: Dict = {
     stack_conn_label: "Blue Connector",
     stack_conn_desc: "接入任意外部 MCP 服务器，在对话中直接使用它的工具。",
     stack_hood_label: "Blue Hood",
-    stack_hood_desc: "Robinhood Chain 的 24/7 非托管副驾 —— Chainlink 对比 DEX 价差、箭头信号、审核-签名交易。",
+    stack_hood_desc: "Base 与 Robinhood Chain 上代币化股票的预言机-DEX 价差信号 —— Chainlink 对比 DEX、每个箭头公开评级、非托管。",
     // stack_bank_* removed 2026-07-24 (Blue Bank archived; middleware
     // redirects /bank + /pay → /chat).
     stack_image_label: "Blue Image",

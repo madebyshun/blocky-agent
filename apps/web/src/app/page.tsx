@@ -18,7 +18,7 @@ const MONO = "'JetBrains Mono', monospace";
 // Hood live) + chain + x402 pricing so a visitor lands on positioning,
 // not a legacy tool count. Skill count is dynamic (TOOL_COUNT) — never
 // hardcode it.
-const SOCIAL_PROOF = ["Blue Hood live", "Robinhood Chain", "x402 · $0.05/call", "MCP native", `${TOOL_COUNT} skills`];
+const SOCIAL_PROOF = ["Blue Hood live", "Base + RH Chain", "x402 · $0.05/call", "MCP native", `${TOOL_COUNT} skills`];
 
 const CHAT_COMMANDS = ["/idea", "/build", "/audit", "/ship", "/raise", "/pick", "/scan", "/wallet", "/launch"];
 
@@ -39,7 +39,7 @@ const MODELS: { name: string; color: string; href?: string }[] = [
 ];
 
 // BlueAgent Relaunch 2026-07-24 — product suite lead with Blue Hood
-// (flagship for Robinhood Chain). Bank removed (archived, middleware
+// (flagship: oracle-vs-DEX drift on Base + RH). Bank removed (archived, middleware
 // redirects /bank + /pay to /chat). Image/video kept as Soon slots.
 // icon: "logo" → BlueAgent logomark, otherwise an emoji glyph.
 const PRODUCTS: { k: string; color: string; icon: string; href: string | null; soon?: boolean }[] = [
@@ -506,7 +506,7 @@ export default function Home() {
             </h2>
             <p className="text-slate-400 text-[15px] sm:text-lg leading-relaxed max-w-2xl">
               {lang === "zh" ? t("home.s_why_sub")
-                : "Uniswap owns ~95% of Robinhood Chain DEX volume. Arcus, Lighter, Rialto, Native own execution. Nobody owns oracle-vs-DEX drift monitoring or a public signal track record — until now. Blue Hood is the intelligence layer for tokenized-stock trading on RH Chain: 24/7 non-custodial copilot, every arrow signed by the user, every number verifiable."}
+                : "Tokenized stocks trade onchain 24/7 — but their Chainlink oracles only tick 24/5. Nobody owns that oracle-vs-DEX drift, or a public track record that grades every call. Blue Hood is the intelligence layer for tokenized-stock trading on Base (Coinbase B20) and Robinhood Chain: drift signals, every arrow signed by the user, every call graded in public — misses included."}
             </p>
           </Reveal>
         </section>
