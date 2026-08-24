@@ -10,7 +10,7 @@ import {
 } from "./types";
 import type { TierInfo } from "@/lib/credits";
 import {
-  loadTasks, saveTasks, createTask, migrateOldChat,
+  loadTasks, saveTasks, createTask, migrateOldChat, mergeTaskLists, clearGuestTasks,
   loadCrons, saveCrons, isDue,
   loadPersona, savePersona, loadCustomPrompt, saveCustomPrompt,
 } from "./storage";
@@ -227,35 +227,58 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Load tasks on wallet change, migrate old chat, then ALWAYS open on a fresh
-  // New Chat draft (ChatGPT / Claude behaviour). Prior sessions stay available
-  // in the sidebar history; we never auto-restore the most recent one.
+  // Load tasks on wallet change. History is keyed per-identity in localStorage
+  // (`blue_tasks_v1_guest` vs `blue_tasks_v1_<address>`), so a naive load makes
+  // messages "vanish" on sign-in — they were written under the guest key but the
+  // app now reads the wallet key. Two guards fix that:
+  //   B) MERGE the guest bucket into the wallet key (union by id, newest wins)
+  //      on every connected load, then drain guest — no more stranding, and no
+  //      zombie-resurrection of a deleted thread (see storage.ts helpers).
+  //   A) When we just carried history across a *sign-in* transition, keep the
+  //      user on their most-recent conversation instead of snapping the main
+  //      pane to a blank New Chat (which reads as "all my messages are gone").
+  // A fresh page load with no such transition still opens on New Chat.
+  const prevWalletAddr = useRef<string | undefined>(undefined);
   useEffect(() => {
-    // Gather any existing history (current format, or migrated old/guest data).
+    const prevAddr  = prevWalletAddr.current;
+    prevWalletAddr.current = walletAddr;
+    // A genuine guest/undefined → connected step (sign-in / reconnect-on-load),
+    // not an address→address swap or the connected→disconnected direction.
+    const isSignIn  = !prevAddr && !!walletAddr;
+
+    // Gather existing history for this identity.
     let history = loadTasks(walletAddr);
+
+    // (B) Fold any guest-side history into the wallet key, then drain guest.
+    if (walletAddr) {
+      const guestReal = loadTasks(undefined).filter(t => t.messages.length > 0);
+      if (guestReal.length > 0) {
+        history = mergeTaskLists(history, guestReal);
+        saveTasks(history, walletAddr);
+        clearGuestTasks();
+      }
+    }
+
+    // Legacy single-chat blob migration — only when the key is otherwise empty.
     if (history.length === 0) {
       const migrated = migrateOldChat(walletAddr);
       if (migrated) {
         history = [migrated];
         saveTasks(history, walletAddr);
-      } else if (walletAddr) {
-        // Wallet just connected — carry guest history across.
-        const guestTasks = loadTasks(undefined); // blue_tasks_v1_guest
-        if (guestTasks.length > 0) {
-          history = guestTasks;
-          saveTasks(history, walletAddr);
-        }
       }
     }
+
     // Keep only real conversations (drop any empty drafts left over) and sort.
     const sorted = history
       .filter(t => t.messages.length > 0)
       .sort((a, b) => b.updatedAt - a.updatedAt);
-    // Open on a fresh in-memory draft so the welcome / New Chat screen shows.
-    // It is NOT persisted until the first message is sent.
+    // Fresh in-memory draft (not persisted until first send) so the New Chat
+    // screen is always one array slot away.
     const fresh = createTask(chatTier, personaId);
     setTasksState([fresh, ...sorted]);
-    setActiveTaskId(fresh.id);
+    // (A) On sign-in with existing history, stay on the most-recent conversation
+    // so it doesn't look like the chat was wiped; otherwise open on New Chat.
+    setActiveTaskId(isSignIn && sorted.length > 0 ? sorted[0].id : fresh.id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletAddr]);
 

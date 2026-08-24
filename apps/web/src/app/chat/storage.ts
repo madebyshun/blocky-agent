@@ -61,6 +61,29 @@ export function createTask(model: string, persona: PersonaId): ChatTask {
   };
 }
 
+// Merge two task lists into one, de-duped by id with the newest `updatedAt`
+// winning. Used on sign-in to fold guest-side history into the wallet key so a
+// conversation typed before connecting is never stranded on the guest key
+// (`blue_tasks_v1_guest`) while the app now reads `blue_tasks_v1_<address>`.
+export function mergeTaskLists(a: ChatTask[], b: ChatTask[]): ChatTask[] {
+  const byId = new Map<string, ChatTask>();
+  for (const t of [...a, ...b]) {
+    const prev = byId.get(t.id);
+    if (!prev || t.updatedAt > prev.updatedAt) byId.set(t.id, t);
+  }
+  return [...byId.values()];
+}
+
+// Drain the guest bucket after its history has been merged into a wallet key.
+// This keeps guest as transient staging: without it, an always-merge would
+// resurrect ("zombie") a conversation the user later deletes from the wallet
+// side, because the stale copy left on the guest key would merge back in on the
+// next sign-in. A fresh guest session (disconnect → chat) just refills it.
+export function clearGuestTasks(): void {
+  if (typeof window === "undefined") return;
+  try { localStorage.removeItem(tasksKey(undefined)); } catch { /* ignore */ }
+}
+
 // ── Crons ─────────────────────────────────────────────────────────────────────
 
 const CRON_INTERVALS: Record<CronSchedule, number> = {
