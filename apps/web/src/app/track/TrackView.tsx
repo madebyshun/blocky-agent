@@ -15,10 +15,13 @@
  */
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import type { Arrow } from "@/lib/blue-hood/types";
+import type { Arrow, HoodChain } from "@/lib/blue-hood/types";
+import { chainOf } from "@/lib/blue-hood/types";
 import type { PublicTrackRecord, PublicPerTypeStats } from "@/lib/blue-hood/track-record-public";
 
 const RH_GREEN = "#34D399";
+// Base venue accent — text-only (pills stay green; venue color lives in the tag).
+const BASE_BLUE_TEXT = "#5b8cff";
 const BLUE = "#4FC3F7";
 const RED = "#ef4444";
 const GREEN = "#22c55e";
@@ -29,6 +32,7 @@ const BORDER = "#1A1A2E";
 
 type OutcomeFilter = "all" | "hit" | "miss" | "void" | "open";
 type TypeFilter = "all" | "arb" | "drift" | "flow";
+type ChainFilter = "all" | "base" | "robinhood";
 type SortKey = "newest" | "oldest" | "duration";
 
 const PAGE_SIZE = 50;
@@ -37,6 +41,7 @@ export default function TrackView({ record }: { record: PublicTrackRecord }) {
   const arrows = record.receipts.arrows;
   const [outcome, setOutcome] = useState<OutcomeFilter>("all");
   const [ttype, setTtype] = useState<TypeFilter>("all");
+  const [chain, setChain] = useState<ChainFilter>("all");
   const [sort, setSort] = useState<SortKey>("newest");
   const [rulesOpen, setRulesOpen] = useState(false);
   const [page, setPage] = useState(1);
@@ -48,6 +53,7 @@ export default function TrackView({ record }: { record: PublicTrackRecord }) {
     else if (outcome === "void") list = list.filter((a) => a.outcome === "void");
     else if (outcome === "open") list = list.filter((a) => a.status === "open");
     if (ttype !== "all") list = list.filter((a) => a.type === ttype);
+    if (chain !== "all") list = list.filter((a) => chainOf(a) === chain);
     return [...list].sort((a, b) => {
       if (sort === "newest") return new Date(b.fired_at).getTime() - new Date(a.fired_at).getTime();
       if (sort === "oldest") return new Date(a.fired_at).getTime() - new Date(b.fired_at).getTime();
@@ -55,7 +61,7 @@ export default function TrackView({ record }: { record: PublicTrackRecord }) {
       const durB = b.graded_at ? new Date(b.graded_at).getTime() - new Date(b.fired_at).getTime() : Infinity;
       return durB - durA;
     });
-  }, [arrows, outcome, ttype, sort]);
+  }, [arrows, outcome, ttype, chain, sort]);
 
   const paged = filtered.slice(0, page * PAGE_SIZE);
   const canPage = filtered.length > paged.length;
@@ -69,6 +75,8 @@ export default function TrackView({ record }: { record: PublicTrackRecord }) {
     arb: arrows.filter((a) => a.type === "arb").length,
     drift: arrows.filter((a) => a.type === "drift").length,
     flow: arrows.filter((a) => a.type === "flow").length,
+    base: arrows.filter((a) => chainOf(a) === "base").length,
+    robinhood: arrows.filter((a) => chainOf(a) === "robinhood").length,
   }), [arrows]);
 
   return (
@@ -103,6 +111,16 @@ export default function TrackView({ record }: { record: PublicTrackRecord }) {
             { key: "arb", label: "Arb", count: buckets.arb },
             { key: "drift", label: "Drift", count: buckets.drift },
             { key: "flow", label: "Flow", count: buckets.flow },
+          ]}
+        />
+        <FilterPills
+          label="chain"
+          value={chain}
+          onChange={(v) => { setChain(v); setPage(1); }}
+          opts={[
+            { key: "all", label: "All", count: buckets.all },
+            { key: "base", label: "Base", count: buckets.base },
+            { key: "robinhood", label: "RH", count: buckets.robinhood },
           ]}
         />
         <div className="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest" style={{ color: MUTED }}>
@@ -426,7 +444,7 @@ function TrackRow({ a }: { a: Arrow }) {
           {a.serial} <span style={{ color: MUTED }}>↗</span>
         </Link>
       </td>
-      <td className="px-3 py-2 text-left text-white">{a.ticker}</td>
+      <td className="px-3 py-2 text-left text-white">{a.ticker}<ChainTag chain={chainOf(a)} /></td>
       <td className="px-3 py-2 text-left" style={{ color: "#9aa1ac" }}>{signal}</td>
       <td className="px-3 py-2 text-left" style={{ color: MUTED }}>{formatEtTime(a.fired_at)}</td>
       <td className="px-3 py-2 text-left" style={{ color: MUTED }}>{a.graded_at ? formatEtTime(a.graded_at) : "—"}</td>
@@ -441,6 +459,27 @@ function TrackRow({ a }: { a: Arrow }) {
         </span>
       </td>
     </tr>
+  );
+}
+
+// Venue tag beside the ticker. Base rows (Coinbase B20) read blue, RH rows
+// green — mirrors the live board's <ChainTag>. `chainOf` back-fills the legacy
+// "absent ⟹ robinhood" default so pre-Base arrows keep their RH badge.
+function ChainTag({ chain }: { chain: HoodChain }) {
+  const isBase = chain === "base";
+  return (
+    <span
+      className="ml-2 rounded px-1.5 py-0.5 align-middle font-mono text-[9px] font-semibold uppercase tracking-wider"
+      style={{
+        color: isBase ? BASE_BLUE_TEXT : RH_GREEN,
+        backgroundColor: isBase ? "rgba(0,82,255,0.16)" : "rgba(52,211,153,0.12)",
+      }}
+      title={isBase
+        ? "Coinbase B20 tokenized stock on Base (chain 8453)"
+        : "Tokenized stock on Robinhood Chain (chain 4663)"}
+    >
+      {isBase ? "BASE" : "RH"}
+    </span>
   );
 }
 
@@ -504,8 +543,8 @@ function Footer({ meta }: { meta: PublicTrackRecord["meta"] }) {
   return (
     <footer className="mt-12 border-t pt-6 text-[11px]" style={{ borderColor: BORDER, color: MUTED }}>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
-        <span>Oracle: Chainlink AggregatorV3 on Robinhood Chain</span>
-        <span>DEX: GeckoTerminal (Uniswap V3/V4)</span>
+        <span>Oracle: Chainlink AggregatorV3 (RH) + B20 share price (Base)</span>
+        <span>DEX: GeckoTerminal (Uniswap V3/V4 · Aerodrome)</span>
         <span>
           Track-record API <span style={{ color: BLUE }}>v{meta.api_version}</span> ·{" "}
           <Link href="/docs/blue-hood#grading" className="underline">grading rules</Link>
