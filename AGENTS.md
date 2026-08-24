@@ -37,7 +37,7 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 | `packages/bankr` | ☠️ **Legacy** — Bankr LLM client. Bankr 403-banned 2026-07-20; inference is Virtuals via `apps/web/src/app/api/_lib/llm.ts`. |
 | `packages/core` | Shared schemas, command pricing, and tool input definitions |
 | `packages/payments` | x402 payment helpers |
-| Chains | **Robinhood Chain (4663)** — primary, all stock-token / RWA work. **Base (8453)** — legacy, older non-RH tools. Never assume which; state it. |
+| Chains | **Base (8453)** — primary tokenized-stock venue (Coinbase B20) + every non-RH tool. **Robinhood Chain (4663)** — second live venue; the ~30 `rh-*` tools and the RWA registry are RH-specific. Never assume which; state it. |
 
 ---
 
@@ -82,9 +82,10 @@ When a user request matches a trigger phrase, load the skill file and follow its
 
 ## Hard rules
 
-1. **Robinhood Chain (4663) is the primary target for all stock-token / RWA actions. Base (8453) is legacy — only for older non-RH tools. Never assume Base for RH Chain work.** Never suggest Ethereum mainnet. State the chain explicitly in every on-chain context — an address, RPC call, or explorer link is meaningless without it, and RH and Base share neither.
+1. **Two live stock venues — Base (8453) leads, Robinhood Chain (4663) is also covered. Never assume either; state which one, every time.** Base is the primary tokenized-stock venue (Coinbase B20 — the `*c` share tokens Blue Hood polls) and all product copy is Base-first. RH Chain is a real second venue, not a fallback or a legacy shim: the ~30 `rh-*` tools and the RWA registry are RH-specific and stay that way. **A ticker can exist on BOTH chains** (NVDA / META / GOOGL currently do), so a ticker string alone never identifies a token — chain + address does. Never suggest Ethereum mainnet. An address, RPC call, or explorer link is meaningless without its chain, and RH and Base share neither.
+   *(Corrected 2026-08-24: this rule previously called Base "legacy — older non-RH tools", which was true before the Base desk went live and is now wrong in the direction that matters.)*
 
-2. **All contract addresses must be verified on the explorer for their own chain** — `robinhoodchain.blockscout.com` for RH Chain (4663), Basescan for Base (8453). An RH contract does not exist on Basescan, so "verified on Basescan" is not a check you can run on RWA work. Never invent or guess a contract address. If an address is needed and not already in the codebase, flag it for the user to supply. Format: `0x…` — always full checksum address.
+2. **All contract addresses must be verified on the explorer for their own chain** — Basescan for Base (8453), `robinhoodchain.blockscout.com` for RH Chain (4663). The two chains share no state: an RH contract does not exist on Basescan and a Base B20 does not exist on RH's explorer, so an explorer check only counts on the token's own chain. **Never resolve a stock token by ticker string** — for a Base B20, cross-check the address against the official `base.org/stocks` table and assert it on-chain (`isB20`, `decimals == 8`, `symbol == "<TICKER>c"`); name-matching a ticker is exactly how an impostor gets in (real bug, #280). Never invent or guess a contract address. If an address is needed and not already in the codebase, flag it for the user to supply. Format: `0x…` — always full checksum address.
 
 3. **Use Virtuals for all AI calls.** Import `callLLM` from `apps/web/src/app/api/_lib/llm.ts`. Do NOT call OpenAI, Anthropic, Bankr, or Venice directly. The endpoint is `https://compute.virtuals.io/v1`, key `process.env.VIRTUALS_API_KEY`. **Do not write new `callBankrLLM` / `callVeniceLLM` calls** — those are compatibility shims that delegate to Virtuals, kept only so ~46 legacy importers compile; their names describe providers this repo no longer uses (Bankr 403-banned 2026-07-20, Venice removed from the fallback chain 2026-07-25). `packages/bankr` is legacy for the same reason.
 
