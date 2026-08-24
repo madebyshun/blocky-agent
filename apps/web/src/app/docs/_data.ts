@@ -14,7 +14,7 @@ export const STATS = [
 ];
 
 export const PRODUCTS = [
-  { name: "Blue Hood", color: "#34D399", desc: "RH Chain copilot · Chainlink vs DEX drift · non-custodial trading",       link: "/app/hood", label: "Open Hood →" },
+  { name: "Blue Hood", color: "#34D399", desc: "Oracle-vs-DEX drift · tokenized stocks on Base + RH · graded in public",  link: "/app/hood", label: "Open Hood →" },
   { name: "Blue Chat", color: "#A78BFA", desc: "AI agent chat · multi-model · skill-based · Built for RH + Base",         link: "/app/chat", label: "Open Chat →" },
   { name: "Blue Hub",  color: "#4FC3F7", desc: `${TOOL_COUNT} AI tools · 3-agent consensus · x402 pay-per-call · no API key`, link: "/app/hub",  label: "Open Hub →" },
 ];

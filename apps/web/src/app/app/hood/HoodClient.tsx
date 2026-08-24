@@ -345,7 +345,7 @@ function Header({
           BLUE<span style={{ color: RH_GREEN }}>HOOD</span>
         </div>
         <div className="text-[12px]" style={{ color: "#9aa1ac", letterSpacing: "0.02em" }}>
-          copilot for Robinhood Chain
+          oracle-vs-DEX drift, graded in public
         </div>
       </div>
       {/* Nav: DRIFT (current) · INBOX (n unread) · TRACK RECORD + push

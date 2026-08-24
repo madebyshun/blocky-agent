@@ -55,7 +55,7 @@ export async function generateMetadata({
   if (!a) {
     return {
       title: `Signal ${serialLabel} — Blue Hood`,
-      description: "A Blue Hood signal receipt on Robinhood Chain.",
+      description: "A Blue Hood signal receipt — oracle-vs-DEX drift, graded in public.",
       robots: { index: false, follow: true },
     };
   }
@@ -67,7 +67,7 @@ export async function generateMetadata({
   const description =
     `${a.ticker} ${signalWord(a)} signal${driftBit} · ${oc}` +
     `${a.outcome_detail ? ` (${a.outcome_detail})` : ""}. ` +
-    `A graded Blue Hood signal on Robinhood Chain — receipts, misses included.`;
+    `A graded Blue Hood signal — receipts, misses included.`;
 
   return {
     title,

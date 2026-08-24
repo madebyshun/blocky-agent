@@ -25,7 +25,7 @@ export const revalidate = 60;
 
 const TITLE = "Blue Hood — public track record";
 const DESC =
-  "Every Chainlink-vs-DEX signal on Robinhood Chain, graded — misses included. Blue Hood publishes its full receipt book; the hit rate stays hidden until the sample earns it.";
+  "Every Chainlink-vs-DEX signal on Base and Robinhood Chain, graded — misses included. Blue Hood publishes its full receipt book; the hit rate stays hidden until the sample earns it.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -35,7 +35,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "https://blueagent.dev/track" },
   openGraph: {
     title: TITLE,
-    description: "Every signal graded · misses included · verified on Robinhood Chain.",
+    description: "Every signal graded · misses included · verified onchain on Base & RH.",
     url: "https://blueagent.dev/track",
     siteName: "Blue Agent",
     type: "website",

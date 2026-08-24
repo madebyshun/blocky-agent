@@ -35,7 +35,7 @@ export const en = {
     stack_conn_label: "Blue Connector",
     stack_conn_desc: "Attach any external MCP server and use its tools right in chat.",
     stack_hood_label: "Blue Hood",
-    stack_hood_desc: "24/7 non-custodial copilot for Robinhood Chain — Chainlink vs DEX drift, arrow signals, review-and-sign trading.",
+    stack_hood_desc: "Oracle-vs-DEX drift signals for tokenized stocks on Base & Robinhood Chain — Chainlink vs DEX, every arrow graded in public, non-custodial.",
     // stack_bank_* removed 2026-07-24 (Blue Bank archived; middleware
     // redirects /bank + /pay → /chat). Keys retained as comments so a
     // grep of `stack_bank_label` still finds this note.
