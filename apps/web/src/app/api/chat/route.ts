@@ -220,7 +220,39 @@ function veniceMaxTokens(modelId: string): number {
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-const BASE_SYSTEM = `You are Blue Agent — the AI assistant for builders.
+/**
+ * The base system prompt, as a FUNCTION of whether this specific request
+ * actually has web search.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A CONST: it used to be a const, and it told
+ * every model — three times — to reach for `web_search`. That is true on the
+ * `venice-*` presets, which set `enable_web_search: "on"`. It is FALSE on the
+ * Virtuals branch, where `virtualsAutoSearch` is hard-coded `false` and no
+ * `web_search` schema is among the 44 tools we register. Virtuals is the
+ * DEFAULT preset, so the default path was the broken one.
+ *
+ * The failure mode is not "the tool call errors" — it is that no call is made
+ * at all and the model answers a news question from training data, fluently and
+ * confidently, months stale. That is the same defect this codebase already
+ * documents for the Base MCP skills (`app/chat/agent-skills.ts`): "the model is
+ * told it has tools it does not have and will invent results rather than call
+ * anything." Those are held at "soon" precisely so they can't do this; the
+ * web_search lines were never gated at all.
+ *
+ * Fix is to REMOVE the claim, not to append a contradiction. A prompt that says
+ * "use web_search" and later "but you have no web_search" is strictly worse than
+ * one that never mentioned it: the model has to guess which half wins. So when
+ * search is unavailable the lines are replaced by an explicit statement of the
+ * limit plus the recovery action (switch to a web-capable model), which turns a
+ * fabricated answer into a correct "I can't check that right now."
+ *
+ * This is prompt hygiene, not a guarantee — CLAUDE.md's rule stands: prompts do
+ * not prevent hallucination, data sources do. Registering a real `web_search`
+ * tool on the Virtuals branch is the actual fix and is deliberately NOT in this
+ * change; it needs a search provider and a credit line. This stops the app from
+ * lying about what it can do in the meantime.
+ */
+const baseSystem = (hasWebSearch: boolean) => `You are Blue Agent — the AI assistant for builders.
 You help with ANY coding or development request: web apps, games, scripts, frontends, APIs, smart contracts, agents — whatever the user needs built.
 For Base and onchain projects you have live hub tools for prices, security, DeFi, and on-chain data (see below).
 Be direct, technical, and actionable. When relevant, suggest Base/USDC/onchain integrations — but never refuse a general coding request.
@@ -244,14 +276,19 @@ You have access to real-time Hub tools. Use them when the user asks about:
 - Live onchain data: balance, tx, block, gas, contract calls → hub_crypto_rpc (21 chains: base, ethereum, arbitrum, optimism, polygon, etc.)
 - User's OWN wallet / portfolio ("check my balance", "what's in my wallet", "my tokens", "my holdings", "my portfolio") → check_wallet. It auto-uses the connected wallet (no address arg) and lists EVERY token the wallet actually holds (balance > 0) on Base via Moralis, then renders a result card. NEVER invent figures or tokens; if no wallet is connected the result says so. Do NOT use hub_crypto_rpc for the user's own balance.
 - Prepare a token swap ("swap 0.1 ETH to USDC", "兑换", "trade X for Y") → prepare_swap. It renders an interactive swap card that fetches a live 0x quote and lets the user sign in their own wallet. NEVER invent a quote, rate, or output amount — only call when the user gives an explicit tokenIn, tokenOut, and amount.
-- Anything requiring live web data (news, events, rumours, OFFICIAL announcements) → web_search
+${hasWebSearch
+  ? `- Anything requiring live web data (news, events, rumours, OFFICIAL announcements) → web_search`
+  : `- Anything requiring live web data (news, events, rumours, OFFICIAL announcements): **you have NO web access on this model.** There is no web_search tool available to you on this request.`}
 
 Tool selection rules:
 1. For prices: ALWAYS hub_token_price. Never the web search and never your own knowledge.
 2. For onchain reads: hub_crypto_rpc.
 3. For market intel / analysis: the appropriate hub_* tool.
-4. For recent web news / sentiment / events: web_search.
-5. You can chain tools — e.g. hub_token_price + web_search for "ETH price and why is it up?".
+${hasWebSearch
+  ? `4. For recent web news / sentiment / events: web_search.
+5. You can chain tools — e.g. hub_token_price + web_search for "ETH price and why is it up?".`
+  : `4. **No web search on this model.** For recent news, sentiment, events, or "what happened with X" — you have NO live web source. Say plainly that you cannot check the live web on this model, and suggest the user switch to a web-search model (the Grok or V4 Flash presets). Do NOT answer from training data as though it were current: a confidently stale answer is the exact failure this rule exists to prevent. Note that prices are exempt — hub_token_price is live and is always the right tool for a price.
+5. You can chain tools — e.g. hub_token_price + hub_narrative for "ETH price and what's the story?".`}
 6. **Use the RIGHT tools — not arbitrarily few.** A bare price query = hub_token_price only. A safety check = hub_risk_gate + hub_honeypot together. An audit request = hub_risk_gate + hub_honeypot + hub_contract_trust + hub_key_exposure. Don't under-call when two tools give a meaningfully better answer — but don't add tools with no bearing on THIS message.
 7. **Transparency — one-line tool note.** When you run tools, open your response with a single concise line before your actual answer: "🔍 [tool] → [key result in 10 words or fewer]". For multiple tools chain them: "🔍 hub_risk_gate + hub_honeypot → HIGH risk, honeypot confirmed". This is for trust, not verbosity.
 8. **Proactive offer.** If the user's message would clearly benefit from a live tool but you can answer from knowledge, answer first, then end with one line: "↳ Want me to run a live [tool name] on this?"
@@ -2351,13 +2388,27 @@ export async function POST(req: NextRequest) {
       ? `## Language\nThe user has selected Chinese as their language. Respond in Simplified Chinese (简体中文) by default. If the user writes in English, respond in English.`
       : "";
 
+  // Does THIS request actually have web search? Mirrors the two branches below
+  // exactly — deliberately derived here, above the branch split, because the
+  // system prompt is built once and handed to whichever branch runs.
+  //   Venice branch  → passes `autoSearch` to every call; `enable_web_search`
+  //                    is set only when the user toggled it on or the model is
+  //                    Grok (internet-native). `isE2EE` gates TOOLS, not search,
+  //                    so it is correctly absent from this expression.
+  //   Virtuals branch→ `virtualsAutoSearch` is hard-coded false and no
+  //                    `web_search` schema is registered. Always false.
+  // If either branch's rule changes, this must change with it or the prompt
+  // starts lying again — that coupling is the whole point of the comment.
+  const hasWebSearch =
+    provider === "venice" && !!modelId && (webSearch || modelId.startsWith("grok-"));
+
   const system = [
     // SOUL.md goes FIRST — it's the identity layer (who Blue Agent is, how it
     // talks, what it won't do); everything after it is operational detail.
     // /soul told visitors this file "is loaded into every chat session"; until
     // now nothing read it, so this line is what makes that sentence true.
     SOUL_MD,
-    BASE_SYSTEM,
+    baseSystem(hasWebSearch),
     AGENT_CAPABILITIES_SECTION,
     B20_SECTION,
     coinbase ? COINBASE_SECTION : "",
