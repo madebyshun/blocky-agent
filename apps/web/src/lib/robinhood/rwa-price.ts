@@ -191,6 +191,25 @@ export type DexQuote = {
   pool_url: string | null;
 };
 
+/**
+ * logDexMiss — one structured line per FAILED `dexPrice` read.
+ *
+ * WHY THIS EXISTS: every failure path below used to be a bare `return null`
+ * with no log, which made the Base desk's total blackout invisible in prod.
+ * All four Base B20 tickers reported `dex_unavailable` on 16/16 reads across
+ * four cycles (2026-08-24) and there was NOTHING in the logs to say whether
+ * the cause was a 429, a 404, a timeout, or a 200-with-no-pools — three of
+ * which have completely different fixes. Diagnostic first, fix second.
+ *
+ * Deliberately failure-only: `dexPrice` is NOT on the RH poller's hot path
+ * (that goes through `rwa-market.ts::fetchJson`, which has its own
+ * `[gt-fetch]` logging), so this costs ~4 lines per poll cycle — one per Base
+ * ticker — and stays silent when the read succeeds.
+ */
+function logDexMiss(net: string, token: string, ms: number, detail: string) {
+  console.warn(`[dex-price] MISS net=${net} token=${token} ms=${ms} ${detail}`);
+}
+
 /** GeckoTerminal RH Chain price + pool metadata for a token. Free, no key.
  *  Picks whichever side (base / quote) the queried token sits on, so the
  *  returned price is always for our token — never the pool's counter-asset. */
@@ -199,12 +218,21 @@ export async function dexPrice(
   source: PriceSource = RH_PRICE_SOURCE,
 ): Promise<DexQuote | null> {
   const net = source.gtNetwork;
+  const token = contract.toLowerCase();
+  const t0 = Date.now();
   try {
     const r = await fetch(
-      `https://api.geckoterminal.com/api/v2/networks/${net}/tokens/${contract.toLowerCase()}/pools?page=1`,
+      `https://api.geckoterminal.com/api/v2/networks/${net}/tokens/${token}/pools?page=1`,
       { signal: AbortSignal.timeout(6000), headers: { accept: "application/json" } },
     );
-    if (!r.ok) return null;
+    if (!r.ok) {
+      // 429 = rate-limited (the suspected cause); 404 = token not indexed on
+      // this network; 5xx = GT-side. `retry-after` is logged verbatim because
+      // GT often sends "0" or omits it, which changes the retry strategy.
+      const retryAfter = r.status === 429 ? ` retry_after=${r.headers.get("retry-after") ?? "none"}` : "";
+      logDexMiss(net, token, Date.now() - t0, `http=${r.status}${retryAfter}`);
+      return null;
+    }
     const d = await r.json() as {
       data?: Array<{
         attributes?: {
@@ -224,7 +252,7 @@ export async function dexPrice(
         };
       }>;
     };
-    const target = contract.toLowerCase();
+    const target = token;
     const prefix = `${net}_`;
     const strip = (id: string | undefined) =>
       id ? (id.startsWith(prefix) ? id.slice(prefix.length).toLowerCase() : id.toLowerCase()) : "";
@@ -241,7 +269,21 @@ export async function dexPrice(
       if (!Number.isFinite(price) || price <= 0) return [];
       return [{ p, attr, priceStr, price }];
     });
-    if (!enriched.length) return null;
+    if (!enriched.length) {
+      // Two very different causes, separated because they need opposite fixes:
+      //   pools=0  → GT does not index this token on this network at all
+      //              (wrong slug / unindexed pool) — retrying never helps.
+      //   pools>0  → pools exist but none priced OUR token on either side
+      //              (missing *_token_price_usd, or an id-prefix mismatch).
+      const pools = d.data?.length ?? 0;
+      logDexMiss(
+        net, token, Date.now() - t0,
+        pools === 0
+          ? "http=200 pools=0 (token not indexed on this network)"
+          : `http=200 pools=${pools} usable=0 (no pool priced this token on either side)`,
+      );
+      return null;
+    }
     enriched.sort((a, b) => parseFloat(b.attr.reserve_in_usd ?? "0") - parseFloat(a.attr.reserve_in_usd ?? "0"));
     const { p, attr, price } = enriched[0];
     const poolAddr = (attr.address ?? "").toLowerCase();
@@ -255,7 +297,12 @@ export async function dexPrice(
       change_24h: attr.price_change_percentage?.h24 ? parseFloat(attr.price_change_percentage.h24) : null,
       pool_url: poolAddr ? `https://www.geckoterminal.com/${net}/pools/${poolAddr}` : null,
     };
-  } catch {
+  } catch (e) {
+    // `TimeoutError` = we hit the 6s AbortSignal (ms= will read ~6000);
+    // anything else is a DNS/TLS/socket failure. Distinguishing the two
+    // decides whether the fix is a longer timeout or a retry.
+    const err = e as Error;
+    logDexMiss(net, token, Date.now() - t0, `throw=${err.name}: ${err.message}`);
     return null;
   }
 }
