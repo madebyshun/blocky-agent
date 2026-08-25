@@ -34,6 +34,29 @@
  * `can_fire` — the "an arrow may be graded from this" flag — requires every gate
  * green. Phase 3 (poller/grader wiring) keys off `can_fire`, not on the presence
  * of a number.
+ *
+ * ── ⚠️ TRAP FOR A FUTURE BASE TRADE PATH: approve() IS NOT POLICY GATED ───────
+ * READ THIS BEFORE WRITING ANY BUY/SELL FLOW FOR A B20 TOKEN.
+ *
+ * This module is READ-ONLY today — it quotes, it never trades — so the trap
+ * below is not live. It is written here because this is the file someone will
+ * open first when they add one, and because the failure it causes looks like a
+ * success.
+ *
+ * B20 transfers are gated by the issuer's policy layer: an account must pass
+ * `isAuthorized(policyID, account)` (KYC / whitelist / jurisdiction — the
+ * tokenized stocks are non-US-eligible only) or the transfer reverts.
+ * **`approve()` is NOT policy gated.** An unauthorized wallet can set an
+ * allowance successfully and only discover the block when the swap reverts.
+ *
+ * That breaks the shape of our RH allowance pre-check (#122), which infers
+ * "this wallet can trade" from "approve succeeded". On Base that inference is
+ * INVALID and would show a FALSE GREEN: the UI says ready, the user signs, the
+ * transaction reverts, and they pay gas to learn they were never eligible.
+ *
+ * So a Base trade path must call `isAuthorized(policyID, account)` explicitly
+ * as its own gate — a successful `approve()` proves nothing about eligibility.
+ * Ref: docs.base.org/base-chain/asset-issuance/tokenized-stocks-on-base.
  */
 import { type Address } from "viem";
 import {

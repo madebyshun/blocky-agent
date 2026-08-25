@@ -28,12 +28,18 @@ import {
   TTL_ARROW_INDEX,
 } from "./kv-keys";
 import { getTickerConfidence, confidenceForFire, type TickerConfidenceTable } from "./ticker-confidence";
-import { chainOf } from "./types";
+import { chainOf, ARB_MIN_ABS_PCT, DRIFT_MIN_ABS_PCT } from "./types";
 import type { Arrow, ArrowType, HoodSnapshot, TickerSnapshot } from "./types";
 
 // ── Thresholds (from spec Block 1.2) ─────────────────────────────────────
-const DRIFT_MIN_ABS_PCT = 2.0;   // |drift| ≥ 2% during premarket/afterhours
-const ARB_MIN_ABS_PCT = 1.0;     // |delta| ≥ 1% during regular hours
+// DRIFT_MIN_ABS_PCT (2%, closed) and ARB_MIN_ABS_PCT (1%, open) both live in
+// ./types (a dependency-free module) rather than here, because the BOARD needs
+// to print whichever one is currently in force — "watching N Base stocks, drift
+// hasn't reached ±2%" (#308: a quiet desk must explain itself, not look
+// broken). This file imports `@/lib/kv`, so a client component can't pull the
+// numbers from here without dragging Upstash into the browser bundle, and
+// re-typing "2.0" in the UI would let the printed threshold silently diverge
+// from the one that actually fires. Both are imported above.
 // Dust floor — same as M4/M5 already enforce. Reads TOTAL token
 // liquidity (`row.total_tvl_usd`), NOT `row.tvl_usd` (which is only
 // primary-pool depth). Old check on primary-pool-only was blackholing
