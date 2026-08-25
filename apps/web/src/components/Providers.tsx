@@ -50,7 +50,7 @@ const inMiniAppFrame = typeof window !== "undefined" && window.top !== window.se
 // connect"; they were unreachable. Coinbase's own QR fallback rescued exactly
 // one wallet — its own.
 //
-// ENV-GATED on `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, matching the existing
+// ENV-GATED on `NEXT_WALLETCONNECT_PROJECT_ID`, matching the existing
 // `PRIVY_ENABLED` pattern: unset → the array spreads to nothing and the
 // connector list is byte-identical to before, so a missing var degrades to
 // today's behaviour instead of throwing at module scope (`walletConnect()`
@@ -58,10 +58,18 @@ const inMiniAppFrame = typeof window !== "undefined" && window.top !== window.se
 // The project id is a PUBLIC client identifier from cloud.reown.com — safe to
 // inline in the bundle, not a secret.
 //
+// ⚠️ NOTE THE MISSING `NEXT_PUBLIC_` PREFIX, and do not "fix" it. This is a
+// client module, so Next would normally inline nothing without that prefix —
+// the value reaches the browser only because `next.config.ts` lists this key
+// under `env`, which inlines at build time with no prefix rule. The Vercel
+// variable cannot be named `NEXT_PUBLIC_*` on this project, hence the mapping.
+// If you rename this, rename it in next.config.ts in the same commit or
+// WalletConnect goes dark with no error anywhere.
+//
 // `@walletconnect/ethereum-provider` ships as a dependency of
 // `@wagmi/connectors`, so this adds no new package; wagmi lazy-imports it on
 // first connect, keeping it out of the initial bundle.
-const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+const WALLETCONNECT_PROJECT_ID = process.env.NEXT_WALLETCONNECT_PROJECT_ID;
 
 const connectors = [
   // Only inside Base App / Farcaster — host wallet connects with no prompt.

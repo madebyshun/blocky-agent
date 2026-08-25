@@ -22,7 +22,15 @@ type LoginMethod = NonNullable<PrivyClientConfig["loginMethods"]>[number];
 
 /**
  * Which Privy login methods to offer, as a comma-separated env var:
- *   NEXT_PUBLIC_PRIVY_LOGIN_METHODS="email,google,twitter,discord,passkey"
+ *   NEXT_PRIVY_LOGIN_METHODS="email,google,twitter,discord,passkey"
+ *
+ * ⚠️ NO `NEXT_PUBLIC_` PREFIX, deliberately — do not "fix" it. This module is
+ * pulled into the client bundle, where Next only inlines `NEXT_PUBLIC_*` on its
+ * own. The value arrives because `next.config.ts` lists this key under `env`,
+ * which inlines at build time with no prefix rule (the Vercel variable on this
+ * project cannot carry "PUBLIC" in its name). Rename it here and you must
+ * rename it there in the SAME commit, or this silently falls back to
+ * `["email"]` with no error to tell you.
  *
  * WHY ENV-DRIVEN instead of just hardcoding the full list: Privy validates
  * `loginMethods` against what is enabled in the PRIVY DASHBOARD. Naming a
@@ -65,7 +73,7 @@ function parseLoginMethods(raw: string | undefined): LoginMethod[] {
 }
 
 export const PRIVY_LOGIN_METHODS = parseLoginMethods(
-  process.env.NEXT_PUBLIC_PRIVY_LOGIN_METHODS,
+  process.env.NEXT_PRIVY_LOGIN_METHODS,
 );
 
 // Email-first onboarding: a user signs in with an email code and Privy silently
