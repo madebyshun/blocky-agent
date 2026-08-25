@@ -158,7 +158,10 @@ export default function ChatInput() {
     input, setInput, send, stop, streaming, outOfCredits,
     error, credits, cost, chatTier, holderTier, setChatTier,
     cmdMenu, setCmdMenu, cmdFilter, setCmdFilter,
-    webSearch, setWebSearch, pendingFiles, setPendingFiles,
+    // `webSearch` / `setWebSearch` intentionally NOT destructured — the toggle
+    // that used them is removed (see the comment where it stood). They remain on
+    // the context and in the request payload so re-enabling is a small revert.
+    pendingFiles, setPendingFiles,
     personaId, setPersonaId,
   } = useChat();
   const { t } = useLang();
@@ -608,21 +611,27 @@ export default function ChatInput() {
               <span className="hidden sm:inline">Cmds</span>
             </button>
 
-            {/* Web search toggle */}
-            <button
-              onMouseDown={(e) => { e.preventDefault(); setWebSearch(!webSearch); }}
-              className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] transition-all"
-              style={webSearch
-                ? { color: "#34D399", background: "#34D39910", borderColor: "#34D39930" }
-                : { color: "#475569", borderColor: "transparent" }}
-              title={webSearch ? "Web search ON" : "Web search OFF"}
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
-                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-              </svg>
-              <span className="hidden sm:inline">{webSearch ? "Search on" : "Search"}</span>
-            </button>
+            {/* Web search toggle — REMOVED, deliberately, not lost.
+                It was a no-op that looked like a feature. Flipping it set
+                `webSearch: true` on the request, and the ONLY branch the web
+                client can reach is the Virtuals one, where `virtualsAutoSearch`
+                is hard-coded `false` and no `web_search` tool is registered. The
+                server read the flag and ignored it.
+                (The Venice branch does honour it — but `chatTier` comes from
+                VIRTUALS_PRESETS_V1, whose ids are fast/balanced/deep/private/
+                grok. None start with "venice", and `provider` is derived as
+                `chatTier.startsWith("venice") ? "venice" : "virtuals"`, so that
+                branch is unreachable from this UI. VENICE_TIERS survives only as
+                an `ALL_TIERS.find()` lookup that can never match.)
+                That made it worse than merely useless: the button turned green
+                and said "Search on", so a user had MORE confidence in an answer
+                the model had produced from stale training data. A control that
+                raises trust while doing nothing is the exact opposite of what
+                this product sells.
+                `webSearch` / `setWebSearch` state and the request field are left
+                intact on purpose — when a real web_search tool is registered on
+                the Virtuals branch, restoring this button is a small revert, not
+                a rebuild. */}
 
             <div className="flex-1" />
 

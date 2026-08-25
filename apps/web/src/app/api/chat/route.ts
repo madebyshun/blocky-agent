@@ -228,8 +228,16 @@ function veniceMaxTokens(modelId: string): number {
  * every model — three times — to reach for `web_search`. That is true on the
  * `venice-*` presets, which set `enable_web_search: "on"`. It is FALSE on the
  * Virtuals branch, where `virtualsAutoSearch` is hard-coded `false` and no
- * `web_search` schema is among the 44 tools we register. Virtuals is the
- * DEFAULT preset, so the default path was the broken one.
+ * `web_search` schema is among the 44 tools we register.
+ *
+ * And the Virtuals branch is not merely the default — from the web client it is
+ * the ONLY reachable branch. `provider` is derived client-side as
+ * `chatTier.startsWith("venice") ? "venice" : "virtuals"`, while `chatTier`
+ * comes from `VIRTUALS_PRESETS_V1` (fast/balanced/deep/private/grok). No id
+ * starts with "venice", so `hasWebSearch` below is false for every request the
+ * UI can produce today. The parameter is kept — rather than hard-coding false —
+ * because the Venice branch is live server-side and reachable by a direct API
+ * call, and because this is the seam a real web_search tool plugs into.
  *
  * The failure mode is not "the tool call errors" — it is that no call is made
  * at all and the model answers a news question from training data, fluently and
