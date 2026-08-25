@@ -32,20 +32,31 @@ type LoginMethod = NonNullable<PrivyClientConfig["loginMethods"]>[number];
  * rename it there in the SAME commit, or this silently falls back to
  * `["email"]` with no error to tell you.
  *
- * WHY ENV-DRIVEN instead of just hardcoding the full list: Privy validates
- * `loginMethods` against what is enabled in the PRIVY DASHBOARD. Naming a
- * method here that the dashboard has not enabled is a configuration error, not
- * a graceful no-op — and this modal is the login path for real users with real
- * balances, so a bad deploy locks people OUT rather than merely looking wrong.
- * Env-driven means the dashboard toggle and the app agree because one person
- * flips both, and a rollback is an env edit rather than a redeploy.
+ * WHY ENV-DRIVEN instead of hardcoding: the dashboard toggle and this list are
+ * two switches that must agree, so env-driven means one person flips both and a
+ * rollback is an env edit rather than a redeploy.
+ *
+ * ⚠️ THE CLIENT LIST OVERRIDES THE DASHBOARD — it does NOT intersect with it.
+ * (An earlier version of this comment claimed the opposite; corrected against
+ * the SDK source, `@privy-io/react-auth/dist/esm/context-*.mjs`.) When
+ * `loginMethods` is supplied, the SDK reads every flag off OUR array —
+ * `t.loginMethods.includes("google")` and so on — and never consults the
+ * dashboard's `google_oauth` / `twitter_oauth` values, which it falls back to
+ * ONLY when the key is absent entirely. So naming a method the dashboard has
+ * not enabled still renders its button; the failure lands later, on click,
+ * when Privy starts an OAuth flow it has no credentials for. Enable the method
+ * in the dashboard FIRST, then add it here.
+ *
+ * The one hard failure is an EMPTY resulting list: the SDK throws
+ * "You must enable at least one login method". `parseLoginMethods` floors to
+ * `["email"]` precisely so an env typo can never reach that throw.
  *
  * Default is `["email"]` — exactly the shipped behaviour — so an unset var
  * changes nothing.
  *
- * Unknown values are DROPPED rather than forwarded: Privy rejects the whole
- * array on a single bad entry, which would take email down with it. A typo
- * should cost you that one method, never the login screen.
+ * Unknown values are dropped for TYPE safety and stable ordering, not to dodge
+ * a Privy rejection: an unrecognised string is simply never matched by the
+ * SDK's `includes()` checks, so it is inert rather than fatal.
  */
 const KNOWN_LOGIN_METHODS = [
   "email",
