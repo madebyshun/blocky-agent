@@ -9,6 +9,42 @@ const nextConfig: NextConfig = {
   // Defaults to `.next` → production and the primary dev server are unaffected.
   // Start the secondary server with: NEXT_DIST_DIR=.next-dev3004 PORT=3004 …
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
+
+  // ── Client-side env WITHOUT the `NEXT_PUBLIC_` prefix ────────────────────
+  //
+  // THIS BLOCK IS LOAD-BEARING. Delete it and both features below go silently
+  // dark — the code compiles, the UI renders, and the values are `undefined`
+  // in the browser. That is the exact "dead control" failure mode PR #315 was
+  // opened to remove, so it must not be reintroduced here by accident.
+  //
+  // WHY: Next.js only inlines `process.env.X` into the CLIENT bundle when `X`
+  // starts with `NEXT_PUBLIC_`. Both consumers below are `"use client"`
+  // modules, so a bare `process.env.NEXT_WALLETCONNECT_PROJECT_ID` read there
+  // evaluates to `undefined` in the browser no matter what Vercel holds.
+  //
+  // The `env` key is the pre-`NEXT_PUBLIC_` mechanism and has no prefix rule:
+  // whatever is listed here is inlined into the JS bundle at build time. That
+  // lets the Vercel variable keep a name with no "PUBLIC" in it while the
+  // client still receives the value.
+  //
+  // NEITHER VALUE IS A SECRET, and nothing here makes a secret public:
+  //   - NEXT_WALLETCONNECT_PROJECT_ID — a public client id from cloud.reown.com.
+  //     WalletConnect requires it in the browser to open a session; it is
+  //     designed to ship in the bundle.
+  //   - NEXT_PRIVY_LOGIN_METHODS — a comma-separated list like "email,google".
+  //     Config, not a credential.
+  // Do NOT extend this block with anything that must stay server-side; an
+  // entry here is world-readable in the shipped JS.
+  //
+  // `?? ""` because Next rejects an `undefined` value in this map, and because
+  // both readers already treat empty-string as "unset" (falsy gate in
+  // Providers.tsx; `if (!raw) return ["email"]` in lib/privy/config.ts). So an
+  // unset variable still degrades to today's behaviour rather than throwing.
+  env: {
+    NEXT_WALLETCONNECT_PROJECT_ID: process.env.NEXT_WALLETCONNECT_PROJECT_ID ?? "",
+    NEXT_PRIVY_LOGIN_METHODS: process.env.NEXT_PRIVY_LOGIN_METHODS ?? "",
+  },
+
   async redirects() {
     return [
       // BlueBank's production gate (/app/bank + /pay) now lives in
