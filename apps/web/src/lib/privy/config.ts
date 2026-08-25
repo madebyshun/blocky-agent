@@ -11,7 +11,7 @@
 // The App ID is a PUBLIC client identifier (safe to inline), not a secret. The
 // server-side Privy secret (if ever needed for verification) would be a separate
 // non-public env var and is NOT read here.
-import type { PrivyClientConfig } from "@privy-io/react-auth";
+import type { PrivyClientConfig, WalletListEntry } from "@privy-io/react-auth";
 import { base, baseSepolia } from "wagmi/chains";
 import { robinhoodMainnet } from "@/lib/robinhood/chains";
 
@@ -76,6 +76,40 @@ export const PRIVY_LOGIN_METHODS = parseLoginMethods(
   process.env.NEXT_PRIVY_LOGIN_METHODS,
 );
 
+/**
+ * The external wallets offered when Privy is enabled — one picker row each.
+ *
+ * THIS LIST IS THE WHOLE EXTERNAL-WALLET SURFACE ON THE PRIVY TREE, not a
+ * nicety. `@privy-io/wagmi` empties wagmi's connector array and force-disables
+ * EIP-6963 discovery (see the header of `lib/privy/connect-bridge.tsx`), so
+ * `useConnect()` reaches nothing here — a wallet that is not in this array has
+ * no route into the app at all. That is exactly the bug this replaced: the
+ * picker rendered `useConnect().connectors`, which under Privy is `[]`, so
+ * "I already have a wallet" opened an empty menu.
+ *
+ * `detected_ethereum_wallets` is FIRST and is load-bearing: it surfaces whatever
+ * EIP-6963 wallet the browser actually has (Rabby, Brave, OKX, a fresh
+ * MetaMask fork…). Without it the list would silently cap the app at the six
+ * hard-coded brands below, which is the same "unreachable wallet" failure in a
+ * smaller costume.
+ *
+ * Order is the render order. `wallet_connect` sits last as the catch-all: it is
+ * the only entry that reaches a wallet which is not an extension in THIS
+ * browser (mobile-only wallets, and anyone on a phone browser).
+ *
+ * Entries are typed `WalletListEntry`, so a string Privy does not support is a
+ * compile error rather than a row that does nothing when clicked.
+ */
+export const PRIVY_WALLET_LIST: { id: WalletListEntry; name: string; icon: string; subtitle: string }[] = [
+  { id: "detected_ethereum_wallets", name: "Browser wallet", icon: "🧩", subtitle: "Detected extension" },
+  { id: "metamask",        name: "MetaMask",        icon: "🦊", subtitle: "Browser extension" },
+  { id: "coinbase_wallet", name: "Coinbase Wallet", icon: "🔵", subtitle: "Extension or Smart Wallet" },
+  { id: "base_account",    name: "Base Account",    icon: "🔷", subtitle: "Passkey — no seed phrase" },
+  { id: "phantom",         name: "Phantom",         icon: "👻", subtitle: "Browser extension" },
+  { id: "rainbow",         name: "Rainbow",         icon: "🌈", subtitle: "Mobile wallet" },
+  { id: "wallet_connect",  name: "WalletConnect",   icon: "🔗", subtitle: "QR code / mobile" },
+];
+
 // Email-first onboarding: a user signs in with an email code and Privy silently
 // provisions an embedded wallet for anyone who arrives without one
 // (`createOnLogin: "users-without-wallets"`). Users who already have an external
@@ -91,14 +125,19 @@ export const privyClientConfig: PrivyClientConfig = {
   //   - `theme: "dark"` + our brand accent: Privy defaults to a LIGHT modal,
   //     which clashed with every other (dark) wallet surface — this is the fix
   //     for that visual mismatch.
-  //   - `walletList: []`: suppress Privy's own external-wallet buttons
-  //     (MetaMask / Coinbase / WalletConnect …). External wallets are handled by
-  //     our shared WalletPickerModal, which reads wagmi's connector list — the
-  //     SAME list the rest of the app connects through. Letting Privy render a
-  //     second, separately-configured wallet menu on top of it is how the two
-  //     drift: a wallet could appear in one and not the other, and a user who
-  //     connected via Privy's copy would not be the user `useWallet()` sees.
-  //     Privy's modal stays SOCIAL/EMAIL-ONLY — the part it uniquely provides.
+  //   - `walletList: []`: keep the LOGIN modal social/email-only, so "Sign in
+  //     with email" opens exactly one clean choice set. External wallets are a
+  //     SEPARATE control (`connectWallet()`, driven by PRIVY_WALLET_LIST above)
+  //     rather than a second column in the login modal — the same split Halo
+  //     ships: "Connect Socials" vs "Connect Wallet".
+  //
+  //     ⚠️ THIS EMPTY ARRAY IS NOT A WAY TO DISABLE EXTERNAL WALLETS, and it
+  //     used to be read that way. `appearance.walletList` governs the LOGIN
+  //     modal only; the connect-wallet modal takes its own `walletList` per
+  //     call. Emptying this one while ALSO routing the pickers through wagmi's
+  //     connector list (which `@privy-io/wagmi` empties) is what left the app
+  //     with zero ways to connect an external wallet — two independently
+  //     reasonable-looking choices that combined into a lockout.
   //     (External wallets are governed by `walletList`, not `loginMethods`;
   //     the LoginMethod union has no "wallet" value.)
   appearance: {

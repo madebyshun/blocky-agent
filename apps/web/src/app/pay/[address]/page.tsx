@@ -246,17 +246,17 @@ function friendlyB20Error(msg: string): string {
 // the duplicate matcher, this fixes a real bug: connecting here went straight to
 // wagmi's connect() and never cleared the explicit-disconnect flag, so a user
 // who had tapped Disconnect earlier in the tab left it set for the rest of the
-// session and BaseAppAutoConnect kept skipping its silent re-bind. connectWith
+// session and BaseAppAutoConnect kept skipping its silent re-bind. `select()`
 // clears it.
 function PayConnect() {
-  const { coinbase, others, connectWith, isPending } = useWallet();
+  const { coinbase, others, isPending } = useWallet();
   const [open, setOpen] = useState(false);
 
   return (
     <div className="rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
       <div className="font-mono text-[11px] text-slate-300 mb-3 text-center">Connect a wallet to pay — you sign, non-custodial.</div>
       {coinbase && (
-        <button onClick={() => connectWith(coinbase.connector)} disabled={isPending}
+        <button onClick={() => coinbase.select()} disabled={isPending}
           className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl disabled:opacity-60 flex items-center justify-center gap-2"
           style={{ background: "#4FC3F7", color: "#050508" }}>
           {isPending ? "Connecting…" : <>🔵 Coinbase / Smart Wallet</>}
@@ -269,7 +269,7 @@ function PayConnect() {
       {open && (
         <div className="mt-2 rounded-xl border border-[#1A1A2E] overflow-hidden">
           {others.length ? others.map(w => (
-            <button key={w.connector.uid} onClick={() => { connectWith(w.connector); setOpen(false); }}
+            <button key={w.key} onClick={() => { w.select(); setOpen(false); }}
               className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-[#1A1A2E] transition-colors">
               <span className="font-mono text-xs text-slate-200">{w.name}</span>
             </button>

@@ -1241,14 +1241,14 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
 // clearUserDisconnected() call now come from useWallet, so this list can't
 // drift from the one every other surface shows.
 function ConnectButton() {
-  const { wallets, coinbase, connectWith, isPending } = useWallet();
+  const { wallets, coinbase, isPending } = useWallet();
   const [open, setOpen] = useState(false);
 
   return (
     <div className="relative">
       {coinbase && (
         <>
-          <button onClick={() => connectWith(coinbase.connector)} disabled={isPending}
+          <button onClick={() => coinbase.select()} disabled={isPending}
             className="w-full font-mono text-[13px] font-bold py-3 rounded-xl transition-all disabled:opacity-60 flex items-center justify-center gap-2"
             style={{ background: "#4FC3F7", color: "#050508" }}>
             {isPending ? "Connecting…" : <>🔵 Create a free wallet</>}
@@ -1283,7 +1283,7 @@ function ConnectButton() {
           <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-xl border border-[#1A1A2E] bg-[#0A0A12] shadow-2xl overflow-hidden">
             <p className="font-mono text-[10px] text-slate-600 px-3 pt-3 pb-2 tracking-widest">SELECT WALLET</p>
             {wallets.map(w => (
-              <button key={w.connector.uid} onClick={() => { connectWith(w.connector); setOpen(false); }}
+              <button key={w.key} onClick={() => { w.select(); setOpen(false); }}
                 className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-[#1A1A2E] transition-colors">
                 <span className="w-7 h-7 rounded-lg bg-[#1A1A2E] flex items-center justify-center text-base shrink-0">{w.icon}</span>
                 <span className="font-mono text-xs text-slate-200">{w.name}</span>

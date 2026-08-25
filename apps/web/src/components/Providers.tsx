@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { createConfig as privyCreateConfig, WagmiProvider as PrivyWagmiProvider } from "@privy-io/wagmi";
 import { PRIVY_APP_ID, PRIVY_ENABLED, privyClientConfig } from "@/lib/privy/config";
+import { PrivyConnectBridge } from "@/lib/privy/connect-bridge";
 import MiniAppReady from "@/components/MiniAppReady";
 import BaseAppAutoConnect from "@/components/BaseAppAutoConnect";
 import { LanguageProvider } from "@/lib/i18n/context";
@@ -145,11 +146,25 @@ const defaultConfig = wagmiCreateConfig({
 // createConfig additionally lets Privy inject + sync the embedded wallet into
 // wagmi state, so useAccount()/useBalance()/the swap+send stack pick it up with
 // no further wiring.
+//
+// ⚠️ `connectors` and `multiInjectedProviderDiscovery` are DELIBERATELY ABSENT
+// here, and re-adding them would be worse than useless. @privy-io/wagmi's
+// createConfig does, AFTER spreading our options:
+//     connectors: opts.connectors?.filter(c => c.type === "mock"),
+//     multiInjectedProviderDiscovery: false,
+// Creator fns carry no `.type`, so that filter returns [] for EVERY connector —
+// passing them here silently produced an EMPTY wallet list while the code read
+// as if it configured one. That is the bug this file's PR fixes: "I already have
+// a wallet" opened a menu with no rows, and Coinbase's "create a free wallet"
+// CTA vanished, because both render `useConnect().connectors`.
+//
+// External wallets on this tree go through Privy's own modal instead — see
+// `lib/privy/connect-bridge.tsx` and `PRIVY_WALLET_LIST`. Leaving the keys out
+// makes the truth visible at the call site rather than hiding it behind an
+// override two node_modules deep.
 const privyConfig = PRIVY_ENABLED
   ? privyCreateConfig({
       chains: [base, baseSepolia, robinhoodMainnet, robinhoodTestnet],
-      connectors,
-      multiInjectedProviderDiscovery: true,
       transports,
       ssr: true,
     })
@@ -182,7 +197,11 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       <PrivyProvider appId={PRIVY_APP_ID!} config={privyClientConfig}>
         <QueryClientProvider client={queryClient}>
           <PrivyWagmiProvider config={privyConfig}>
-            <Shell>{children}</Shell>
+            {/* Publishes Privy's connectWallet() to useWallet(). Without it the
+                pickers have no route to an external wallet on this tree. */}
+            <PrivyConnectBridge>
+              <Shell>{children}</Shell>
+            </PrivyConnectBridge>
           </PrivyWagmiProvider>
         </QueryClientProvider>
       </PrivyProvider>
