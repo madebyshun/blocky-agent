@@ -32,7 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
 import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow, HoodChain } from "@/lib/blue-hood/types";
-import { chainOf } from "@/lib/blue-hood/types";
+import { chainOf, rowKey, ARB_MIN_ABS_PCT, DRIFT_MIN_ABS_PCT } from "@/lib/blue-hood/types";
 import HoodSidebar from "./HoodSidebar";
 import TickerDetailPanel from "./TickerDetailPanel";
 import ArrowBriefBlock from "./ArrowBriefBlock";
@@ -95,7 +95,13 @@ function isFrozenLike(v: TickerSnapshot["verdict"]): boolean {
   return v === "FROZEN_ALIGNED" || v === "PREMARKET_DRIFT" || v === "AFTERHOURS_DRIFT";
 }
 
-type SnapshotRes = { ok: true; snapshot: HoodSnapshot } | { ok: false; error: string };
+/** Base P1 — `base_desk` is optional so a client running against an older
+ *  deployment (or a cached response) degrades to "unknown" rather than
+ *  crashing on a missing field. */
+type BaseDeskState = { status: "live" | "stale" | "offline"; count: number };
+type SnapshotRes =
+  | { ok: true; snapshot: HoodSnapshot; base_desk?: BaseDeskState }
+  | { ok: false; error: string };
 type PerTypeStat = {
   ready: boolean;
   sample: number;
@@ -119,6 +125,10 @@ type ArrowsRes =
 
 export default function HoodClient() {
   const [snap, setSnap] = useState<HoodSnapshot | null>(null);
+  /** Base P1 — desk state from /api/hood/snapshot. `null` = the field wasn't
+   *  in the response (older deploy / never fetched), which is NOT the same as
+   *  "offline" and must not be rendered as a failure. */
+  const [baseDesk, setBaseDesk] = useState<BaseDeskState | null>(null);
   const [arrowsData, setArrowsData] = useState<Extract<ArrowsRes, { ok: true }> | null>(null);
   // P2.4 (2026-07-24): positions read at the top-level so BOTH the
   // PositionsStrip and the drift-board rows can see the "held" set.
@@ -159,7 +169,10 @@ export default function HoodClient() {
       // clear the last-good snapshot or set an inline error — the honest,
       // cause-specific narrative (kv_error vs never_polled vs cron_stalled)
       // is owned entirely by <HealthBanner>, which reads /api/hood/health.
-      if (s.ok) setSnap(s.snapshot);
+      if (s.ok) {
+        setSnap(s.snapshot);
+        setBaseDesk(s.base_desk ?? null);
+      }
       if (a.ok) setArrowsData(a);
       if (lr.ok) setInboxLastRead(lr.last_read_at);
       setLastFetch(Date.now());
@@ -295,8 +308,15 @@ export default function HoodClient() {
           <PositionsStrip
             tickers={snap?.tickers ?? []}
             tickersWithOpenArrow={useMemo(() => {
+              // Base P1 — RH arrows ONLY. This set gates the [Sell] button on
+              // a REAL RH holding; a Base NVDA arrow reaching it would enable
+              // Sell on the RH NVDA position and hand ReviewSignPanel an arrow
+              // from the wrong chain. Bare ticker can't tell them apart, so
+              // filter on `chainOf` at the source.
               const s = new Set<string>();
-              for (const a of arrowsData?.arrows ?? []) if (a.status === "open") s.add(a.ticker);
+              for (const a of arrowsData?.arrows ?? []) {
+                if (a.status === "open" && chainOf(a) === "robinhood") s.add(a.ticker);
+              }
               return s;
             }, [arrowsData?.arrows])}
             onOpenTrade={(ticker) => {
@@ -319,6 +339,8 @@ export default function HoodClient() {
               <SortToggle value={sort} onChange={setSort} />
             </div>
           </div>
+
+          <BaseDeskNote desk={baseDesk} marketOpen={snap?.metrics.market_is_open ?? false} />
 
           <DriftBoard rows={filtered} rowRefs={rowRefs} arrows={arrowsData?.arrows ?? null} heldTickers={heldTickers} />
 
@@ -669,6 +691,76 @@ function ChainToggle({
   );
 }
 
+// Base P1 — the Base desk explains itself when it is quiet.
+//
+// WHY THIS EXISTS: `ChainToggle` renders the Base pill `disabled` and dimmed at
+// "(0)" with no explanation. A desk that is merely below threshold then looks
+// exactly like a desk that is broken — the #308 rule ("show Base even at 0
+// arrows") is about precisely this failure mode: silence must not read as an
+// error. So a quiet Base desk states its own count and the threshold it is
+// waiting on, and a Base desk that is actually degraded says THAT instead.
+//
+// Thresholds are imported from `@/lib/blue-hood/types`, never typed as literal
+// copy — the printed number and the fired number are the same constant. Which
+// one applies swaps with the session (2% closed → 1% open), so the note reads
+// `marketOpen` rather than assuming the closed-market case.
+//
+// `desk == null` means the snapshot response carried no `base_desk` field at
+// all — an older deployment, or the very first render before the fetch lands.
+// That is NOT a failure, so it renders nothing rather than claiming "offline".
+function BaseDeskNote({
+  desk,
+  marketOpen,
+}: {
+  desk: { status: "live" | "stale" | "offline"; count: number } | null;
+  marketOpen: boolean;
+}) {
+  if (!desk) return null;
+
+  const threshold = marketOpen ? ARB_MIN_ABS_PCT : DRIFT_MIN_ABS_PCT;
+  const kind = marketOpen ? "arb" : "drift";
+
+  let body: React.ReactNode;
+  let accent = BASE_BLUE_TEXT;
+  if (desk.status === "live") {
+    body = (
+      <>
+        Watching <span className="font-mono tabular-nums">{desk.count}</span> Base B20 stock
+        {desk.count === 1 ? "" : "s"} — {kind} arrows fire past{" "}
+        <span className="font-mono tabular-nums">±{threshold.toFixed(1)}%</span>
+        {marketOpen ? " while the market is open" : " while the market is closed"}.
+      </>
+    );
+  } else if (desk.status === "stale") {
+    accent = AMBER;
+    body = (
+      <>
+        Base desk rows are older than the freshness window, so they are withheld rather than shown
+        as live. Robinhood rows below are unaffected.
+      </>
+    );
+  } else {
+    accent = MUTED;
+    body = (
+      <>
+        Base desk returned no rows this cycle. Robinhood rows below are unaffected.
+      </>
+    );
+  }
+
+  return (
+    <div
+      className="mb-3 rounded border px-3 py-2 text-[11px] leading-relaxed"
+      style={{ borderColor: BORDER, backgroundColor: SURFACE, color: "#9aa1ac" }}
+    >
+      <span className="mr-2 font-mono text-[10px] uppercase tracking-widest" style={{ color: accent }}>
+        base desk
+      </span>
+      {body}
+    </div>
+  );
+}
+
 function SortToggle({ value, onChange }: { value: SortKey; onChange: (v: SortKey) => void }) {
   const opts: { key: SortKey; label: string }[] = [
     { key: "drift", label: "Drift" },
@@ -745,16 +837,31 @@ function DriftBoard({
         </thead>
         <tbody className="font-mono text-[13px]">
           {rows.map((r) => {
-            const openArrow = arrows?.find((a) => a.ticker === r.ticker && a.status === "open") ?? null;
+            // Base P1 — the open-arrow lookup MUST match on chain too. Arrows
+            // carry `chain` (absent ⟹ robinhood, see chainOf), and a bare
+            // ticker match would hang the Base NVDA arrow off the RH NVDA row
+            // and vice versa: two real, independent signals shown as one.
+            const openArrow =
+              arrows?.find(
+                (a) => a.ticker === r.ticker && chainOf(a) === chainOf(r) && a.status === "open",
+              ) ?? null;
+            // Base P1 — identity is (chain, ticker), not ticker. RH rows keep
+            // the bare-ticker key byte-for-byte, so their React key, ref, and
+            // accordion state are unchanged. See `rowKey`.
+            const k = rowKey(r);
             return (
               <DriftRow
-                key={r.ticker}
+                key={k}
                 r={r}
+                rowKeyStr={k}
                 rowRefs={rowRefs}
-                expanded={expanded === r.ticker}
-                onToggle={() => toggle(r.ticker)}
+                expanded={expanded === k}
+                onToggle={() => toggle(k)}
                 openArrow={openArrow}
-                isHeld={heldTickers.has(r.ticker)}
+                // Base P1 — `heldTickers` comes from PositionsStrip, whose
+                // balances are read at RH_CHAIN_ID. Holding RH NVDA does not
+                // mean holding Base NVDA, so the held marker is RH-only.
+                isHeld={chainOf(r) === "robinhood" && heldTickers.has(r.ticker)}
               />
             );
           })}
@@ -819,6 +926,7 @@ function Sparkline({
 
 function DriftRow({
   r,
+  rowKeyStr,
   rowRefs,
   expanded,
   onToggle,
@@ -826,6 +934,11 @@ function DriftRow({
   isHeld,
 }: {
   r: TickerSnapshot;
+  /** Base P1 — `rowKey(r)`: the (chain, ticker) identity this row registers
+   *  its DOM ref under. Passed in rather than recomputed so the ref key and
+   *  the React key are provably the same string. RH ⟹ the bare ticker, so
+   *  every existing `rowRefs.current["NVDA"]` caller keeps resolving. */
+  rowKeyStr: string;
   rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>;
   expanded: boolean;
   onToggle: () => void;
@@ -841,7 +954,7 @@ function DriftRow({
   if (noData) {
     return (
       <tr
-        ref={(el) => { rowRefs.current[r.ticker] = el; }}
+        ref={(el) => { rowRefs.current[rowKeyStr] = el; }}
         className="border-b last:border-b-0 hover:bg-black/40"
         style={{ borderColor: "#0f1218" }}
       >
@@ -903,7 +1016,7 @@ function DriftRow({
   return (
     <>
       <tr
-        ref={(el) => { rowRefs.current[r.ticker] = el; }}
+        ref={(el) => { rowRefs.current[rowKeyStr] = el; }}
         // T-V2 #2 — `hood-row` gives the terminal-cursor border-left on
         // hover. Layered on top of the existing `hover:bg-black/40` so
         // the surface still darkens at the same time.

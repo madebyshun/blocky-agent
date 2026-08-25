@@ -24,6 +24,30 @@ export type M5Verdict =
 export type MarketSession = "regular" | "premarket" | "afterhours" | "weekend" | "holiday";
 
 /**
+ * |drift| ≥ this (in %) fires a drift arrow while the market is CLOSED.
+ * Spec Block 1.2; enforced in `rule-engine.ts`.
+ *
+ * It lives in this dependency-free module, not next to the rule that uses it,
+ * so the BOARD can print the same number the ENGINE fires on. `rule-engine.ts`
+ * imports `@/lib/kv`; a client component importing the constant from there
+ * would drag Upstash into the browser bundle. The alternative — typing "2%"
+ * into the UI copy — is how a displayed threshold silently drifts away from
+ * the real one. One constant, two readers.
+ */
+export const DRIFT_MIN_ABS_PCT = 2.0;
+
+/**
+ * |delta| ≥ this (in %) fires an arb arrow while the market is OPEN.
+ * Spec Block 1.2; enforced in `rule-engine.ts`.
+ *
+ * Lives here for the same reason as `DRIFT_MIN_ABS_PCT` above: the board tells
+ * the reader which threshold a quiet desk is waiting on, and that number swaps
+ * with the session (2% closed → 1% open). Two constants, one place, so the
+ * copy cannot say 2% while the engine fires at 1%.
+ */
+export const ARB_MIN_ABS_PCT = 1.0;
+
+/**
  * Which desk a snapshot row / arrow belongs to. `"robinhood"` is Blue Hood's
  * origin chain (chainId 4663); `"base"` is the Coinbase B20 tokenized-stock desk
  * (chainId 8453) wired in Base P3.
@@ -41,6 +65,31 @@ export type HoodChain = "robinhood" | "base";
  *  rule can never be spelled inconsistently. */
 export function chainOf(x: { chain?: HoodChain } | null | undefined): HoodChain {
   return x?.chain ?? "robinhood";
+}
+
+/**
+ * Base P1 — the UI identity of a snapshot row. `chainSeg`'s idea (kv-keys.ts),
+ * applied to React keys / refs / accordion state instead of KV keys.
+ *
+ * WHY THIS EXISTS: the board keyed everything by BARE TICKER — React `key`,
+ * `rowRefs`, the one-row-open accordion, the open-arrow lookup. That was
+ * correct while every row came from one chain. NVDA/META/GOOGL/AAPL exist on
+ * BOTH Robinhood Chain and Base, so the moment Base rows join `snap.tickers`
+ * a bare ticker stops identifying a row: two rows answer to "NVDA", React
+ * warns on duplicate keys, expanding one expands both, and `rowRefs` scrolls
+ * to whichever row mounted last.
+ *
+ * ⚠️ THE ROBINHOOD BRANCH MUST KEEP RETURNING THE BARE TICKER, byte-for-byte.
+ * Every pre-existing caller hands a bare ticker to `rowRefs.current[...]`
+ * (PositionsStrip's [Sell] jump, the sidebar's watchlist click, the inbox's
+ * cross-page push). If RH rows changed key, all of those would silently stop
+ * resolving. Same reasoning as `chainSeg` returning "" for robinhood, and the
+ * same reasoning as #308 keeping RH hrefs byte-identical: the new chain pays
+ * the migration cost, the incumbent pays nothing.
+ */
+export function rowKey(x: { ticker: string; chain?: HoodChain }): string {
+  const c = chainOf(x);
+  return c === "robinhood" ? x.ticker : `${c}:${x.ticker}`;
 }
 
 export interface TickerSnapshot {
@@ -156,6 +205,38 @@ export interface HoodSnapshot {
     market_is_open: boolean;
     market_session: MarketSession;
   };
+}
+
+/**
+ * Base P1 — the Base desk's latest rows, stored under its OWN key
+ * (`KV_BASE_ROWS_LATEST`), read by `/api/hood/snapshot` and merged into the
+ * board response at read time.
+ *
+ * ⚠️ THIS IS DELIBERATELY *NOT* A `HoodSnapshot`, and that is the whole point.
+ *
+ * `persistSnapshot(snap)` writes `bh:snapshot:latest`, the hour ring, AND the
+ * PERMANENT series archive `bh:series:day:*` — which is keyed by BARE TICKER.
+ * NVDA/META/GOOGL/AAPL exist on both Robinhood Chain and Base, so one Base row
+ * reaching that archive corrupts the RH price history irreversibly (history,
+ * unlike code, cannot be backfilled). The RH-only-ness of `persistSnapshot` is
+ * therefore a load-bearing invariant, not a style choice.
+ *
+ * Making this shape structurally incompatible with `HoodSnapshot` (no
+ * `cycle_id` / `finished_at` / `duration_ms` / `metrics`, and the rows live
+ * under `rows` not `tickers`) means `persistSnapshot(baseLatest)` and
+ * `persistSeriesPoint(baseLatest)` DO NOT COMPILE. The invariant is enforced by
+ * `tsc`, not by whoever reads this comment. That is the difference between a
+ * guard and a convention.
+ */
+export interface BaseDeskLatest {
+  /** ISO cycle start, anchored to the SAME `snap.started_at` the RH poller
+   *  used (see poll/route.ts) so both desks describe one instant. Read side
+   *  uses it for the freshness check — see `BASE_ROWS_MAX_AGE_MS`. */
+  started_at: string;
+  /** One row per Base B20 stock polled this cycle. Every row carries
+   *  `chain: "base"` (set in `baseQuoteToSnapshot`), which is what every
+   *  downstream chain-qualified key and every board de-collision reads. */
+  rows: TickerSnapshot[];
 }
 
 // ── Permanent price series ────────────────────────────────────────────────

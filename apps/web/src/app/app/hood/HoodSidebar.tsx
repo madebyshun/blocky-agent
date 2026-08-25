@@ -19,6 +19,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { Arrow, HoodSnapshot, M5Verdict, TickerSnapshot } from "@/lib/blue-hood/types";
+import { rowKey } from "@/lib/blue-hood/types";
 
 const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
@@ -171,7 +172,7 @@ export default function HoodSidebar({
                   .slice()
                   .sort((a, b) => Math.abs(b.drift_pct ?? 0) - Math.abs(a.drift_pct ?? 0))
                   .map((r) => (
-                    <WatchRow key={r.ticker} r={r} kind="tradable" onSelect={onSelectTicker} />
+                    <WatchRow key={rowKey(r)} r={r} kind="tradable" onSelect={onSelectTicker} />
                   ))}
               </ul>
 
@@ -192,7 +193,7 @@ export default function HoodSidebar({
                         .slice()
                         .sort((a, b) => rowTotalTvlUi(b) - rowTotalTvlUi(a))
                         .map((r) => (
-                          <WatchRow key={r.ticker} r={r} kind="dust" onSelect={onSelectTicker} />
+                          <WatchRow key={rowKey(r)} r={r} kind="dust" onSelect={onSelectTicker} />
                         ))}
                     </ul>
                   )}
@@ -226,7 +227,7 @@ export default function HoodSidebar({
                   {noDataOpen && (
                     <ul className="pb-1">
                       {noData.map((r) => (
-                        <WatchRow key={r.ticker} r={r} kind="no_data" onSelect={onSelectTicker} />
+                        <WatchRow key={rowKey(r)} r={r} kind="no_data" onSelect={onSelectTicker} />
                       ))}
                     </ul>
                   )}
@@ -345,7 +346,11 @@ function WatchRow({
   return (
     <li>
       <button
-        onClick={() => onSelect(r.ticker)}
+        // Base P1 — hand the caller the (chain, ticker) identity, not the bare
+        // ticker: the parent looks this up in `rowRefs` to scroll the board,
+        // and both chains list NVDA/META/GOOGL/AAPL. RH ⟹ bare ticker, so
+        // clicking an RH watchlist row behaves exactly as it did before.
+        onClick={() => onSelect(rowKey(r))}
         className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-colors hover:bg-[#ffffff08]"
         style={{ opacity: rowOpacity }}
       >

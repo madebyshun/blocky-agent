@@ -21,7 +21,10 @@ import {
   TTL_POLL_LOCK,
   KV_POLL_HEARTBEAT,
   TTL_POLL_HEARTBEAT,
+  KV_BASE_ROWS_LATEST,
+  TTL_BASE_ROWS,
 } from "@/lib/blue-hood/kv-keys";
+import type { BaseDeskLatest } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
 // Prod cycle observation (2026-07-21): with market open + 24 tokens ×
@@ -108,6 +111,22 @@ async function handle(req: NextRequest) {
       // so freshness maths line up across both desks in one snapshot.
       const cycleStart = new Date(snap.started_at).getTime();
       baseRows = await pollBaseStocks(cycleStart);
+
+      // Base P1 — publish the Base rows for the board under their OWN key.
+      //
+      // This is the ONLY write on the Base path, and it deliberately does not
+      // go through `persistSnapshot`: that function also writes the PERMANENT
+      // bare-ticker series archive (`bh:series:day:*`), and NVDA/META/GOOGL/AAPL
+      // exist on BOTH chains, so a Base row landing there would corrupt RH
+      // price history irreversibly. `BaseDeskLatest` is structurally not a
+      // `HoodSnapshot`, so that mistake does not compile — see its doc comment.
+      //
+      // Inside the existing try/catch on purpose: a KV write failure here is a
+      // Base-desk failure, so it degrades to RH-only exactly like a poll
+      // failure does. The RH board is the heartbeat and must not depend on
+      // anything Base does.
+      const baseLatest: BaseDeskLatest = { started_at: snap.started_at, rows: baseRows };
+      await kvSet(KV_BASE_ROWS_LATEST, baseLatest, TTL_BASE_ROWS);
     } catch (e) {
       console.error(`[poller] base desk failed, degrading to RH-only: ${(e as Error).message}`);
       baseRows = [];

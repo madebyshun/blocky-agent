@@ -24,6 +24,7 @@
 import { useMemo } from "react";
 import { useAccount, useReadContracts } from "wagmi";
 import type { TickerSnapshot } from "@/lib/blue-hood/types";
+import { chainOf } from "@/lib/blue-hood/types";
 import { RWA_TOKENS } from "@/lib/robinhood/rwa-registry";
 
 const RH_CHAIN_ID = 4663;
@@ -88,9 +89,27 @@ export function usePositions(tickers: TickerSnapshot[]): {
   // Map ticker → snapshot so we can attach live price + drift after
   // the balance multicall returns. Falls back to zero for tickers not
   // on the drift board (USDG stable + WETH).
+  //
+  // ⚠️ Base P1 — DROP BASE ROWS FIRST. This strip prices REAL HOLDINGS, and
+  // its `universe` below is `RWA_TOKENS` read at `chainId: RH_CHAIN_ID` — it
+  // is a Robinhood-Chain-only surface by construction. But this map was keyed
+  // by BARE TICKER, and NVDA/META/GOOGL/AAPL exist on both chains, so once
+  // Base rows joined `snap.tickers` the later row simply overwrote the
+  // earlier: an RH NVDA holding would be valued at BASE NVDA's DEX price and
+  // shown Base's drift. Balances stayed correct (right chain), which is what
+  // makes it nasty — the number looks plausible and is wrong.
+  //
+  // We FILTER rather than re-key on purpose. Re-keying would make the lookup
+  // correct but still let Base rows into an RH-only surface, so the next
+  // person to add a lookup here re-opens the hole. Filtering means the strip
+  // never sees a Base row at all, and `tickers` is read in exactly one place
+  // (here) — so that claim is checkable by grep, not by trust.
   const snapByTicker = useMemo(() => {
     const m = new Map<string, TickerSnapshot>();
-    for (const t of tickers) m.set(t.ticker, t);
+    for (const t of tickers) {
+      if (chainOf(t) !== "robinhood") continue;
+      m.set(t.ticker, t);
+    }
     return m;
   }, [tickers]);
 

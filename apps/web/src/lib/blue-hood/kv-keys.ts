@@ -25,6 +25,23 @@ export const KV_SNAPSHOT_LATEST = "bh:snapshot:latest";
 /** Ring buffer entry for hour `H` (YYYYMMDDHH). Keep 24h for sparkline history. */
 export const kvSnapshotHour = (yyyymmddhh: string) => `bh:snapshot:hour:${yyyymmddhh}`;
 
+/**
+ * Base P1 — the Base desk's latest rows. Payload is `BaseDeskLatest`.
+ *
+ * NOTE THE NAMESPACE: `bh:base:*`, NOT `bh:snapshot:base:latest`. That second
+ * name would read like a sibling of `KV_SNAPSHOT_LATEST` and invite a future
+ * reader to hand it to `persistSnapshot` — which also writes the PERMANENT
+ * bare-ticker series archive and would corrupt RH history with Base rows
+ * (NVDA/META/GOOGL/AAPL exist on both chains). A separate namespace makes the
+ * two impossible to confuse by eye; the incompatible `BaseDeskLatest` type
+ * makes them impossible to confuse by compiler. Belt and braces, on purpose.
+ *
+ * The three keys `persistSnapshot` writes — `bh:snapshot:latest`,
+ * `bh:snapshot:hour:*`, `bh:series:day:*` — share no prefix with this one, so
+ * a prefix scan proves the disjointness rather than asserting it.
+ */
+export const KV_BASE_ROWS_LATEST = "bh:base:rows:latest";
+
 /** Monotonic counter for the aesthetic `#0001` serial. */
 export const KV_ARROW_SERIAL_COUNTER = "bh:arrow:serial";
 
@@ -268,6 +285,20 @@ export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are
  *  "one open arrow at a time" and "let the next real setup fire soon". */
 export const TTL_TICKER_COOLDOWN = 60 * 60 * 4; // 4h
 export const TTL_SPARKLINE = 60 * 20; // 20 min — hourly candles don't need to be fresher than that
+/**
+ * Base P1 — 15 min = 3 poll cycles at the 5-min cron cadence.
+ *
+ * Short ON PURPOSE. If the Base desk dies (DexScreener ceiling, RPC outage,
+ * a bad deploy) this key EXPIRES and the board renders "Base desk offline"
+ * instead of quietly serving three-hour-old stock prices as if they were live.
+ * Failing loud beats failing plausible — a stale price that looks fresh is
+ * worse than no price, because it is actionable and wrong.
+ *
+ * Three cycles, not one, so a single transient miss doesn't blank the desk.
+ * The read path ALSO checks `started_at` against `BASE_ROWS_MAX_AGE_MS`, so
+ * freshness does not depend on the TTL landing precisely.
+ */
+export const TTL_BASE_ROWS = 60 * 15; // 15 min = 3 poll cycles
 export const TTL_PUSH_SUB = 60 * 60 * 24 * 90; // 90d — browser subs expire on their own well before this
 export const TTL_CHAT_CARD = 60 * 60 * 24 * 30; // 30d — matches TTL_ARROW_INDEX so cards don't outlive arrows
 /** 2.1 — an alert record self-expires so KV never accumulates unboundedly, even
