@@ -4,7 +4,7 @@ import { createConfig as wagmiCreateConfig, WagmiProvider } from "wagmi";
 import { base, baseSepolia } from "wagmi/chains";
 import { http } from "viem";
 import { robinhoodMainnet, robinhoodTestnet } from "@/lib/robinhood/chains";
-import { coinbaseWallet } from "wagmi/connectors";
+import { coinbaseWallet, walletConnect } from "wagmi/connectors";
 import { farcasterMiniApp } from "@farcaster/miniapp-wagmi-connector";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PrivyProvider } from "@privy-io/react-auth";
@@ -38,6 +38,31 @@ const inMiniAppFrame = typeof window !== "undefined" && window.top !== window.se
 // That made `connect()` hang on "Connecting…" for MetaMask/Rabby while only
 // Coinbase (its own SDK) worked. Dropping it routes injected wallets through
 // EIP-6963's per-wallet providers, fixing the hang.
+// WalletConnect — the ONLY path for a wallet that is not a browser extension
+// in this exact browser.
+//
+// WHY THIS EXISTS: before it, the registered connector list was Coinbase alone,
+// and everything else arrived purely through EIP-6963 discovery. EIP-6963 is an
+// extension-to-page handshake, so it can only ever surface wallets installed in
+// the current desktop browser. That left a whole class of users with NO route
+// in at all — anyone on a phone browser, and every mobile-only wallet (Rainbow,
+// Trust, Zerion, MetaMask Mobile, Phantom Mobile). They were not "hard to
+// connect"; they were unreachable. Coinbase's own QR fallback rescued exactly
+// one wallet — its own.
+//
+// ENV-GATED on `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, matching the existing
+// `PRIVY_ENABLED` pattern: unset → the array spreads to nothing and the
+// connector list is byte-identical to before, so a missing var degrades to
+// today's behaviour instead of throwing at module scope (`walletConnect()`
+// requires a projectId and will reject an empty string at connect time).
+// The project id is a PUBLIC client identifier from cloud.reown.com — safe to
+// inline in the bundle, not a secret.
+//
+// `@walletconnect/ethereum-provider` ships as a dependency of
+// `@wagmi/connectors`, so this adds no new package; wagmi lazy-imports it on
+// first connect, keeping it out of the initial bundle.
+const WALLETCONNECT_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+
 const connectors = [
   // Only inside Base App / Farcaster — host wallet connects with no prompt.
   ...(inMiniAppFrame ? [farcasterMiniApp()] : []),
@@ -45,6 +70,35 @@ const connectors = [
     appName: "Blue Agent",
     preference: { options: "all" }, // extension + QR code fallback
   }),
+  // CLIENT-ONLY, and that is load-bearing, not a nicety. `createConfig` runs on
+  // the server too (`ssr: true`), and building the WC connector there drags in
+  // `@walletconnect/ethereum-provider`'s keyvaluestorage, which reaches for
+  // `indexedDB` — absent in Node. That surfaced as
+  // `unhandledRejection: ReferenceError: indexedDB is not defined` on every
+  // server render (measured: 0 occurrences without this connector, 3 with it,
+  // same page loads). Gating on `window` keeps WC off the server entirely.
+  //
+  // A server/client connector-list difference is already the established shape
+  // in this file — `inMiniAppFrame` above does exactly the same thing — because
+  // the connector list is only ever read from client components
+  // (`useWallet()` → `useConnect()`), never rendered during SSR.
+  //
+  // Mini App hosts carry their own wallet, so a QR modal inside an embedded
+  // frame is a dead end — register WC for top-level tabs only.
+  ...(typeof window !== "undefined" && WALLETCONNECT_PROJECT_ID && !inMiniAppFrame
+    ? [
+        walletConnect({
+          projectId: WALLETCONNECT_PROJECT_ID,
+          showQrModal: true,
+          metadata: {
+            name: "Blue Agent",
+            description: "The onchain Agent OS — Blue Chat, Blue Hood, Blue Hub.",
+            url: "https://blueagent.dev",
+            icons: ["https://blueagent.dev/icon.png"],
+          },
+        }),
+      ]
+    : []),
 ];
 
 const transports = {
