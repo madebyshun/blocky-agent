@@ -3,9 +3,10 @@
 // Order of preference:
 //   1. Chainlink AggregatorV3 on-chain read (proxy → latestRoundData, decimals)
 //      — deterministic, oracle-signed, 24h heartbeat per RH docs.
-//   2. GeckoTerminal DEX pool spot — a live sanity check + fallback if the
-//      Chainlink feed is unmapped (`chainlink-only-feeds` for tickers whose
-//      token isn't in the registry yet, or vice-versa).
+//   2. DEX pool spot — a live sanity check + fallback if the Chainlink feed is
+//      unmapped (`chainlink-only-feeds` for tickers whose token isn't in the
+//      registry yet, or vice-versa). The DEX *provider* is per-source: RH uses
+//      GeckoTerminal, Base uses DexScreener (see `DexFeed` below for why).
 //
 // Never let an LLM invent a stock price. If both sources fail, return null +
 // note so the tool can honestly say "insufficient data".
@@ -13,6 +14,36 @@
 import { createPublicClient, http, fallback, type Address, type Chain } from "viem";
 import { base } from "viem/chains";
 import { robinhoodMainnet } from "@/lib/robinhood/chains";
+
+/**
+ * DexFeed — which DEX aggregator supplies the *spot price* for this source.
+ *
+ * WHY THIS IS PER-SOURCE AND NOT GLOBAL: GeckoTerminal's free tier meters by
+ * IP, and that budget is shared across every network. The Blue Hood poller
+ * reads RH's 24 tickers through GT first (`rwa-market.ts`), then Base's 4 —
+ * so by the time the Base reads go out, our own RH desk has already exhausted
+ * the per-IP window. Prod logs on 2026-08-24/25 caught this exactly: 12/12
+ * Base reads returned `http=429 retry_after=0` in ms=8–15 (instant edge
+ * rejection ⟹ the IP is hard-blocked, so an in-cycle retry is futile), against
+ * 93 `[gt-fetch] 429` on `networks/robinhood/` in the same window. The Base
+ * desk was 100% dark on `dex_unavailable` for that reason and no other.
+ *
+ * Moving Base onto DexScreener — a completely separate API with its own quota
+ * — removes the contention at the root without touching the RH desk (longest
+ * track record, do not disturb) and without adding cycle latency.
+ *
+ * SCOPE: this switches the Base *spot price* only. GeckoTerminal remains the
+ * source for RH spot price AND for all OHLCV/sparkline reads (`rwa-market.ts`)
+ * on both chains — none of that is touched here.
+ *
+ * `chain` is required on the dexscreener variant on purpose: DexScreener's
+ * chain slug is its own namespace and must NOT be inferred from `gtNetwork`
+ * (they coincide at "base" today, which is exactly the kind of coincidence
+ * that turns into a silent wrong-chain price later). TypeScript enforces it.
+ */
+export type DexFeed =
+  | { kind: "geckoterminal" }
+  | { kind: "dexscreener"; chain: string };
 
 /**
  * PriceSource — the per-chain adapter that makes every read in this file
@@ -26,7 +57,8 @@ import { robinhoodMainnet } from "@/lib/robinhood/chains";
  * drift apart — which would be a silent wrong-chain price bug.
  *
  *   RH   → { chain: robinhoodMainnet, gtNetwork: "robinhood" }
- *   Base → { chain: base,             gtNetwork: "base" }   (added in Phase 2)
+ *   Base → { chain: base,             gtNetwork: "base",
+ *            dexFeed: { kind: "dexscreener", chain: "base" } }
  *
  * Every exported reader takes `source` as a trailing optional arg defaulting to
  * `RH_PRICE_SOURCE`, so all pre-existing RH callers are byte-identical.
@@ -37,6 +69,9 @@ export interface PriceSource {
   /** GeckoTerminal network slug — used in the tokens URL, the `<net>_<addr>`
    *  token-id prefix GT prepends, and the pool permalink. */
   gtNetwork: string;
+  /** DEX spot-price provider. Omitted ⟹ GeckoTerminal (every pre-existing RH
+   *  caller keeps its exact behaviour). See `DexFeed` for why Base differs. */
+  dexFeed?: DexFeed;
   /** Explicit RPC endpoints. When set, reads use a viem `fallback` transport
    *  across them (cross-endpoint failover) instead of the chain's single default
    *  RPC. RH omits this — its default RPC is reliable and singular. Base sets a
@@ -77,16 +112,24 @@ export const RH_PRICE_SOURCE: PriceSource = {
 
 /**
  * Base mainnet (chainId 8453) source for Coinbase B20 tokenized stocks.
- * `gtNetwork: "base"` is GeckoTerminal's slug for Base — verified indexing
- * Aerodrome Slipstream pools for the B20 tickers. Unlike RH, Base stocks carry
- * a `multiplier()` rebase layer on their Chainlink feed (total-return value),
- * so the raw Chainlink answer is NOT the share price — see
- * `@/lib/base-stocks/b20-quote`, which divides it out. This source only wires
- * the chain + GT slug; the multiplier math lives in the Base-stocks module.
+ *
+ * Spot price comes from **DexScreener**, not GeckoTerminal — GT's per-IP free
+ * quota is consumed by the RH desk earlier in the same poll cycle, which left
+ * Base 100% dark on 429s (see `DexFeed`). `gtNetwork: "base"` is retained
+ * because it is GT's correct slug for Base and the interface requires it, but
+ * after this change nothing on the Base path reads it.
+ *
+ * Unlike RH, Base stocks carry a `multiplier()` rebase layer on their Chainlink
+ * feed (total-return value), so the raw Chainlink answer is NOT the share price
+ * — see `@/lib/base-stocks/b20-quote`, which divides it out. This source only
+ * wires the chain + price feeds; the multiplier math and the impostor gate
+ * (isB20 / decimals==8 / symbol) live in the Base-stocks module and are
+ * deliberately untouched by the DEX-provider swap.
  */
 export const BASE_PRICE_SOURCE: PriceSource = {
   chain: base,
   gtNetwork: "base",
+  dexFeed: { kind: "dexscreener", chain: "base" },
   rpcUrls: baseRpcUrls(),
   multicall: true,
 };
@@ -205,19 +248,38 @@ export type DexQuote = {
  * (that goes through `rwa-market.ts::fetchJson`, which has its own
  * `[gt-fetch]` logging), so this costs ~4 lines per poll cycle — one per Base
  * ticker — and stays silent when the read succeeds.
+ *
+ * `src=` was added when Base moved to DexScreener: with two providers behind
+ * one function, a bare `net=base` line no longer identifies which API failed.
+ * The `[dex-price] MISS` prefix is unchanged so existing log greps still work.
  */
-function logDexMiss(net: string, token: string, ms: number, detail: string) {
-  console.warn(`[dex-price] MISS net=${net} token=${token} ms=${ms} ${detail}`);
+function logDexMiss(src: string, net: string, token: string, ms: number, detail: string) {
+  console.warn(`[dex-price] MISS src=${src} net=${net} token=${token} ms=${ms} ${detail}`);
 }
 
-/** GeckoTerminal RH Chain price + pool metadata for a token. Free, no key.
- *  Picks whichever side (base / quote) the queried token sits on, so the
- *  returned price is always for our token — never the pool's counter-asset. */
+/**
+ * DEX spot price + pool metadata for a token, from whichever provider this
+ * source declares. Dispatch happens HERE, inside the price layer, so callers
+ * — most importantly `@/lib/base-stocks/b20-quote` — need no change at all:
+ * the impostor gate and the multiplier division live there and stay untouched.
+ */
 export async function dexPrice(
   contract: Address,
   source: PriceSource = RH_PRICE_SOURCE,
 ): Promise<DexQuote | null> {
-  const net = source.gtNetwork;
+  const feed = source.dexFeed ?? { kind: "geckoterminal" as const };
+  return feed.kind === "dexscreener"
+    ? dexPriceDexScreener(contract, feed.chain)
+    : dexPriceGecko(contract, source.gtNetwork);
+}
+
+/** GeckoTerminal price + pool metadata for a token. Free, no key.
+ *  Picks whichever side (base / quote) the queried token sits on, so the
+ *  returned price is always for our token — never the pool's counter-asset. */
+async function dexPriceGecko(
+  contract: Address,
+  net: string,
+): Promise<DexQuote | null> {
   const token = contract.toLowerCase();
   const t0 = Date.now();
   try {
@@ -230,7 +292,7 @@ export async function dexPrice(
       // this network; 5xx = GT-side. `retry-after` is logged verbatim because
       // GT often sends "0" or omits it, which changes the retry strategy.
       const retryAfter = r.status === 429 ? ` retry_after=${r.headers.get("retry-after") ?? "none"}` : "";
-      logDexMiss(net, token, Date.now() - t0, `http=${r.status}${retryAfter}`);
+      logDexMiss("geckoterminal", net, token, Date.now() - t0, `http=${r.status}${retryAfter}`);
       return null;
     }
     const d = await r.json() as {
@@ -277,7 +339,7 @@ export async function dexPrice(
       //              (missing *_token_price_usd, or an id-prefix mismatch).
       const pools = d.data?.length ?? 0;
       logDexMiss(
-        net, token, Date.now() - t0,
+        "geckoterminal", net, token, Date.now() - t0,
         pools === 0
           ? "http=200 pools=0 (token not indexed on this network)"
           : `http=200 pools=${pools} usable=0 (no pool priced this token on either side)`,
@@ -302,7 +364,124 @@ export async function dexPrice(
     // anything else is a DNS/TLS/socket failure. Distinguishing the two
     // decides whether the fix is a longer timeout or a retry.
     const err = e as Error;
-    logDexMiss(net, token, Date.now() - t0, `throw=${err.name}: ${err.message}`);
+    logDexMiss("geckoterminal", net, token, Date.now() - t0, `throw=${err.name}: ${err.message}`);
+    return null;
+  }
+}
+
+/** DexScreener token-pairs response — only the fields we consume. */
+type DsPair = {
+  chainId?: string;
+  dexId?: string;
+  url?: string;
+  pairAddress?: string;
+  baseToken?: { address?: string; symbol?: string };
+  quoteToken?: { address?: string; symbol?: string };
+  priceUsd?: string;
+  liquidity?: { usd?: number };
+  volume?: { h24?: number };
+  priceChange?: { h24?: number };
+};
+
+/** `liquidity.usd` / `volume.h24` are numbers in the DS schema but are absent on
+ *  thin pairs — normalise to a real number or null, never NaN. */
+function dsNum(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * DexScreener price + pool metadata for a token. Free, no key, quota separate
+ * from GeckoTerminal's — which is the entire point (see `DexFeed`).
+ *
+ * TWO SAFETY RULES, both load-bearing:
+ *
+ *  1. **Chain filter.** The token endpoint is address-keyed and returns pairs
+ *     across EVERY chain DS indexes. The same address can exist on another
+ *     chain, so anything not on `chain` is discarded before we look at a price.
+ *
+ *  2. **Base-side pairs only.** DexScreener's `priceUsd` is always the price of
+ *     the pair's `baseToken`. When our token sits on the quote side, `priceUsd`
+ *     is the COUNTER-asset's price — reading it would report (e.g.) USDC's $1
+ *     as NVDA's share price and hand the drift engine a ~99% fake gap. It is
+ *     derivable via `priceUsd / priceNative`, but we do not need it: verified
+ *     2026-08-25 across all four B20 tickers, the deepest Base pair is the
+ *     base-side Aerodrome/USDC pool in every case (NVDA $1.06M, GOOGL $742K,
+ *     AAPL $713K, META $671K liquidity), so base-side-only loses no depth. The
+ *     skipped quote-side count is logged so a future regression is visible
+ *     rather than silent.
+ */
+async function dexPriceDexScreener(
+  contract: Address,
+  chain: string,
+): Promise<DexQuote | null> {
+  const token = contract.toLowerCase();
+  const t0 = Date.now();
+  try {
+    const r = await fetch(
+      `https://api.dexscreener.com/latest/dex/tokens/${token}`,
+      {
+        signal: AbortSignal.timeout(6000),
+        // DS 403s some default UAs (Node's bare fetch included) — identify us.
+        headers: { accept: "application/json", "user-agent": "blue-agent/1.0 (+https://blueagent.dev)" },
+      },
+    );
+    if (!r.ok) {
+      const retryAfter = r.status === 429 ? ` retry_after=${r.headers.get("retry-after") ?? "none"}` : "";
+      logDexMiss("dexscreener", chain, token, Date.now() - t0, `http=${r.status}${retryAfter}`);
+      return null;
+    }
+    const d = await r.json() as { pairs?: DsPair[] | null };
+    const pairs = d.pairs ?? [];
+    if (!pairs.length) {
+      // DS returns `pairs: null` for an address it has never indexed.
+      logDexMiss("dexscreener", chain, token, Date.now() - t0, "http=200 pairs=0 (token not indexed)");
+      return null;
+    }
+    const onChain = pairs.filter((p) => p.chainId === chain);
+    if (!onChain.length) {
+      // Indexed, but not on the chain we asked for — a config/slug error, never
+      // a transient one. `chains_seen` names the mistake outright.
+      const seen = [...new Set(pairs.map((p) => p.chainId).filter(Boolean))].slice(0, 5).join(",");
+      logDexMiss(
+        "dexscreener", chain, token, Date.now() - t0,
+        `http=200 pairs=${pairs.length} on_chain=0 (chains_seen=${seen || "none"})`,
+      );
+      return null;
+    }
+    let quoteSideSkipped = 0;
+    const usable = onChain.flatMap((p) => {
+      if ((p.baseToken?.address ?? "").toLowerCase() !== token) {
+        quoteSideSkipped++;
+        return [];
+      }
+      const price = parseFloat(p.priceUsd ?? "");
+      if (!Number.isFinite(price) || price <= 0) return [];
+      return [{ p, price, liq: dsNum(p.liquidity?.usd) }];
+    });
+    if (!usable.length) {
+      logDexMiss(
+        "dexscreener", chain, token, Date.now() - t0,
+        `http=200 pairs=${pairs.length} on_chain=${onChain.length} usable=0 quote_side_skipped=${quoteSideSkipped}`,
+      );
+      return null;
+    }
+    usable.sort((a, b) => (b.liq ?? 0) - (a.liq ?? 0));
+    const { p, price, liq } = usable[0];
+    const poolAddr = (p.pairAddress ?? "").toLowerCase();
+    return {
+      source: "dex-spot",
+      price_usd: price,
+      pool_address: poolAddr,
+      dex: p.dexId ?? "unknown",
+      volume_24h_usd: dsNum(p.volume?.h24),
+      liquidity_usd: liq,
+      change_24h: dsNum(p.priceChange?.h24),
+      pool_url: p.url ?? (poolAddr ? `https://dexscreener.com/${chain}/${poolAddr}` : null),
+    };
+  } catch (e) {
+    const err = e as Error;
+    logDexMiss("dexscreener", chain, token, Date.now() - t0, `throw=${err.name}: ${err.message}`);
     return null;
   }
 }
