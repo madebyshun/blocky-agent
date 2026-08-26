@@ -1,19 +1,31 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import { useAccount, useConnect, type Connector } from "wagmi";
+import { useAccount, useConnect } from "wagmi";
 import { useWalletDisconnect, clearUserDisconnected } from "@/lib/walletSession";
 import { useBasename, shortAddr } from "@/lib/useBasename";
+import { usePrivyConnect } from "@/lib/privy/connect-bridge";
+import { PRIVY_WALLET_LIST } from "@/lib/privy/config";
 
-// One connector row, enriched with the display metadata every picker used to
+// One wallet row, enriched with the display metadata every picker used to
 // re-derive on its own (WalletBar, ConnectModal, PayConnect, BankClient all had
 // their own copy of walletIcon()/subtitle()). Centralised here so the wallet
 // list looks identical everywhere.
+//
+// `select()` REPLACED the old `connector: Connector` field, and the swap is the
+// point of this shape: the two provider trees reach a wallet by completely
+// different means — wagmi's `connect({ connector })` on the default tree,
+// Privy's `connectWallet({ walletList })` on the Privy tree, where wagmi's
+// connector list is empty and no `Connector` object exists to hand back. Callers
+// therefore get a closure that already knows how to connect THIS row, and can no
+// longer accidentally couple themselves to a connector object that only exists
+// on one of the two paths.
 export interface WalletMeta {
-  connector: Connector;
+  key:       string;   // stable React key (connector uid, or the Privy entry id)
   name:      string;
   icon:      string;   // emoji fallback (no connector logo dependency)
   subtitle:  string;
+  select:    () => void;
 }
 
 function walletIcon(name: string): string {
@@ -45,16 +57,51 @@ function walletSubtitle(name: string): string {
  * disconnect behaviour. `address` here is exactly wagmi's `useAccount().address`
  * — read it from either; they cannot diverge. Prefer this hook over passing the
  * address down through props so surfaces stay in lock-step.
+ *
+ * It also HIDES THE BIGGEST FOOTGUN IN THE WALLET STACK: which of the two
+ * provider trees is mounted. On the default tree wallets come from wagmi's
+ * connector list; on the Privy tree that list is empty and wallets come from
+ * Privy's own modal. Every picker in the app reads `wallets`/`coinbase`/`others`
+ * and calls `row.select()`, so none of them has to know — and none of them can
+ * get it wrong the way they all did before (rendering an empty connector array
+ * as an empty menu, with no error to explain it).
  */
 export function useWallet() {
   const { address, isConnected, chainId } = useAccount();
   const { connectors, connect, isPending } = useConnect();
   const disconnect = useWalletDisconnect();
   const { name: basename } = useBasename(address);
+  // `null` on the default tree. Non-null means `@privy-io/wagmi` owns the wagmi
+  // config, and `connectors` above is therefore EMPTY — see connect-bridge.tsx.
+  const privy = usePrivyConnect();
 
-  // De-dup EIP-6963 discovery: the same wallet can surface twice — once as the
-  // generic "Injected" entry, once by its real name. Keep the first by name.
+  // Connect + clear the explicit-disconnect intent so BaseAppAutoConnect resumes
+  // silent host-binding next session. Shared by both branches below, so the
+  // intent flag can't be cleared on one path and forgotten on the other.
+  const clearThen = useCallback((run: () => void) => {
+    clearUserDisconnected();
+    run();
+  }, []);
+
   const wallets = useMemo<WalletMeta[]>(() => {
+    // ── Privy tree ────────────────────────────────────────────────────────
+    // wagmi's connector list is empty here by construction, so the rows come
+    // from our curated PRIVY_WALLET_LIST and each one opens Privy's modal
+    // filtered to that single wallet. Rendering `connectors` instead is what
+    // produced the empty "SELECT WALLET" menu.
+    if (privy) {
+      return PRIVY_WALLET_LIST.map((w) => ({
+        key:      w.id,
+        name:     w.name,
+        icon:     w.icon,
+        subtitle: w.subtitle,
+        select:   () => clearThen(() => privy.connectWallet(w.id)),
+      }));
+    }
+
+    // ── Default tree ──────────────────────────────────────────────────────
+    // De-dup EIP-6963 discovery: the same wallet can surface twice — once as the
+    // generic "Injected" entry, once by its real name. Keep the first by name.
     const seen = new Set<string>();
     return connectors
       .filter((c) => {
@@ -64,30 +111,27 @@ export function useWallet() {
         return true;
       })
       .map((c) => ({
-        connector: c,
-        name:      c.name,
-        icon:      walletIcon(c.name),
-        subtitle:  walletSubtitle(c.name),
+        key:      c.uid,
+        name:     c.name,
+        icon:     walletIcon(c.name),
+        subtitle: walletSubtitle(c.name),
+        select:   () => clearThen(() => connect({ connector: c })),
       }));
-  }, [connectors]);
+  }, [privy, connectors, connect, clearThen]);
 
   // Coinbase Smart Wallet gets split out because two surfaces (BlueBank, the
   // /pay page) lead with it as a "create a free wallet — no seed phrase, no app
   // to install" onboarding CTA and demote everything else behind an "I already
   // have a wallet" toggle. They each used to re-derive this split with their own
   // copy of the matcher; it lives here now so the funnel can't drift per page.
+  //
+  // Matched on the display NAME (not a connector id) so the same matcher works
+  // on both trees — the Privy row has no wagmi connector to read an id from.
   const coinbase = useMemo(
-    () => wallets.find((w) => w.connector.id === "coinbaseWalletSDK" || w.name.toLowerCase().includes("coinbase")),
+    () => wallets.find((w) => w.name.toLowerCase().includes("coinbase")),
     [wallets],
   );
   const others = useMemo(() => wallets.filter((w) => w !== coinbase), [wallets, coinbase]);
-
-  // Connect + clear the explicit-disconnect intent so BaseAppAutoConnect resumes
-  // silent host-binding next session.
-  const connectWith = useCallback((c: Connector) => {
-    clearUserDisconnected();
-    connect({ connector: c });
-  }, [connect]);
 
   const label = basename ?? (address ? shortAddr(address) : undefined);
 
@@ -97,11 +141,11 @@ export function useWallet() {
     chainId,
     basename,
     label,        // Basename if present, else short 0x… (undefined when no wallet)
-    wallets,      // de-duped connector list with icon + subtitle
-    coinbase,     // the Smart Wallet entry, if available (the "free wallet" CTA)
+    wallets,      // wallet rows with icon + subtitle; call `w.select()` to connect
+    coinbase,     // the Coinbase entry, if available (the "free wallet" CTA)
     others,       // `wallets` minus coinbase — the "I already have a wallet" list
-    connectWith,  // connect({ connector }) + clear disconnect intent
     disconnect,   // records intent so auto-connect won't undo it
-    isPending,    // a connect attempt is in flight
+    isPending,    // a connect attempt is in flight (wagmi tree only — Privy
+                  // drives its own modal spinner, so this stays false there)
   };
 }
