@@ -87,6 +87,53 @@ export const PRIVY_LOGIN_METHODS = parseLoginMethods(
   process.env.NEXT_PRIVY_LOGIN_METHODS,
 );
 
+const LOGIN_METHOD_LABELS: Partial<Record<LoginMethod, string>> = {
+  google: "Google",
+  twitter: "X",
+  apple: "Apple",
+  github: "GitHub",
+  discord: "Discord",
+  farcaster: "Farcaster",
+  telegram: "Telegram",
+  passkey: "a passkey",
+  email: "email",
+  sms: "SMS",
+};
+
+// Socials first, email/SMS last — "Google, X, or email" reads better than
+// "email, Google, or X", and this order is independent of KNOWN_LOGIN_METHODS
+// (which governs the array we hand Privy, not the prose).
+const LABEL_ORDER = [
+  "google", "twitter", "apple", "github", "discord",
+  "farcaster", "telegram", "passkey", "email", "sms",
+] as const satisfies readonly LoginMethod[];
+
+/**
+ * Prose for the sign-in button, e.g. "Google, X, or email".
+ *
+ * DERIVED from the configured methods on purpose — never hardcode this string.
+ * The button's promise has to match what the modal will actually offer, and
+ * `PRIVY_LOGIN_METHODS` is env-driven, so a literal would silently drift the
+ * moment someone edits `NEXT_PRIVY_LOGIN_METHODS`.
+ *
+ * This is the exact failure the wallet panel just shipped and had to undo: a
+ * hardcoded "Create a free wallet / Face ID · no seed phrase" CTA kept its copy
+ * while the call underneath it changed, so the button confidently promised a
+ * passkey and opened something else. Copy that is computed from the config
+ * cannot develop that gap.
+ */
+export function describeLoginMethods(
+  methods: readonly LoginMethod[] = PRIVY_LOGIN_METHODS,
+): string {
+  const names = LABEL_ORDER.filter((m) => methods.includes(m)).map(
+    (m) => LOGIN_METHOD_LABELS[m] ?? m,
+  );
+  if (names.length === 0) return "email";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} or ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, or ${names[names.length - 1]}`;
+}
+
 /**
  * The external wallets offered when Privy is enabled — one picker row each.
  *

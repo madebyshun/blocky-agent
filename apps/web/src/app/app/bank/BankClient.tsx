@@ -9,7 +9,7 @@ import { useAccount, useReadContract, useBalance } from "wagmi";
 import { useWalletDisconnect } from "@/lib/walletSession";
 import { useWallet } from "@/hooks/useWallet";
 import PrivyLoginButton from "@/components/PrivyLoginButton";
-import { PRIVY_ENABLED } from "@/lib/privy/config";
+import { PRIVY_ENABLED, describeLoginMethods } from "@/lib/privy/config";
 import { formatUnits } from "viem";
 import { QRCodeSVG } from "qrcode.react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
@@ -1185,8 +1185,21 @@ function PositionRow({ label, pos, apy, onManage, disabled, disabledNote }: {
 // ── Landing hero (shown until the wallet connects) ───────────────────────────
 function BankLanding({ bestApy }: { bestApy: number | null }) {
   const apyText = bestApy != null ? `~${bestApy.toFixed(1)}%` : "up to ~5%";
+  // The lead bullet MIRRORS the panel's primary control so the two can never
+  // disagree. With Privy on, the way in is "sign in, we make the wallet" — and
+  // the method name is read from the same config the button reads, not typed
+  // out here. With Privy off (local dev, no NEXT_PUBLIC_PRIVY_APP_ID) the only
+  // way in is your own wallet, so the copy says that instead of advertising an
+  // onboarding path the panel does not render.
+  //
+  // What used to sit here — "Sign in with Face ID … Coinbase Smart Wallet" —
+  // described the CTA removed from `ConnectButton` below; see the comment there
+  // for why that promise stopped being true.
+  const signIn = PRIVY_ENABLED
+    ? { icon: "✉️", title: `Sign in with ${describeLoginMethods()} — no seed phrase`, body: "No extension, no app, no 12-word phrase. Signing in creates a wallet that is yours — we never hold the keys." }
+    : { icon: "🔌", title: "Bring your own wallet", body: "MetaMask, Coinbase Wallet, Rabby, Phantom, or any WalletConnect wallet. Connect in one tap." };
   const features: { icon: string; title: string; body: string }[] = [
-    { icon: "🔑", title: "Sign in with Face ID — no seed phrase", body: "Coinbase Smart Wallet: a passkey-secured account you create in one tap. Recoverable, no 12-word phrase to lose." },
+    signIn,
     { icon: "📈", title: `Earn ${apyText} APY on idle USDC`, body: "Live rates across blue-chip lending (Aave · Morpho). Your USDC works while you sleep — no lockups." },
     { icon: "➡", title: "Send to any wallet or name.base", body: "Pay anyone on Base by address or Basename. Instant, 24/7, no cut-off times." },
     { icon: "🔒", title: "Non-custodial — you hold the keys", body: "You sign every transaction from your own wallet. BlueAgent never holds your keys or funds." },
@@ -1218,7 +1231,15 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
         </div>
         <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-6">
           <div className="font-mono text-[14px] font-bold text-white mb-1">Open your account</div>
-          <p className="font-mono text-[11px] text-slate-500 mb-5">Sign in with Face ID — no signup, no KYC, no custody. Your keys are secured by a passkey, not a seed phrase.</p>
+          {/* Describes the control DIRECTLY BELOW IT, which is why it tracks
+              PRIVY_ENABLED: with Privy off there is no "we create your wallet"
+              path on this panel, only the wallet list. The old line promised
+              Face ID and a passkey — the CTA that delivered that is gone. */}
+          <p className="font-mono text-[11px] text-slate-500 mb-5">
+            {PRIVY_ENABLED
+              ? "Sign in and we create your wallet — no seed phrase, no app to install."
+              : "Connect a wallet you already own — no signup, no KYC, no custody."}
+          </p>
           <ConnectButton />
           <div className="flex items-center gap-2 my-4">
             <div className="h-px flex-1 bg-[#1A1A2E]" /><span className="font-mono text-[9px] text-slate-700">SECURED BY YOU</span><div className="h-px flex-1 bg-[#1A1A2E]" />
@@ -1233,45 +1254,49 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
   );
 }
 
-// Connect-wallet CTA.
+// Connect-wallet CTA — two controls, nothing else: sign in (we make the wallet)
+// vs bring your own. Same split Halo ships.
 //
-// The Coinbase-first funnel ("create a free wallet" → everything else behind a
-// toggle) is deliberate BlueBank onboarding and stays. What's gone is the local
-// copy of the connector plumbing — the de-dup, the icon map and the
-// clearUserDisconnected() call now come from useWallet, so this list can't
-// drift from the one every other surface shows.
+// ⚠️ THE "🔵 Create a free wallet" CTA THAT USED TO HEAD THIS PANEL IS GONE, and
+// it should not come back in that form. It called `coinbase.select()`, where
+// `coinbase` is just `wallets.find(name includes "coinbase")` — byte-for-byte
+// the same call as the "Coinbase Wallet" row inside the dropdown below. One
+// button, listed twice.
+//
+// It also stopped telling the truth. Before Privy, `coinbase` resolved to the
+// wagmi `coinbaseWallet({ preference: { options: "all" } })` connector, which
+// really does surface Smart Wallet creation — so "Face ID · no seed phrase" was
+// accurate. Routing external wallets through Privy changed what that entry
+// resolves to WITHOUT changing the copy, leaving a button that promised a
+// passkey and opened Coinbase's generic connect flow. The genuine passkey
+// product is `base_account`, which is its own row in the list and is labelled
+// as such there.
+//
+// The seedless pitch now lives on the Privy control, which actually delivers it
+// (sign in → embedded wallet, no seed phrase), and whose label is derived from
+// the configured login methods so it cannot drift the same way.
 function ConnectButton() {
-  const { wallets, coinbase, isPending } = useWallet();
+  const { wallets, isPending } = useWallet();
   const [open, setOpen] = useState(false);
 
   return (
     <div className="relative">
-      {coinbase && (
-        <>
-          <button onClick={() => coinbase.select()} disabled={isPending}
-            className="w-full font-mono text-[13px] font-bold py-3 rounded-xl transition-all disabled:opacity-60 flex items-center justify-center gap-2"
-            style={{ background: "#4FC3F7", color: "#050508" }}>
-            {isPending ? "Connecting…" : <>🔵 Create a free wallet</>}
-          </button>
-          <div className="flex items-center justify-center gap-2 mt-2 font-mono text-[9px] text-slate-500">
-            <span>Face ID</span><span>·</span><span>no seed phrase</span><span>·</span><span>no app to install</span>
-          </div>
-        </>
-      )}
-      {/* Email → embedded wallet, same control the shared WalletPickerModal
-          shows. Guarded by PRIVY_ENABLED so this is a no-op (and PrivyLoginButton
-          never mounts outside its provider) when NEXT_PUBLIC_PRIVY_APP_ID is
-          unset — the onboarding is then byte-identical to the pre-Privy funnel.
-          Placed under the Coinbase CTA so the no-wallet paths sit together, above
-          the external-wallet toggle. */}
+      {/* Sign in → embedded wallet. Guarded by PRIVY_ENABLED so PrivyLoginButton
+          never mounts outside its provider; with the var unset this panel falls
+          back to the wallet list alone (dev-only — prod has Privy on). */}
       {PRIVY_ENABLED && (
         <>
-          <div className="flex items-center gap-2 my-3">
+          <PrivyLoginButton variant="primary" />
+          {/* No sub-caption here on purpose: the panel line right above the
+              button already carries "no seed phrase, no app to install", and a
+              second copy of the same promise two rows apart reads as clutter.
+              One claim, one place — it also means there is only one string to
+              keep honest if the sign-in path changes again. */}
+          <div className="flex items-center gap-2 mt-3">
             <div className="h-px flex-1 bg-[#1A1A2E]" />
             <span className="font-mono text-[9px] text-slate-600 uppercase tracking-widest">or</span>
             <div className="h-px flex-1 bg-[#1A1A2E]" />
           </div>
-          <PrivyLoginButton />
         </>
       )}
       <button onClick={() => setOpen(o => !o)} disabled={isPending}

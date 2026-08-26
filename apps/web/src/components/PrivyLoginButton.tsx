@@ -16,8 +16,24 @@
 // BaseAppAutoConnect won't silently re-bind), keeping the two in lock-step.
 import { usePrivy } from "@privy-io/react-auth";
 import { useWalletDisconnect } from "@/lib/walletSession";
+import { describeLoginMethods } from "@/lib/privy/config";
 
-export default function PrivyLoginButton({ onDone }: { onDone?: () => void }) {
+/**
+ * `variant` picks the weight, not the behaviour:
+ *   - "outline" (default) — a peer sitting next to other options, which is what
+ *     the shared WalletPickerModal wants.
+ *   - "primary" — the filled brand button, for the surface where this IS the
+ *     recommended way in (the /wallet panel, where it replaced the "create a
+ *     free wallet" CTA).
+ * Defaulting to "outline" keeps every existing call site pixel-identical.
+ */
+export default function PrivyLoginButton({
+  onDone,
+  variant = "outline",
+}: {
+  onDone?: () => void;
+  variant?: "outline" | "primary";
+}) {
   const { ready, authenticated, login, logout, user } = usePrivy();
   const disconnect = useWalletDisconnect();
 
@@ -45,13 +61,20 @@ export default function PrivyLoginButton({ onDone }: { onDone?: () => void }) {
     );
   }
 
+  // Label is COMPUTED from the configured methods, never written out by hand —
+  // `NEXT_PRIVY_LOGIN_METHODS` decides what the modal actually offers, so a
+  // literal would start lying the first time that var is edited.
   return (
     <button
       onClick={() => { login(); onDone?.(); }}
       className={base}
-      style={{ borderColor: "#4FC3F7", color: "#4FC3F7", background: "#4FC3F710" }}
+      style={
+        variant === "primary"
+          ? { borderColor: "#4FC3F7", background: "#4FC3F7", color: "#050508" }
+          : { borderColor: "#4FC3F7", color: "#4FC3F7", background: "#4FC3F710" }
+      }
     >
-      ✉️ Sign in with email — no wallet needed
+      Sign in with {describeLoginMethods()}
     </button>
   );
 }

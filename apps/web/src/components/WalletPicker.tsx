@@ -13,15 +13,21 @@ import { PRIVY_ENABLED } from "@/lib/privy/config";
  * `useWallet()`, so the wallet list + icons are identical on every surface
  * (chat settings, claim banner, /app pages).
  *
- * Two surfaces don't use this modal: BlueBank (`/app/bank`) and the payment
- * page (`/pay/[address]`) lead with a "create a free wallet" Coinbase CTA and
- * hide the rest behind a toggle — onboarding design, not drift. Both are
- * ARCHIVED as of 2026-07-24 (middleware 301s them to /chat), so their pickers
- * are currently unreachable; they still read `coinbase`/`others` from
- * `useWallet()` rather than re-deriving the connector plumbing, so they'd be
- * correct if the routes are ever un-archived. Nothing in the app derives a
- * connector list locally anymore — which is what lets a single fix in
- * `useWallet` repair every picker at once.
+ * Two surfaces don't use this modal: `BankClient` and the payment page
+ * (`/pay/[address]`). Both lead with a "create a free wallet" Coinbase CTA and
+ * hide the rest behind a toggle — onboarding design, not drift.
+ *
+ * ⚠️ Only ONE of the two is archived, despite what this comment used to claim.
+ * `/pay/[address]` is genuinely unreachable (middleware 301s it to /chat, and
+ * nothing else imports that page). `BankClient` is NOT: `/app/bank` is
+ * archived, but `app/app/wallet/page.tsx` imports the same component, so it is
+ * LIVE at /wallet — the "Wallet support" pillar shipped in #291. Treat its
+ * onboarding funnel as production UI, not dead code.
+ *
+ * All three read `wallets`/`coinbase`/`others` from `useWallet()` rather than
+ * re-deriving the connector plumbing. Nothing in the app derives a connector
+ * list locally anymore — which is what lets a single fix in `useWallet` repair
+ * every picker at once.
  */
 export function WalletPickerModal({
   open,
