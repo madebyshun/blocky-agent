@@ -380,11 +380,25 @@ async function handle(
   // the ERC-8021 suffix with bc_2ejr35xc attribution to the settlement calldata.
   const settle = await cdpSettle(paymentPayload, requirements, resourceInfo, allExtensions);
   try { await kv.incr(`usage:${tool}`); } catch {}
-  // Real USDC settled on Base via Coinbase CDP → aggregate meter for /stats
-  // (only when the settlement actually cleared; aggregate, no wallet stored).
+  // Real USDC settled on Base via Coinbase CDP. Two books, written together and
+  // only when the settlement actually cleared:
+  //
+  //   1. the AGGREGATE meter for /stats — count + units + last tx, no wallet.
+  //   2. the PAYER'S OWN receipt — the same settlement filed under the wallet
+  //      that signed it, so /wallet can say which tool the money bought.
+  //
+  // (2) is the only place the join {payer, tool, tx} is ever written down. On
+  // Base the transfer is just `0xUSER → 0x0295…, 0.05 USDC`; the tool id lives
+  // in this request and used to be discarded here, which is why the wallet
+  // timeline could not name a single payment the user had made. It records
+  // WHAT was bought and nothing about the call: no inputs, no outputs, no
+  // result. Both writes are best-effort — the USDC has already moved and the
+  // caller already has their answer, so a KV hiccup must not fail the response.
   if (settle.ok) {
     const { recordSettlement } = await import("@/lib/x402-settlements");
     await recordSettlement(priceUnits, settle.tx);
+    const { recordToolPayment, payerFromPayload } = await import("@/lib/wallet/spend-log");
+    await recordToolPayment(payerFromPayload(paymentPayload), tool, priceUnits, settle.tx);
   }
   return NextResponse.json({ ...data, _settle: { ok: settle.ok, status: settle.status, tx: settle.tx } });
 }

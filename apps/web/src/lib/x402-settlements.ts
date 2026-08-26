@@ -8,8 +8,20 @@
  * calls too). The number is therefore a strict, honest lower-bound of paid volume.
  *
  * Aggregate only: a running count + summed micro-units + the latest tx hash (for a
- * one-click Basescan proof). No wallet, no per-user data is ever stored — the payer
- * address is never part of any key or value.
+ * one-click Basescan proof). No wallet address appears in any key or value HERE.
+ *
+ * That last sentence used to end "— the payer address is never stored", full stop,
+ * as a property of the system rather than of this file. It is no longer true of the
+ * system: `lib/wallet/spend-log.ts` deliberately files the same settlement a second
+ * time under `spend:<payer>`, because a wallet that cannot name its own payments is
+ * the whole defect that surface exists to fix. Read that file's header for what is
+ * and is not recorded (tool id, price, tx, timestamp — never inputs or outputs).
+ *
+ * The distinction still matters and is why both books exist: /stats must be able to
+ * publish total settled volume WITHOUT touching anything per-user, so it reads these
+ * three keys and only these three. Do not "simplify" by deriving the aggregate from
+ * the per-payer receipts — that would make a public page depend on private rows, and
+ * the receipts expire after 90 days while this meter is cumulative.
  *
  * Forward-only, like the `usage:<id>` run counters: it starts accruing at deploy
  * time. That is intentional and truthful — it is a live meter of CDP settlements,
