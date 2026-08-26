@@ -4,6 +4,21 @@
 // routed via the 0x Swap API. BlueBank fetches the route from /api/swap/quote;
 // the user approves (for ERC-20 sells) and signs the swap from their own wallet.
 // Base mainnet only — 0x doesn't route testnet liquidity.
+//
+// ⚠️ NETWORK-BLIND BY DESIGN; THE CALLER MUST GATE — see BankClient.
+// This component takes no `network` prop and reads none. Every address in
+// `TOKENS` is Base mainnet, every balance read pins `chainId: base.id`, and
+// `swap()` calls `switchChainAsync({ chainId: base.id })` BEFORE signing. So
+// rendering it while the surrounding page is on a testnet does not produce a
+// testnet swap — it silently yanks the wallet to MAINNET and spends REAL funds
+// under a page captioned "no real value". BankClient is what stops that: its
+// Convert panel refuses to mount this card when `isTestnet`.
+//
+// The hazard is a SECOND caller. Import this anywhere else and you inherit the
+// mainnet-blindness without inheriting the guard, and nothing here will warn
+// you — there is no runtime check, only that one call site. Add the gate at
+// the new call site too, or give this component a `network` prop and make the
+// refusal its own responsibility.
 
 import { useState, useEffect, useRef } from "react";
 import { useAccount, useBalance, useReadContract, useSwitchChain, useWriteContract, useSendTransaction } from "wagmi";
@@ -124,6 +139,9 @@ export default function SwapCard({ account, preset }: { account?: `0x${string}`;
     if (!quote?.transaction) { setErr(quote?.error || "No route for this pair"); setStep("error"); return; }
     setErr(""); setTxHash("");
     try {
+      // Unconditional jump to MAINNET, whatever chain the page thinks it is on
+      // — network-blind by design; the caller MUST gate (see the file header
+      // and BankClient's `isTestnet` refusal). Real funds move after this line.
       await switchChainAsync({ chainId: base.id });
       // ERC-20 sells need an allowance to the 0x AllowanceHolder first.
       if (!sell.native && quote.issues?.allowance?.spender) {
