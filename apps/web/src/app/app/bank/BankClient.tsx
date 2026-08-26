@@ -5,7 +5,7 @@
 // (DefiLlama), real transactions (Moralis). Nothing is fabricated.
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useAccount, useReadContract, useBalance } from "wagmi";
+import { useAccount, useReadContract, useBalance, useSwitchChain } from "wagmi";
 import { useWalletDisconnect } from "@/lib/walletSession";
 import { useWallet } from "@/hooks/useWallet";
 import PrivyLoginButton from "@/components/PrivyLoginButton";
@@ -39,8 +39,12 @@ const CAMPAIGNS: { name: string; desc: string; badge: string; color: string }[] 
 
 type Panel = "positions" | "earn" | "send" | "receive" | "convert" | "orders";
 
+// Sticky testnet unlock. Deliberately NOT the same key family as `bluebank:*`
+// user settings — this is a developer escape hatch, not a preference.
+const TESTNET_KEY = "bluebank:testnet";
+
 export default function BankPage() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId: walletChainId, chain: walletChain } = useAccount();
   const acct = address as `0x${string}` | undefined;
   const { name } = useBasename(acct);
   const [fname, setFname] = useState<string | null>(null);
@@ -62,7 +66,57 @@ export default function BankPage() {
       .catch(() => null);
   }, [acct, name]);
   const disconnect = useWalletDisconnect();
-  const [network, setNetwork] = useState<YieldNetwork>("baseSepolia");
+
+  // ── Network ──────────────────────────────────────────────────────────────
+  // Base MAINNET is the default and must stay that way. This used to default to
+  // `baseSepolia` while every label around it said "Base", so the receive QR,
+  // the payment link, and the transaction list were all testnet while the UI
+  // claimed mainnet — a money-adjacent lie, not a cosmetic one.
+  //
+  // Testnet is now OPT-IN: the toggle does not render at all unless testnet mode
+  // is unlocked with `?testnet=1` (sticky, cleared with `?testnet=0`). A normal
+  // user therefore has no way to land on Sepolia by a stray click, and when
+  // testnet IS active a banner says so in the one place they cannot miss.
+  //
+  // Both pieces of state start at their SSR-safe values and are only widened in
+  // an effect — reading localStorage/searchParams during the first render would
+  // hydration-mismatch, and the safe value (mainnet, locked) is the right first
+  // paint anyway.
+  const [network, setNetwork] = useState<YieldNetwork>("base");
+  const [testnetUnlocked, setTestnetUnlocked] = useState(false);
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search).get("testnet");
+      if (q === "1")      localStorage.setItem(TESTNET_KEY, "1");
+      else if (q === "0") localStorage.removeItem(TESTNET_KEY);
+      const on = localStorage.getItem(TESTNET_KEY) === "1";
+      setTestnetUnlocked(on);
+      if (!on) setNetwork("base"); // locking testnet must also leave it
+    } catch { /* private mode — stay locked on mainnet */ }
+  }, []);
+
+  // Hoisted above the onramp handlers on purpose: `addCash` / `cashOut` read
+  // `isTestnet` to refuse a mainnet-only flow, so it has to be initialised
+  // before the first render that can bind those handlers.
+  const net         = YIELD_NETWORKS[network];
+  const chainId     = net.chainId;
+  const morphoVnet  = VENUES.morpho.nets[network];
+  const isTestnet   = net.testnet;
+
+  // The wallet's OWN chain, which is not the same thing as the network this
+  // dashboard is reading. Balances are read with an explicit `chainId`, so they
+  // are right either way — but every write (send, swap, supply) goes through the
+  // wallet, so a mismatch here is the difference between a transaction and a
+  // rejection. Surfacing it beats letting the user find out at signing time.
+  const { switchChainAsync } = useSwitchChain();
+  const [switchBusy, setSwitchBusy] = useState(false);
+  const chainMismatch = isConnected && walletChainId != null && walletChainId !== chainId;
+  async function switchToAppChain() {
+    setSwitchBusy(true);
+    try { await switchChainAsync({ chainId }); } catch { /* user declined */ }
+    finally { setSwitchBusy(false); }
+  }
+
   const [panel, setPanel]     = useState<Panel>("positions");
   const [actionOpen, setActionOpen] = useState(false);
   const [copied, setCopied]   = useState(false);
@@ -105,11 +159,19 @@ export default function BankPage() {
   const [reqAmount, setReqAmount] = useState("");
   const [reqAsset, setReqAsset] = useState<"USDC" | "ETH">("USDC");
 
-  // Coinbase Onramp — add cash
+  // Coinbase Onramp — add cash.
+  //
+  // ⚠️ The Onramp session is MAINNET-ONLY (`/api/onramp/session` pins
+  // `blockchains: ["base"]`, and the popup URL below pins `defaultNetwork=base`).
+  // While the app was defaulting to Sepolia, this shipped real USDC to Base
+  // mainnet while the dashboard showed testnet balances — the money arrived
+  // somewhere the UI was not looking. Refuse on testnet instead of hardcoding
+  // `base` into a flow the rest of the page thinks is Sepolia.
   const [onrampBusy, setOnrampBusy] = useState(false);
   const [onrampMsg, setOnrampMsg]   = useState("");
   async function addCash() {
     if (!acct) return;
+    if (isTestnet) { setOnrampMsg("Deposit is Base mainnet only — switch off testnet first."); return; }
     setOnrampBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -125,6 +187,7 @@ export default function BankPage() {
   const [cashOutBusy, setCashOutBusy] = useState(false);
   async function cashOut() {
     if (!acct) return;
+    if (isTestnet) { setOnrampMsg("Cash out is Base mainnet only — switch off testnet first."); return; }
     setCashOutBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -135,10 +198,6 @@ export default function BankPage() {
     } catch { setOnrampMsg("cash out failed"); }
     finally { setCashOutBusy(false); }
   }
-
-  const net = YIELD_NETWORKS[network];
-  const chainId = net.chainId;
-  const morphoVnet = VENUES.morpho.nets[network];
 
   // ── Live on-chain reads ──────────────────────────────────────────────────
   const { data: walletRaw } = useReadContract({
@@ -331,7 +390,9 @@ export default function BankPage() {
     const qs = new URLSearchParams({ asset: reqAsset, network });
     if (parseFloat(reqAmount) > 0) qs.set("amount", reqAmount);
     const url = `${origin}/pay/${acct}?${qs.toString()}`;
-    const title = parseFloat(reqAmount) > 0 ? `Pay me ${reqAmount} ${reqAsset} on Base` : "Pay me on Base";
+    // `network` is already in the query string — the human title has to agree
+    // with it, or a Sepolia link gets shared reading "Pay me on Base".
+    const title = parseFloat(reqAmount) > 0 ? `Pay me ${reqAmount} ${reqAsset} on ${net.short}` : `Pay me on ${net.short}`;
     if (typeof navigator !== "undefined" && navigator.share) {
       navigator.share({ title, url }).catch(() => {});
     } else {
@@ -405,7 +466,7 @@ export default function BankPage() {
   interface MC { priority: "high"|"warn"|"good"|"info"; icon: string; text: string; action?: string; onAction?: () => void; color: string }
   const allMissions: MC[] = [];
   if (total === 0) {
-    allMissions.push({ priority: "info", icon: "💡", text: "Add USDC to start earning yield on Base", action: "Add cash", onAction: addCash, color: "#F59E0B" });
+    allMissions.push({ priority: "info", icon: "💡", text: `Add USDC to start earning yield on ${net.short}`, action: "Add cash", onAction: addCash, color: "#F59E0B" });
   } else {
     if ((walletUsdc ?? 0) > 50 && inYield === 0 && bestApy != null)
       allMissions.push({ priority: "high", icon: "📈", text: `$${usd(walletUsdc)} idle — earn ~$${(((walletUsdc ?? 0) * bestApy / 100) / 12).toFixed(0)}/mo at ${bestApy.toFixed(1)}%`, action: "Earn now", onAction: () => openAction("earn"), color: "#34D399" });
@@ -446,7 +507,7 @@ export default function BankPage() {
         <div className="m-3 rounded-xl border border-[#1A1A2E] bg-gradient-to-b from-[#0d1117] to-[#0a0a0f] p-3.5">
           <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">NET WORTH</div>
           <div className="font-mono text-[22px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
-          <div className="font-mono text-[9px] text-slate-600 mt-0.5 mb-2">USDC + yield · Base</div>
+          <div className="font-mono text-[9px] text-slate-600 mt-0.5 mb-2">USDC + yield · {net.short}</div>
           <Spark points={hist?.points ?? []} color="#34D399" height={28} />
           <div className="font-mono text-[8px] text-slate-700 mt-1">Morpho USDC · 30d trend</div>
         </div>
@@ -517,20 +578,30 @@ export default function BankPage() {
         {/* 6. Spacer */}
         <div className="flex-1" />
 
-        {/* 7. Network */}
+        {/* 7. Network — read-only unless testnet mode is unlocked (?testnet=1) */}
         <div className="px-3 pb-3">
           <div className="font-mono text-[9px] text-slate-600 mb-1.5">NETWORK</div>
-          <div className="flex gap-1">
-            {(["baseSepolia", "base"] as const).map(nk => (
-              <button key={nk} onClick={() => setNetwork(nk)}
-                className="flex-1 font-mono text-[10px] py-1.5 rounded-md transition-colors"
-                style={network === nk
-                  ? { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
-                  : { color: "#64748b", border: "1px solid #1A1A2E" }}>
-                {nk === "base" ? "Mainnet" : "Sepolia"}
-              </button>
-            ))}
-          </div>
+          {testnetUnlocked ? (
+            <div className="flex gap-1">
+              {(["base", "baseSepolia"] as const).map(nk => (
+                <button key={nk} onClick={() => setNetwork(nk)}
+                  className="flex-1 font-mono text-[10px] py-1.5 rounded-md transition-colors"
+                  style={network === nk
+                    ? YIELD_NETWORKS[nk].testnet
+                      ? { background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B30" }
+                      : { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
+                    : { color: "#64748b", border: "1px solid #1A1A2E" }}>
+                  {YIELD_NETWORKS[nk].testnet ? "Sepolia" : "Mainnet"}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="font-mono text-[10px] py-1.5 px-2 rounded-md flex items-center gap-1.5"
+              style={{ background: "#4FC3F70d", color: "#4FC3F7", border: "1px solid #4FC3F725" }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-[#34D399]" />
+              {net.label}
+            </div>
+          )}
         </div>
 
         {/* 8. Account chip */}
@@ -538,7 +609,7 @@ export default function BankPage() {
           <div className="font-mono text-[11px] text-slate-300 truncate">{name ?? fname ?? shortAddr(acct)}</div>
           <div className="flex items-center gap-2 mt-0.5">
             <a href={`${net.explorer}/address/${acct}`} target="_blank" rel="noopener noreferrer"
-              className="font-mono text-[9px] text-slate-600 hover:text-[#4FC3F7]">Basescan ↗</a>
+              className="font-mono text-[9px] text-slate-600 hover:text-[#4FC3F7]">{net.explorerName} ↗</a>
             <span className="text-slate-700 text-[9px]">·</span>
             <button onClick={() => disconnect()}
               className="font-mono text-[9px] text-slate-600 hover:text-red-400 transition-colors">Disconnect</button>
@@ -557,13 +628,22 @@ export default function BankPage() {
               <p className="font-mono text-[13px] text-white">
                 Good {greeting}, <span className="text-[#4FC3F7]">{name ?? fname ?? shortAddr(acct)}</span>
               </p>
-              <p className="font-mono text-[9px] text-slate-600 truncate">Base · Non-custodial · You hold the keys</p>
+              <p className="font-mono text-[9px] text-slate-600 truncate">{net.short} · Non-custodial · You hold the keys</p>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-            {["Non-custodial", "Base", "Passkey"].map(c => (
-              <span key={c} className="font-mono text-[9px] px-2 py-1 rounded-md text-slate-400"
-                style={{ border: "1px solid #1A1A2E", background: "#0d0d12" }}>{c}</span>
+            {/* The network chip reads live state. It was the literal "Base" while
+                the app defaulted to Sepolia — the single most misleading pixel
+                on the page, because it sat directly above the receive QR. */}
+            {[
+              { label: "Non-custodial", warn: false },
+              { label: net.short,       warn: isTestnet },
+              { label: "Passkey",       warn: false },
+            ].map(c => (
+              <span key={c.label} className="font-mono text-[9px] px-2 py-1 rounded-md"
+                style={c.warn
+                  ? { color: "#F59E0B", border: "1px solid #F59E0B40", background: "#F59E0B10" }
+                  : { color: "#94a3b8", border: "1px solid #1A1A2E", background: "#0d0d12" }}>{c.label}</span>
             ))}
             {new Date() >= new Date("2026-06-25") && (
               <span className="font-mono text-[9px] px-2 py-1 rounded-md font-bold"
@@ -574,6 +654,50 @@ export default function BankPage() {
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 xl:p-5 2xl:p-6 3xl:p-8">
+
+          {/* Testnet banner — the whole point of the opt-in. If a page can show
+              testnet balances and hand out a testnet receive QR, it has to say
+              so louder than the chip in the header does. */}
+          {isTestnet && (
+            <div className="mb-3 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3"
+              style={{ background: "#F59E0B10", border: "1px solid #F59E0B40" }}>
+              <div className="min-w-0">
+                <div className="font-mono text-[11px] font-bold" style={{ color: "#F59E0B" }}>
+                  ⚠ Testnet — {net.label}
+                </div>
+                <div className="font-mono text-[9px] text-slate-400 mt-0.5">
+                  Balances, QR codes and payment links on this page are test-only and hold no real value.
+                </div>
+              </div>
+              <button onClick={() => setNetwork("base")}
+                className="shrink-0 font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg transition-opacity hover:opacity-80"
+                style={{ background: "#F59E0B", color: "#050508" }}>
+                Switch to Base
+              </button>
+            </div>
+          )}
+
+          {/* Wallet-vs-app chain mismatch. Reads are pinned to `chainId` so the
+              numbers above stay correct, but every signature would be rejected —
+              better to say it here than at the wallet prompt. */}
+          {chainMismatch && (
+            <div className="mb-3 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3"
+              style={{ background: "#4FC3F70d", border: "1px solid #4FC3F740" }}>
+              <div className="min-w-0">
+                <div className="font-mono text-[11px] font-bold" style={{ color: "#4FC3F7" }}>
+                  Wallet is on {walletChain?.name ?? `chain ${walletChainId}`}
+                </div>
+                <div className="font-mono text-[9px] text-slate-400 mt-0.5">
+                  Balances below are read from {net.label}. Send, swap and earn need your wallet on the same network.
+                </div>
+              </div>
+              <button onClick={switchToAppChain} disabled={switchBusy}
+                className="shrink-0 font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg transition-opacity hover:opacity-80 disabled:opacity-50"
+                style={{ background: "#4FC3F7", color: "#050508" }}>
+                {switchBusy ? "…" : `Switch to ${net.short}`}
+              </button>
+            </div>
+          )}
 
           {/* ── Section 1: Balance | Actions | Health ─────────────────────── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 items-start">
@@ -624,12 +748,14 @@ export default function BankPage() {
                   style={{ background: "#4FC3F7", color: "#050508" }}>
                   ➡ Send
                 </button>
-                <button onClick={addCash} disabled={onrampBusy || !isConnected}
+                <button onClick={addCash} disabled={onrampBusy || !isConnected || isTestnet}
+                  title={isTestnet ? "Base mainnet only" : undefined}
                   className="font-mono text-[11px] font-bold py-2.5 px-3 rounded-xl disabled:opacity-40 transition-opacity hover:opacity-80"
                   style={{ background: "#34D39910", color: "#34D399", border: "1px solid #34D39930" }}>
                   {onrampBusy ? "…" : "💵 Add"}
                 </button>
-                <button onClick={cashOut} disabled={cashOutBusy || !isConnected}
+                <button onClick={cashOut} disabled={cashOutBusy || !isConnected || isTestnet}
+                  title={isTestnet ? "Base mainnet only" : undefined}
                   className="font-mono text-[11px] py-2.5 px-3 rounded-xl text-slate-400 disabled:opacity-40 transition-opacity hover:text-slate-200"
                   style={{ border: "1px solid #1A1A2E" }}>
                   {cashOutBusy ? "…" : "🏦 Out"}
@@ -892,7 +1018,24 @@ export default function BankPage() {
                   </div>
                 )}
                 {panel === "earn" && <MoveToYieldCard result={{ network }} account={acct} />}
-                {panel === "convert" && <SwapCard account={acct} preset={sellPreset} />}
+                {/* Convert is a 0x-API flow that exists on Base mainnet only, and
+                    SwapCard force-switches the wallet to mainnet before signing.
+                    Rendering it while the dashboard is on testnet would move REAL
+                    funds under a page captioned "no real value" — exactly the
+                    class of mismatch this PR removes. Refuse instead. */}
+                {panel === "convert" && (isTestnet
+                  ? <div className="rounded-lg px-3.5 py-3" style={{ background: "#F59E0B10", border: "1px solid #F59E0B40" }}>
+                      <div className="font-mono text-[11px] font-bold" style={{ color: "#F59E0B" }}>Convert is Base mainnet only</div>
+                      <div className="font-mono text-[9px] text-slate-400 mt-1 leading-relaxed">
+                        Swaps route through the 0x API on Base mainnet and would spend real funds. Switch off testnet to convert.
+                      </div>
+                      <button onClick={() => setNetwork("base")}
+                        className="font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg mt-2.5 transition-opacity hover:opacity-80"
+                        style={{ background: "#F59E0B", color: "#050508" }}>
+                        Switch to Base
+                      </button>
+                    </div>
+                  : <SwapCard account={acct} preset={sellPreset} />)}
                 {panel === "orders" && <OrdersPanel />}
                 {panel === "send" && (
                   <div>
@@ -960,7 +1103,7 @@ export default function BankPage() {
                       <p className="font-mono text-[9px] text-slate-500 leading-relaxed">
                         {parseFloat(reqAmount) > 0
                           ? <>Payment-request QR — a payer scanning it (Wallet <b className="text-slate-300">Scan to pay</b>, or any EIP-681 wallet) gets <b className="text-slate-300">{reqAmount} {reqAsset}</b> prefilled.</>
-                          : <>Scan the QR with any wallet, or set an amount above to make a payment request. <b className="text-slate-300">USDC / ETH on Base</b> ({net.short}) only.</>}
+                          : <>Scan the QR with any wallet, or set an amount above to make a payment request. <b className="text-slate-300">USDC / ETH on {net.label}</b> only.</>}
                       </p>
                     </div>
                   </div>

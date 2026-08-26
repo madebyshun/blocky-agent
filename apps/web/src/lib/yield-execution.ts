@@ -19,6 +19,13 @@ export interface YieldNetCfg {
   label: string;
   short: string;
   explorer: string;
+  /**
+   * Display name for `explorer`. Exists because call sites kept hardcoding the
+   * string "Basescan" next to a `net.explorer` href — so on Sepolia the link
+   * read "Basescan" and went to sepolia.basescan.org. Carrying the label with
+   * the URL makes that class of drift impossible.
+   */
+  explorerName: string;
   testnet: boolean;
   pool: `0x${string}`;
   usdc: `0x${string}`;
@@ -32,6 +39,7 @@ export const YIELD_NETWORKS: Record<YieldNetwork, YieldNetCfg> = {
     label: "Base Sepolia (testnet)",
     short: "Sepolia",
     explorer: "https://sepolia.basescan.org",
+    explorerName: "Sepolia Basescan",
     testnet: true,
     pool:  getAddress("0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27"),
     usdc:  getAddress("0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f"),
@@ -43,6 +51,7 @@ export const YIELD_NETWORKS: Record<YieldNetwork, YieldNetCfg> = {
     label: "Base mainnet",
     short: "Base",
     explorer: "https://basescan.org",
+    explorerName: "Basescan",
     testnet: false,
     pool:  getAddress("0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"),
     usdc:  getAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
