@@ -58,6 +58,17 @@ export interface SpendReceipt {
    * PRICE_UNITS or the request 503s before it ever reaches a settlement.
    */
   tool: string;
+  /**
+   * Set ONLY for community-hosted tools, whose `tool` is a Hub slug from a
+   * different namespace than AGENT_TOOLS.
+   *
+   * Without this flag the two namespaces are indistinguishable, and a community
+   * tool whose slug happens to equal a catalog id — "token-price" is exactly the
+   * kind of name someone would pick — would render under the FIRST-PARTY tool's
+   * display name. The user would be told they bought a thing they did not buy.
+   * Absent means first-party, so no existing row has to be migrated.
+   */
+  src?: "community";
   /** USDC micro-units (6 decimals) actually settled. */
   units: number;
   /** Base settlement tx hash, when CDP returned one. */
@@ -109,6 +120,7 @@ export async function recordToolPayment(
   tool: string,
   units: number,
   tx?: string | null,
+  src?: "community",
 ): Promise<void> {
   if (!payer || !ADDR_RE.test(payer)) return;
   if (!tool || !Number.isFinite(units) || units <= 0) return;
@@ -118,7 +130,7 @@ export async function recordToolPayment(
       ? existing
       : (() => { try { return JSON.parse(existing) as SpendReceipt[]; } catch { return []; } })();
 
-    rows.push({ ts: Date.now(), tool, units: Math.round(units), ...(tx ? { tx } : {}) });
+    rows.push({ ts: Date.now(), tool, units: Math.round(units), ...(src ? { src } : {}), ...(tx ? { tx } : {}) });
     // Keep the newest; the drawer has a fixed depth.
     const trimmed = rows.slice(-MAX_RECEIPTS);
     await kvSet(key(payer), JSON.stringify(trimmed), TTL_S);

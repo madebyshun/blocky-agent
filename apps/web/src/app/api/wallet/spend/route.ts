@@ -52,7 +52,11 @@ export async function GET(req: Request) {
     receipts: rows.map(r => ({
       ts:    r.ts,
       tool:  r.tool,
-      name:  NAMES.get(r.tool) ?? null,
+      // Community slugs are a DIFFERENT namespace and must not be looked up
+      // here — a hosted tool slugged "token-price" would otherwise borrow the
+      // first-party tool's name and tell the user they bought the wrong thing.
+      // They render as their slug, which is already human-written.
+      name:  r.src === "community" ? null : NAMES.get(r.tool) ?? null,
       units: r.units,
       usd:   r.units / 1_000_000,
       tx:    r.tx ?? null,
