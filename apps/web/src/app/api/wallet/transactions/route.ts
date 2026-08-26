@@ -109,7 +109,10 @@ async function ethPriceUsd(): Promise<number | null> {
   }
 }
 
-const emptyStats = () => ({ transferCountMonth: 0, netFlowUsdcMonth: 0, gasSavedUsd: null as number | null });
+const emptyStats = () => ({
+  transferCountMonth: 0, netFlowUsdcMonth: 0,
+  gasSavedUsd: null as number | null, ethUsdPrice: null as number | null,
+});
 
 export async function GET(req: Request) {
   const u = new URL(req.url);
@@ -146,13 +149,21 @@ export async function GET(req: Request) {
       if (t.kind === "sent") return acc - t.amount;
       return acc;
     }, 0);
+    // The live ETH price, fetched ONCE and handed to the client.
+    //
+    // It used to be fetched only when `transferCountMonth > 0`, because gas-saved
+    // was its only consumer. It is now also the denominator of the portfolio
+    // allocation, which a wallet with zero transfers still has — so the fetch is
+    // unconditional and `null` (CoinGecko down / timed out) travels to the UI as
+    // "unknown" rather than being replaced by a plausible-looking constant.
+    const eth = await ethPriceUsd();
     // Gas saved vs Ethereum L1 — estimate: ~0.001 ETH per transfer × ETH price.
-    const eth = transferCountMonth > 0 ? await ethPriceUsd() : null;
-    const gasSavedUsd = eth != null ? +(0.001 * eth * transferCountMonth).toFixed(2) : null;
+    const gasSavedUsd =
+      eth != null && transferCountMonth > 0 ? +(0.001 * eth * transferCountMonth).toFixed(2) : null;
 
     return NextResponse.json({
       transactions,
-      stats: { transferCountMonth, netFlowUsdcMonth: +netFlowUsdcMonth.toFixed(2), gasSavedUsd },
+      stats: { transferCountMonth, netFlowUsdcMonth: +netFlowUsdcMonth.toFixed(2), gasSavedUsd, ethUsdPrice: eth },
       ts: Date.now(),
     });
   } catch (e) {

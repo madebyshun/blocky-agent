@@ -11,10 +11,18 @@
 // Convert panel via onQuickSell; the user still reviews and signs there.
 // Robinhood-Chain tokens and a PnL column are deliberate follow-ups (Moralis is
 // Base-only, and PnL needs a real cost-basis source).
+//
+// TRUST: every row also carries `h.trust`, derived in holdings.ts from the token
+// ADDRESS (see lib/wallet/token-trust.ts). This table used to render whatever
+// Moralis returned, with an identical live `Sell ▾` on each row — including on a
+// token whose symbol said "USDC" and whose name said "United States of Doge
+// CashCat". Two things follow from trust here and both are load-bearing:
+// an impostor gets NO trade control, and it does not count toward the total.
 
 import { useEffect, useState } from "react";
 import { useChainId } from "wagmi";
 import type { WalletHolding } from "@/lib/wallet/holdings";
+import { canQuickSell, countsTowardTotal, TRUST_BADGE } from "@/lib/wallet/token-trust";
 
 interface HoldingsResp {
   holdings:   WalletHolding[];
@@ -89,8 +97,12 @@ export default function TokenTable({ address, onQuickSell }: {
   if (!address) return null;
 
   const holdings = data?.holdings ?? [];
-  const totalUsd = holdings.reduce((a, h) => a + (h.usdValue ?? 0), 0);
-  const explorer = data?.explorer ?? "https://basescan.org";
+  // Impostors are excluded from the headline total. A scam token can quote any
+  // price it likes through a pool it controls, so counting it would let the
+  // impostor set the number this card presents as the user's portfolio value.
+  const totalUsd  = holdings.reduce((a, h) => a + (countsTowardTotal(h.trust) ? (h.usdValue ?? 0) : 0), 0);
+  const nFlagged  = holdings.filter(h => h.trust === "impostor").length;
+  const explorer  = data?.explorer ?? "https://basescan.org";
 
   return (
     <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 mb-3">
@@ -121,9 +133,12 @@ export default function TokenTable({ address, onQuickSell }: {
         <div className="py-6 text-center font-mono text-[10px] text-slate-600">No tokens on {chainLabel} yet</div>
       ) : (
         <div className="divide-y divide-[#1A1A2E]">
-          {holdings.map(h => (
+          {holdings.map(h => {
+            const badge    = TRUST_BADGE[h.trust];
+            const impostor = h.trust === "impostor";
+            return (
             <div key={h.address || h.symbol}
-              className={`grid ${gridCls} gap-3 items-center px-1 py-2 hover:bg-[#0d0d12] transition-colors`}>
+              className={`grid ${gridCls} gap-3 items-center px-1 py-2 hover:bg-[#0d0d12] transition-colors ${impostor ? "opacity-60" : ""}`}>
               {/* Token — links to explorer */}
               <a href={`${explorer}/token/${h.address}?a=${address}`}
                 target="_blank" rel="noopener noreferrer"
@@ -136,24 +151,36 @@ export default function TokenTable({ address, onQuickSell }: {
                       style={{ background: "#1A1A2E" }}>{h.symbol.slice(0, 3).toUpperCase()}</span>}
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-[11px] text-slate-200 font-bold truncate">{h.symbol}</span>
+                    <span className="font-mono text-[11px] font-bold truncate"
+                      style={{ color: impostor ? "#94a3b8" : "#e2e8f0" }}>{h.symbol}</span>
                     {h.isB20 && <span className="font-mono text-[8px] px-1 rounded text-[#4FC3F7] shrink-0"
                       style={{ border: "1px solid #4FC3F730" }}>B20</span>}
                     {h.isNative && <span className="font-mono text-[8px] px-1 rounded text-slate-500 shrink-0"
                       style={{ border: "1px solid #1A1A2E" }}>native</span>}
+                    {badge && <span className="font-mono text-[8px] px-1 rounded shrink-0"
+                      style={{ color: badge.color, border: `1px solid ${badge.color}55` }}>{badge.label}</span>}
                   </div>
                   {h.name && <div className="font-mono text-[9px] text-slate-600 truncate">{h.name}</div>}
                 </div>
               </a>
               {/* Balance */}
               <span className="font-mono text-[10px] text-slate-300 text-right tabular-nums">{fmtAmount(h.amount)}</span>
-              {/* Value */}
+              {/* Value — an impostor's price is its own claim, so it isn't shown */}
               <span className="font-mono text-[10px] text-right tabular-nums"
-                style={{ color: h.usdValue != null ? "#34D399" : "#64748b" }}>{fmtUsd(h.usdValue)}</span>
-              {/* Sell — pre-fills the Convert panel; user reviews + signs there */}
-              {showSell && <SellControl h={h} onQuickSell={onQuickSell!} />}
+                style={{ color: impostor ? "#64748b" : h.usdValue != null ? "#34D399" : "#64748b" }}>
+                {impostor ? "—" : fmtUsd(h.usdValue)}
+              </span>
+              {/* Sell — pre-fills the Convert panel; user reviews + signs there.
+                  Withheld on an impostor: being mistaken for another token is the
+                  whole point of that token, and a trade button is the payoff.
+                  The empty <span> keeps the row's grid slot so columns stay
+                  aligned — the CONTROL is absent from the DOM, not hidden. */}
+              {showSell && (canQuickSell(h.trust)
+                ? <SellControl h={h} onQuickSell={onQuickSell!} />
+                : <span className="justify-self-end font-mono text-[9px] text-slate-700" title="Name does not match this contract — trading disabled here">—</span>)}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -161,6 +188,14 @@ export default function TokenTable({ address, onQuickSell }: {
       {data?.partial && holdings.length > 0 && (
         <div className="mt-2 font-mono text-[9px] text-amber-500/80">
           Showing majors only — full token list needs Moralis.
+        </div>
+      )}
+
+      {/* Say WHY a row is flagged, once, instead of leaving the badge to be guessed at. */}
+      {nFlagged > 0 && (
+        <div className="mt-2 font-mono text-[9px] text-red-400/80 leading-relaxed">
+          {nFlagged} token{nFlagged > 1 ? "s" : ""} use{nFlagged > 1 ? "" : "s"} the name of a real
+          asset at a different contract address. Not counted in the total, and not tradable here.
         </div>
       )}
     </div>
