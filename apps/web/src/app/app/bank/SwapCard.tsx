@@ -26,16 +26,19 @@ import { formatUnits, parseUnits } from "viem";
 import { base } from "wagmi/chains";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { DATA_SUFFIX } from "@/constants/builderCode";
+import { BASE_MAJORS, NATIVE_SENTINEL } from "@/lib/wallet/token-trust";
 
-const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+// The tradable majors come from `token-trust.ts`, which is also what decides
+// whether a token in the portfolio may be sold at all. They used to be two
+// hand-typed lists that happened to agree; now the list this card offers to buy
+// IS the list the app vouches for, and adding a major in one place adds it in
+// both. Looked up by symbol rather than index — an imported array can be
+// reordered upstream, a local literal cannot.
+const NATIVE = NATIVE_SENTINEL;
 type Token = { sym: string; addr: string; decimals: number; native?: boolean };
-const TOKENS: Token[] = [
-  { sym: "ETH",   addr: NATIVE, decimals: 18, native: true },
-  { sym: "USDC",  addr: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 },
-  { sym: "WETH",  addr: "0x4200000000000000000000000000000000000006", decimals: 18 },
-  { sym: "cbBTC", addr: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", decimals: 8 },
-];
-const USDC = TOKENS[1];
+const TOKENS: Token[] = BASE_MAJORS;
+const ETH  = TOKENS.find(t => t.native)!;
+const USDC = TOKENS.find(t => t.sym === "USDC")!;
 
 // A quick-sell pre-fill pushed in from the portfolio token table: an arbitrary
 // sell token (beyond the 4 majors) + a concrete amount. `nonce` bumps on every
@@ -57,8 +60,8 @@ export default function SwapCard({ account, preset }: { account?: `0x${string}`;
   const { writeContractAsync } = useWriteContract();
   const { sendTransactionAsync } = useSendTransaction();
 
-  const [sell, setSell] = useState<Token>(TOKENS[0]); // ETH
-  const [buy, setBuy]   = useState<Token>(TOKENS[1]); // USDC
+  const [sell, setSell] = useState<Token>(ETH);
+  const [buy, setBuy]   = useState<Token>(USDC);
   const [amount, setAmount] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
   const [loading, setLoading] = useState(false);
@@ -104,7 +107,7 @@ export default function SwapCard({ account, preset }: { account?: `0x${string}`;
   useEffect(() => {
     if (!preset) return;
     setSell({ sym: preset.sym, addr: preset.addr, decimals: preset.decimals });
-    setBuy(preset.addr.toLowerCase() === USDC.addr.toLowerCase() ? TOKENS[0] : USDC);
+    setBuy(preset.addr.toLowerCase() === USDC.addr.toLowerCase() ? ETH : USDC);
     setAmount(preset.amount);
     setQuote(null); setStep("idle"); setErr("");
     // eslint-disable-next-line react-hooks/exhaustive-deps

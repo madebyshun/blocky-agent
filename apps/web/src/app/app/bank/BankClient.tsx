@@ -253,7 +253,7 @@ export default function BankPage() {
   }, []);
 
   // ── Real wallet history (Moralis) ────────────────────────────────────────
-  type TxStats = { transferCountMonth: number; netFlowUsdcMonth: number; gasSavedUsd: number | null };
+  type TxStats = { transferCountMonth: number; netFlowUsdcMonth: number; gasSavedUsd: number | null; ethUsdPrice: number | null };
   const [txData, setTxData] = useState<{ transactions: WalletTx[]; stats?: TxStats; needsKey?: boolean; error?: string } | null>(null);
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError]     = useState(false);
@@ -283,6 +283,11 @@ export default function BankPage() {
   // Stats from real wallet history (this calendar month)
   const netFlowMonth      = txData?.stats?.netFlowUsdcMonth ?? 0;
   const transferCountMonth = txData?.stats?.transferCountMonth ?? 0;
+  // Live ETH/USD (CoinGecko, via the transactions route). `null` = the feed did
+  // not answer — kept null all the way to the render so nothing downstream can
+  // quietly substitute a constant, which is what `ethBal * 2500` used to be.
+  const ethUsdPrice        = txData?.stats?.ethUsdPrice ?? null;
+  const gasSavedUsd        = txData?.stats?.gasSavedUsd ?? null;
 
   // ── AI Chat popup ────────────────────────────────────────────────────────
   const [chatOpen, setChatOpen]       = useState(false);
@@ -425,7 +430,9 @@ export default function BankPage() {
     bestApy,
     netFlowMonth,
     transferCountMonth,
-  }), [walletUsdc, aavePos, morphoPos, ethBal, bestApy, netFlowMonth, transferCountMonth]);
+    ethUsdPrice,
+    gasSavedUsd,
+  }), [walletUsdc, aavePos, morphoPos, ethBal, bestApy, netFlowMonth, transferCountMonth, ethUsdPrice, gasSavedUsd]);
 
   // What the connected account IS — read off the live connector + on-chain
   // bytecode, never asserted. Called here (above the early return) because it
@@ -446,12 +453,19 @@ export default function BankPage() {
   ];
 
   // ── Portfolio allocation (for pie chart) ─────────────────────────────────
-  const stableTotal   = (walletUsdc ?? 0) + (aavePos ?? 0) + (morphoPos ?? 0);
-  const ethUsd        = (ethBal ?? 0) * 2500;
-  const portfolioTotal = stableTotal + ethUsd;
-  const portfolioData = [
-    { name: "Stablecoin", value: stableTotal, color: "#4FC3F7" },
-    { name: "ETH",        value: ethUsd,      color: "#94A3B8" },
+  // `ethUsd` was `(ethBal ?? 0) * 2500` — a hardcoded ETH price, invented at a
+  // moment when it happened to be roughly right and never true again. It fed
+  // both this chart and `divScore` below, so a stale constant was silently
+  // grading the user's portfolio. It is now the live price or nothing: `null`
+  // drops the ETH slice out of the chart rather than drawing it at a made-up
+  // size, and the caption says the leg is unpriced.
+  const stableTotal    = (walletUsdc ?? 0) + (aavePos ?? 0) + (morphoPos ?? 0);
+  const ethUsd: number | null = ethUsdPrice != null ? (ethBal ?? 0) * ethUsdPrice : null;
+  const portfolioTotal = stableTotal + (ethUsd ?? 0);
+  const ethUnpriced    = ethUsd == null && (ethBal ?? 0) > 0;
+  const portfolioData  = [
+    { name: "Stablecoin", value: stableTotal,  color: "#4FC3F7" },
+    { name: "ETH",        value: ethUsd ?? 0,  color: "#94A3B8" },
   ].filter(d => d.value > 0);
 
   // ── Chat popup position relative to FAB ──────────────────────────────────
@@ -488,7 +502,11 @@ export default function BankPage() {
   const scoreReady     = balancesKnown && total > 0;
   const deployedRatio  = total > 0 ? inYield / total : 0;
   const yieldScore     = deployedRatio > 0.8 ? 95 : deployedRatio > 0.5 ? 80 : deployedRatio > 0.2 ? 60 : deployedRatio > 0 ? 40 : 20;
-  const divScore       = portfolioTotal > 0 && ethUsd / portfolioTotal > 0.05 ? 88 : ethUsd > 0 ? 65 : 45;
+  // Diversification degrades honestly when ETH has no price: "holds ETH at all"
+  // is still knowable from the balance, only the ">5% of portfolio" tier needs
+  // a price. Previously both tiers were decided by a constant.
+  const divScore       = ethUsd != null && portfolioTotal > 0 && ethUsd / portfolioTotal > 0.05 ? 88
+                       : (ethBal ?? 0) > 0 ? 65 : 45;
   const gasScore       = ethBal == null ? 50 : ethBal > 0.05 ? 95 : ethBal > 0.01 ? 80 : ethBal > 0.005 ? 60 : 20;
   const actScore       = transferCountMonth > 10 ? 90 : transferCountMonth > 5 ? 75 : transferCountMonth > 1 ? 55 : 20;
   const portfolioScore: number | null =
@@ -561,8 +579,21 @@ export default function BankPage() {
           <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">NET WORTH</div>
           <div className="font-mono text-[22px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
           <div className="font-mono text-[9px] text-slate-600 mt-0.5 mb-2">USDC + yield · {net.short}</div>
-          <Spark points={hist?.points ?? []} color="#34D399" height={28} />
-          <div className="font-mono text-[8px] text-slate-700 mt-1">Morpho USDC · 30d trend</div>
+          {/* This sparkline is MORPHO'S APY, not the user's balance history — we
+              keep no per-wallet time series. It used to render in #34D399, the
+              exact green of the figure above it, captioned at 8px underneath:
+              a rising green line directly beneath "$0.00" reads as the money
+              going up. Separated by a rule, recoloured to the app's blue
+              (market data, not your data), and labelled ABOVE the chart where
+              the label is read before the shape. */}
+          {(hist?.points?.length ?? 0) > 1 && (
+            <div className="mt-2 pt-2 border-t border-[#1A1A2E]">
+              <div className="font-mono text-[9px] text-slate-500 mb-1">
+                Morpho USDC APY · 30d <span className="text-slate-600">(market, not your balance)</span>
+              </div>
+              <Spark points={hist?.points ?? []} color="#4FC3F7" height={28} />
+            </div>
+          )}
         </div>
 
         {/* 3. Earn widget */}
@@ -1021,6 +1052,13 @@ export default function BankPage() {
                           <span className="font-mono text-[10px] text-slate-300">${usd(d.value)}</span>
                         </div>
                       ))}
+                      {/* Say so when the ETH leg is missing, rather than letting
+                          the chart imply the wallet holds no ETH. */}
+                      {ethUnpriced && (
+                        <div className="font-mono text-[9px] text-slate-500">
+                          {ethBal?.toFixed(4)} ETH — price unavailable, not charted
+                        </div>
+                      )}
                       <div className="font-mono text-[8px] text-slate-700 pt-1">ETH counted as gas reserve</div>
                       {walletState.gasSavedUsd != null && (
                         <div className="font-mono text-[9px] text-[#34D399]">~${walletState.gasSavedUsd} saved vs mainnet</div>
@@ -1030,14 +1068,23 @@ export default function BankPage() {
                 ) : (
                   <div className="font-mono text-[10px] text-slate-600">No assets yet</div>
                 )}
-                <div className="mt-3 flex items-center justify-between font-mono text-[10px]">
-                  <span className="text-slate-500">Stablecoin</span>
-                  <span className="text-[#4FC3F7] font-bold">{walletState.allocation.stablecoin}%</span>
-                </div>
-                <div className="h-1.5 rounded-full bg-[#1A1A2E] overflow-hidden mt-1">
-                  <div className="h-full rounded-full bg-[#4FC3F7]"
-                    style={{ width: `${walletState.allocation.stablecoin}%` }} />
-                </div>
+                {/* The Stablecoin bar used to sit OUTSIDE this conditional, so an
+                    empty wallet printed "No assets yet" and then drew a
+                    full-width "Stablecoin 100%" underneath it — the card
+                    contradicting itself in adjacent lines. It renders only when
+                    there is a real ratio to render. */}
+                {walletState.allocation.stablecoin != null && (
+                  <>
+                    <div className="mt-3 flex items-center justify-between font-mono text-[10px]">
+                      <span className="text-slate-500">Stablecoin</span>
+                      <span className="text-[#4FC3F7] font-bold">{walletState.allocation.stablecoin}%</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-[#1A1A2E] overflow-hidden mt-1">
+                      <div className="h-full rounded-full bg-[#4FC3F7]"
+                        style={{ width: `${walletState.allocation.stablecoin}%` }} />
+                    </div>
+                  </>
+                )}
               </div>
 
             </div>
