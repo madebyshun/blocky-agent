@@ -11,7 +11,7 @@
  * its header stated the payer address is never stored. That was true, and it
  * is why the timeline could not name a single payment the user had made. This
  * file is the deliberate, narrow reversal of that: receipts filed under the
- * payer, so the wallet can say "Blue Hub · hub_honeypot · $0.05" where it used
+ * payer, so the wallet can say "Blue Hub · honeypot-check · $0.05" where it used
  * to say "Sent to 0x0295…".
  *
  * Who can read them: anyone with the address. `/api/wallet/spend` is an
@@ -47,7 +47,16 @@ import { kvGet, kvSet } from "@/lib/kv";
 export interface SpendReceipt {
   /** ms epoch, server clock at settlement. */
   ts: number;
-  /** AGENT_TOOLS id, e.g. "hub_honeypot". */
+  /**
+   * AGENT_TOOLS id — kebab-case, e.g. "honeypot-check", "wallet-risk".
+   *
+   * NOT the MCP tool name for the same tool, which is `hub_honeypot`. Two
+   * namespaces for one tool, and only the catalog id resolves to a display
+   * name; write the wrong one and every receipt silently renders as a raw
+   * unfamiliar string. It is right here by construction — the x402 route
+   * passes its `[tool]` param, which must already key both HANDLERS and
+   * PRICE_UNITS or the request 503s before it ever reaches a settlement.
+   */
   tool: string;
   /** USDC micro-units (6 decimals) actually settled. */
   units: number;
