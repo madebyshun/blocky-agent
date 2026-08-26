@@ -76,9 +76,33 @@ export interface SpendSummaryDTO {
   other: { credits: number; calls: number };
   tools: ToolSpendRow[];
   days: DayBucket[];
+  /** Oldest row inside the totals, ms epoch — the scope label comes from this. */
+  oldestTs: number | null;
   partial: boolean;
   creditsPerUsdc: number;
   ts: number;
+}
+
+/**
+ * How far back the numbers on the rails actually reach.
+ *
+ * This header used to be a hard-coded "last 30 days" and that was wrong: 30 is
+ * the length of the CHART, while the rails sum the entire recorded window (up
+ * to 100 receipts / 90-day TTL on x402, HISTORY_CAP events with no time bound
+ * on credits). A receipt from 60 days ago is inside the total and outside the
+ * chart, so the label overstated nothing and understated the window — either
+ * way it described a span the number did not have, which is the same mistake
+ * as "NET WORTH" over a stablecoins-only figure (#322).
+ *
+ * Derived from the oldest row that was actually counted, so it cannot drift
+ * from the data no matter which cap bites first.
+ */
+function scopeLabel(oldestTs: number | null): string {
+  if (oldestTs == null) return "no activity recorded";
+  const days = Math.floor((Date.now() - oldestTs) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "since yesterday";
+  return `last ${days} days`;
 }
 
 /**
@@ -164,7 +188,12 @@ export default function SpendConsole({ address }: { address?: string }) {
     <div className="rounded-2xl border border-[#1A1A2E] bg-[#0A0A12] p-4 sm:p-5">
       <div className="flex items-baseline justify-between mb-1">
         <div className="font-mono text-[9px] text-slate-500 tracking-widest">AGENT SPEND</div>
-        <div className="font-mono text-[9px] text-slate-700">last 30 days</div>
+        {/* Only once there is data to describe. Printing a span next to a
+            spinner, an error, or a wallet we haven't asked about would be a
+            claim about numbers that aren't on screen. */}
+        {load.s === "ok" && (
+          <div className="font-mono text-[9px] text-slate-700">{scopeLabel(load.d.oldestTs)}</div>
+        )}
       </div>
       <p className="font-mono text-[9px] text-slate-600 mb-4 leading-relaxed">
         What your payments actually bought — the part no block explorer can see.
@@ -263,8 +292,12 @@ function Body({ d }: { d: SpendSummaryDTO }) {
           {/* ── Activity, measured in calls — the one shared unit ──────────── */}
           {anyActivity && (
             <div className="mt-5">
+              {/* The chart's own span, stated on the chart. It is DAY_WINDOW
+                  long and the rails above are not — that difference is the
+                  whole reason the header stopped hard-coding "30". */}
               <div className="font-mono text-[9px] text-slate-600 tracking-widest uppercase mb-2">
                 Calls per day
+                <span className="text-slate-700 normal-case tracking-normal"> · last {d.days.length} days</span>
               </div>
               <div className="flex items-end gap-[2px] h-14">
                 {d.days.map(day => (

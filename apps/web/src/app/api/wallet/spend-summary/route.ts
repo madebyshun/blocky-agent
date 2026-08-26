@@ -45,6 +45,7 @@ const EMPTY = {
   other:   { credits: 0, calls: 0 },
   tools:   [] as never[],
   days:    [] as never[],
+  oldestTs: null,
   partial: false,
   creditsPerUsdc: CREDITS_PER_USDC,
 };

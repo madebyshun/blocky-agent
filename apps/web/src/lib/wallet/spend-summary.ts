@@ -112,6 +112,24 @@ export interface SpendSummary {
   tools: ToolSpend[];
   /** Dense, oldest → newest, one entry per UTC day including zero days. */
   days: DayBucket[];
+  /**
+   * ms epoch of the OLDEST row counted in the totals above, or null when there
+   * are none. The header's scope label is rendered from this and nothing else.
+   *
+   * It exists because the two are not the same span and the UI cannot be
+   * trusted to remember that: `days` is DAY_WINDOW long, while every figure on
+   * the rails sums the whole recorded window — up to 100 receipts / 90 days of
+   * TTL on the x402 side, HISTORY_CAP events with no time bound on the credit
+   * side. A receipt from 60 days ago is inside the totals and outside the
+   * chart. The panel shipped saying "last 30 days" over exactly that number,
+   * which is the "NET WORTH over a stablecoins-only figure" mistake (#322) in
+   * a different column — a label claiming a scope its number does not have.
+   *
+   * Derived, never assumed: no constant here can be honest, because the window
+   * is bounded by a row cap AND a TTL AND a separate cap on the other rail, so
+   * whichever bites first is a fact about this wallet's data, not about config.
+   */
+  oldestTs: number | null;
   /** True when either rail could not be read — the totals are then incomplete. */
   partial: boolean;
   ts: number;
@@ -174,6 +192,15 @@ export async function getSpendSummary(address: string): Promise<SpendSummary> {
   const byTool = new Map<string, ToolSpend>();
   const byDay = new Map<string, DayBucket>();
 
+  // Oldest row that actually lands in a total, across both rails. Tracked at
+  // every point a figure is accumulated so it can never drift from what was
+  // counted — see `oldestTs` on SpendSummary for why a constant won't do.
+  let oldestTs: number | null = null;
+  const sawTs = (ts: number) => {
+    if (!Number.isFinite(ts)) return;
+    if (oldestTs === null || ts < oldestTs) oldestTs = ts;
+  };
+
   const bump = (ts: number, patch: Partial<DayBucket>) => {
     const day = utcDay(ts);
     const cur = byDay.get(day) ?? { day, usdcUnits: 0, credits: 0, calls: 0 };
@@ -202,6 +229,7 @@ export async function getSpendSummary(address: string): Promise<SpendSummary> {
     row.usdcCalls += 1;
     usdcUnits += r.units;
     usdcCalls += 1;
+    sawTs(r.ts);
     bump(r.ts, { usdcUnits: r.units, calls: 1 });
   }
 
@@ -234,6 +262,7 @@ export async function getSpendSummary(address: string): Promise<SpendSummary> {
 
     creditsInWindow += amount;
     creditCalls += 1;
+    sawTs(e.ts);
     bump(e.ts, { credits: amount, calls: 1 });
   }
 
@@ -266,6 +295,7 @@ export async function getSpendSummary(address: string): Promise<SpendSummary> {
     other: { credits: otherCredits, calls: otherCalls },
     tools,
     days,
+    oldestTs,
     partial: receipts == null || ledger == null,
     ts: Date.now(),
   };
