@@ -685,13 +685,22 @@ export default function BankPage() {
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-            {/* The network chip reads live state. It was the literal "Base" while
-                the app defaulted to Sepolia — the single most misleading pixel
-                on the page, because it sat directly above the receive QR. */}
+            {/* Every chip here reads live state.
+                - The network chip was the literal "Base" while the app
+                  defaulted to Sepolia — the single most misleading pixel on the
+                  page, because it sat directly above the receive QR.
+                - "Passkey" was hardcoded in this row TOO (a fourth copy of the
+                  same defect, alongside the two on the health card), so it
+                  showed for MetaMask users who have no passkey. It is now the
+                  name of the connector actually connected, and the passkey chip
+                  appears only when the derivation can affirm one.
+                - "Non-custodial" stays constant legitimately: it describes THIS
+                  APP, which holds no key and no fund, not the wallet. */}
             {[
-              { label: "Non-custodial", warn: false },
-              { label: net.short,       warn: isTestnet },
-              { label: "Passkey",       warn: false },
+              { label: "Non-custodial",            warn: false },
+              { label: net.short,                  warn: isTestnet },
+              { label: identity.connectionLabel,   warn: false },
+              ...(identity.passkey === "yes" ? [{ label: "Passkey", warn: false }] : []),
             ].map(c => (
               <span key={c.label} className="font-mono text-[9px] px-2 py-1 rounded-md"
                 style={c.warn
