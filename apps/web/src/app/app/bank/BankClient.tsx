@@ -25,7 +25,8 @@ import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payme
 import OrdersPanel from "./OrdersPanel";
 import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
-import SpendConsole from "./SpendConsole";
+// Shared with the Blue Hub home — lives in components/, not this route folder.
+import SpendConsole from "@/components/SpendConsole";
 import TokenTable from "./TokenTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
 import { useWalletIdentity } from "@/lib/wallet/identity";

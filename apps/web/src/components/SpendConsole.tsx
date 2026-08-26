@@ -8,6 +8,12 @@
  * that triggered the payment. This panel is that join, aggregated: per tool,
  * per day, across both rails that pay for a Hub call.
  *
+ * Mounted in TWO places, which is why it lives in `components/` and not under a
+ * route folder: /wallet (the spend console proper) and the Blue Hub home, where
+ * the money is actually spent. Hub gates it on a connected address so the
+ * `disconnected` branch below is a /wallet-only state — but the branch has to
+ * exist regardless, and getting it wrong is what made this file move at all.
+ *
  * ─── Two columns, never one ─────────────────────────────────────────────────
  *
  * USDC and credits are NOT added together anywhere in this file, and no single
@@ -75,16 +81,28 @@ export interface SpendSummaryDTO {
   ts: number;
 }
 
-/** Three states, as everywhere in this wallet: "loading" and "failed" are both NOT "zero". */
+/**
+ * Four states — and the fourth is the one that was wrong.
+ *
+ * "loading", "failed" and "disconnected" are each NOT "zero", and they are not
+ * each other either. `disconnected` means there is no address to ask about:
+ * nothing is in flight, nothing failed, no answer is pending. This used to be
+ * folded into `loading`, which was survivable on /wallet (where the page is
+ * about a connected wallet) and is a visible lie on Hub, where most visitors
+ * are not connected: a spinner that never resolves, for a request never made.
+ */
 type Load =
+  | { s: "disconnected" }
   | { s: "loading" }
   | { s: "ok"; d: SpendSummaryDTO }
   | { s: "failed" };
 
 function useSpendSummary(address?: string): Load {
-  const [state, setState] = useState<Load>({ s: "loading" });
+  // Seeded from the address, not hard-coded to "loading" — the first paint of a
+  // disconnected mount must already say so rather than flash a spinner.
+  const [state, setState] = useState<Load>(address ? { s: "loading" } : { s: "disconnected" });
   useEffect(() => {
-    if (!address) { setState({ s: "loading" }); return; }
+    if (!address) { setState({ s: "disconnected" }); return; }
     let alive = true;
     setState({ s: "loading" });
     fetch(`/api/wallet/spend-summary?address=${address}`)
@@ -151,6 +169,14 @@ export default function SpendConsole({ address }: { address?: string }) {
       <p className="font-mono text-[9px] text-slate-600 mb-4 leading-relaxed">
         What your payments actually bought — the part no block explorer can see.
       </p>
+
+      {/* No address means no question was asked — say that, don't spin. */}
+      {load.s === "disconnected" && (
+        <div className="font-mono text-[10px] text-slate-600 py-8 text-center leading-relaxed">
+          Connect a wallet to see what it has spent.<br />
+          <span className="text-slate-700">Receipts are per address — there is nothing to look up yet.</span>
+        </div>
+      )}
 
       {load.s === "loading" && (
         <div className="font-mono text-[10px] text-slate-600 py-8 text-center">Loading…</div>
