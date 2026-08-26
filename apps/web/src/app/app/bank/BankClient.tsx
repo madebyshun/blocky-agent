@@ -27,6 +27,7 @@ import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
 import TokenTable from "./TokenTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
+import { useWalletIdentity } from "@/lib/wallet/identity";
 import { buildWalletState } from "@/lib/state";
 
 const usd = (n: number | null | undefined) =>
@@ -233,6 +234,13 @@ export default function BankPage() {
     fetch("/api/yield/rates").then(r => r.json()).then(d => { if (!off) setRates((d?.rates as Rate[]) ?? []); }).catch(() => {});
     return () => { off = true; };
   }, []);
+  // ⚠️ DefiLlama mainnet pools, network-blind — harmless only while mainnet is
+  // the default. `/api/yield/rates` is not passed `network` and has no testnet
+  // equivalent to pass, so on Sepolia these APYs describe pools the user is not
+  // looking at. Today `network` starts at "base" and testnet is opt-in behind
+  // `?testnet=1`, so the mismatch is confined to a deliberate developer mode.
+  // Flip the default back to a testnet and this silently starts quoting
+  // mainnet yields over testnet balances.
   const bestApy   = rates && rates.length ? rates[0].apy : null;
   const morphoApy = rates?.find(r => r.project === "morpho-blue")?.apy ?? null;
 
@@ -263,6 +271,14 @@ export default function BankPage() {
 
   const inYield = (aavePos ?? 0) + (morphoPos ?? 0);
   const total   = (walletUsdc ?? 0) + inYield;
+
+  // Have the balance reads actually RESOLVED? `walletUsdc` is null while the
+  // contract read is in flight or has failed, and `?? 0` above erases that
+  // distinction — so `total === 0` conflates "you hold nothing" with "we have
+  // not looked yet". Anything that makes a CLAIM about the user's position
+  // (the health score, the mission summary) has to gate on this, not on
+  // `total`, or a slow RPC gets rendered as a fact about their money.
+  const balancesKnown = walletUsdc != null;
 
   // Stats from real wallet history (this calendar month)
   const netFlowMonth      = txData?.stats?.netFlowUsdcMonth ?? 0;
@@ -411,6 +427,11 @@ export default function BankPage() {
     transferCountMonth,
   }), [walletUsdc, aavePos, morphoPos, ethBal, bestApy, netFlowMonth, transferCountMonth]);
 
+  // What the connected account IS — read off the live connector + on-chain
+  // bytecode, never asserted. Called here (above the early return) because it
+  // is a hook; it returns a fully "unknown" identity when nothing is connected.
+  const identity = useWalletIdentity(chainId);
+
   if (!isConnected) {
     return <BankLanding bestApy={bestApy} />;
   }
@@ -449,23 +470,44 @@ export default function BankPage() {
     : { right: 16, bottom: 76, height: POPUP_H };
 
   // ── Portfolio health score ────────────────────────────────────────────────
+  // `null` means NO SCORE, and that is the whole point of this block.
+  //
+  // It used to read `total === 0 ? 0 : …`, which rendered a brand-new empty
+  // wallet as a red **0/100 · D** with a Share button under it. That is worse
+  // than an invented number: it invents a BAD one, out of the absence of data,
+  // and shows it to the user least equipped to dismiss it — someone who just
+  // connected and has no idea whether the app is grading them or their wallet.
+  // Every input here (deployed ratio, diversification, gas, activity) is
+  // undefined on an empty or unread wallet, so the honest output is "—", not a
+  // failing grade. CLAUDE.md: missing data is "unknown", never an inferred
+  // negative score.
+  //
+  // `balancesKnown` guards the loading case too — during the RPC round-trip a
+  // funded wallet also looks empty, and it must not flash a grade it is about
+  // to contradict.
+  const scoreReady     = balancesKnown && total > 0;
   const deployedRatio  = total > 0 ? inYield / total : 0;
   const yieldScore     = deployedRatio > 0.8 ? 95 : deployedRatio > 0.5 ? 80 : deployedRatio > 0.2 ? 60 : deployedRatio > 0 ? 40 : 20;
   const divScore       = portfolioTotal > 0 && ethUsd / portfolioTotal > 0.05 ? 88 : ethUsd > 0 ? 65 : 45;
   const gasScore       = ethBal == null ? 50 : ethBal > 0.05 ? 95 : ethBal > 0.01 ? 80 : ethBal > 0.005 ? 60 : 20;
   const actScore       = transferCountMonth > 10 ? 90 : transferCountMonth > 5 ? 75 : transferCountMonth > 1 ? 55 : 20;
-  const portfolioScore = total === 0 ? 0 : Math.round(yieldScore * 0.4 + divScore * 0.25 + gasScore * 0.2 + actScore * 0.15);
-  const scoreGrade     = portfolioScore >= 85 ? "A" : portfolioScore >= 70 ? "B" : portfolioScore >= 55 ? "C" : "D";
-  const scoreColor     = portfolioScore >= 85 ? "#34D399" : portfolioScore >= 70 ? "#4FC3F7" : portfolioScore >= 55 ? "#F59E0B" : "#EF4444";
-  const scoreDims      = [
-    { label: "Yield", s: yieldScore }, { label: "Diversify", s: divScore },
-    { label: "Gas", s: gasScore },     { label: "Activity", s: actScore },
-  ];
+  const portfolioScore: number | null =
+    scoreReady ? Math.round(yieldScore * 0.4 + divScore * 0.25 + gasScore * 0.2 + actScore * 0.15) : null;
+  const scoreGrade     = portfolioScore == null ? null : portfolioScore >= 85 ? "A" : portfolioScore >= 70 ? "B" : portfolioScore >= 55 ? "C" : "D";
+  // Slate, not red, when there is no score — colour is a claim too.
+  const scoreColor     = portfolioScore == null ? "#475569"
+    : portfolioScore >= 85 ? "#34D399" : portfolioScore >= 70 ? "#4FC3F7" : portfolioScore >= 55 ? "#F59E0B" : "#EF4444";
 
   // ── Mission Control items ─────────────────────────────────────────────────
   interface MC { priority: "high"|"warn"|"good"|"info"; icon: string; text: string; action?: string; onAction?: () => void; color: string }
   const allMissions: MC[] = [];
-  if (total === 0) {
+  // `!balancesKnown` deliberately produces NO missions rather than the
+  // "add USDC" one: a mission is advice about the user's position, and we have
+  // not read it yet. An empty list for one RPC round-trip beats telling a
+  // funded wallet it is empty.
+  if (!balancesKnown) {
+    /* nothing to advise until the balance read lands */
+  } else if (total === 0) {
     allMissions.push({ priority: "info", icon: "💡", text: `Add USDC to start earning yield on ${net.short}`, action: "Add cash", onAction: addCash, color: "#F59E0B" });
   } else {
     if ((walletUsdc ?? 0) > 50 && inYield === 0 && bestApy != null)
@@ -480,8 +522,19 @@ export default function BankPage() {
       allMissions.push({ priority: "info", icon: "⚡", text: "Beryl live — B20 payments + faster L1 withdrawals", action: "Try", onAction: () => openAction("orders"), color: "#4FC3F7" });
   }
   const topMissions = allMissions.slice(0, 3);
+  // Gated on the BALANCE READ, not on `total`.
+  //
+  // The first branch used to be `total === 0 ? "Connect and add funds…"`, which
+  // is unreachable-by-intent nonsense: this whole render sits below
+  // `if (!isConnected) return <BankLanding/>`, so the wallet is ALREADY
+  // connected here. A connected user with a zero balance — every new user, and
+  // every existing user for the second or two the RPC takes — was told to
+  // connect a wallet they were looking at the address of, right beside a
+  // "Disconnect" button. Same defect family as the score above: a balance of
+  // zero was read as a statement about the connection.
   const missionSummary =
-    total === 0 ? "Connect and add funds to get started." :
+    !balancesKnown ? "Reading your balances…" :
+    total === 0 ? `Wallet connected · add USDC on ${net.short} to get started.` :
     (walletUsdc ?? 0) > 100 && inYield === 0 ? "Idle cash detected — put it to work." :
     inYield > 0 && (walletUsdc ?? 0) < 50 ? `Fully deployed · earning ${bestApy?.toFixed(1) ?? "—"}% APY` :
     `$${usd(walletUsdc)} liquid · $${usd(inYield)} earning`;
@@ -632,13 +685,22 @@ export default function BankPage() {
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-            {/* The network chip reads live state. It was the literal "Base" while
-                the app defaulted to Sepolia — the single most misleading pixel
-                on the page, because it sat directly above the receive QR. */}
+            {/* Every chip here reads live state.
+                - The network chip was the literal "Base" while the app
+                  defaulted to Sepolia — the single most misleading pixel on the
+                  page, because it sat directly above the receive QR.
+                - "Passkey" was hardcoded in this row TOO (a fourth copy of the
+                  same defect, alongside the two on the health card), so it
+                  showed for MetaMask users who have no passkey. It is now the
+                  name of the connector actually connected, and the passkey chip
+                  appears only when the derivation can affirm one.
+                - "Non-custodial" stays constant legitimately: it describes THIS
+                  APP, which holds no key and no fund, not the wallet. */}
             {[
-              { label: "Non-custodial", warn: false },
-              { label: net.short,       warn: isTestnet },
-              { label: "Passkey",       warn: false },
+              { label: "Non-custodial",            warn: false },
+              { label: net.short,                  warn: isTestnet },
+              { label: identity.connectionLabel,   warn: false },
+              ...(identity.passkey === "yes" ? [{ label: "Passkey", warn: false }] : []),
             ].map(c => (
               <span key={c.label} className="font-mono text-[9px] px-2 py-1 rounded-md"
                 style={c.warn
@@ -785,24 +847,47 @@ export default function BankPage() {
             <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
               <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">PORTFOLIO HEALTH</div>
               <div className="flex items-end gap-2 mb-3">
-                <div className="font-mono text-[32px] font-bold leading-none" style={{ color: scoreColor }}>{portfolioScore}</div>
-                <div className="font-mono text-[13px] text-slate-500 mb-1">/100 · {scoreGrade}</div>
+                <div className="font-mono text-[32px] font-bold leading-none" style={{ color: scoreColor }}>
+                  {portfolioScore ?? "—"}
+                </div>
+                <div className="font-mono text-[13px] text-slate-500 mb-1">
+                  {portfolioScore == null
+                    ? (balancesKnown ? "No data yet" : "Reading…")
+                    : `/100 · ${scoreGrade}`}
+                </div>
               </div>
+              {/* Every chip below is DERIVED. `identity` comes from the live
+                  connector + on-chain bytecode (lib/wallet/identity.ts); the
+                  Basename chip from the ENS/Basename lookup. The two that used
+                  to be `active={true}` — "Smart Wallet" and "Passkey" — were
+                  true only for Coinbase Smart Wallet users and were shown to
+                  everyone, so a MetaMask EOA was told it had a passkey. */}
               <div className="flex flex-wrap gap-1.5 mb-3">
-                <IdentityChip label="Smart Wallet" active={true} color="#4FC3F7" />
-                <IdentityChip label="Passkey" active={true} color="#34D399" />
+                <IdentityChip label={identity.connectionLabel} active={identity.family !== "unknown"} color="#4FC3F7" />
+                <IdentityChip label={identity.accountLabel} active={identity.accountKind === "smart"} color="#4FC3F7" />
+                <IdentityChip label={identity.passkeyLabel} active={identity.passkey === "yes"} color="#34D399" />
                 <IdentityChip label={name ?? fname ?? "No Basename"} active={!!(name ?? fname)} color="#A78BFA" />
+                {/* The one honest constant here: non-custodial is a property of
+                    THIS APP (it never holds a key or a fund), not of whichever
+                    wallet connected — so unlike the chips above it cannot drift
+                    away from a per-user truth it was never reading. */}
                 <IdentityChip label="Non-custodial" active={true} color="#34D399" />
               </div>
-              <button
-                onClick={() => {
-                  const text = `My Base wallet health: ${portfolioScore}/100 @blueagent_`;
-                  navigator.clipboard?.writeText(text).catch(() => {});
-                }}
-                className="font-mono text-[9px] px-2.5 py-1 rounded-full transition-colors hover:opacity-80"
-                style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
-                Share
-              </button>
+              {/* Share is hidden, not disabled, while there is no score.
+                  Sharing a fabricated grade propagates the fabrication OUTSIDE
+                  the app, where no later fix can reach it — the same reason a
+                  testnet QR labelled "Base" was the dangerous part of PR 1. */}
+              {portfolioScore != null && (
+                <button
+                  onClick={() => {
+                    const text = `My ${net.short} wallet health: ${portfolioScore}/100 @blueagent_`;
+                    navigator.clipboard?.writeText(text).catch(() => {});
+                  }}
+                  className="font-mono text-[9px] px-2.5 py-1 rounded-full transition-colors hover:opacity-80"
+                  style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
+                  Share
+                </button>
+              )}
             </div>
 
           </div>
