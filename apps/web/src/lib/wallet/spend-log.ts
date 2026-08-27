@@ -41,7 +41,12 @@
  * "amount ≈ a catalog price and the timestamp is close" would be inference
  * dressed as a fact, which is the one thing this whole surface must not do.
  */
-import { kvGet, kvGetProbe, kvSet } from "@/lib/kv";
+// `kvGet` is deliberately NOT imported. Both readers in this file go through
+// `kvGetProbe` — see the ⚠ notes on `recordToolPayment` and `getSpendLog` for
+// why the error/empty collapse is a correctness bug here in both directions.
+// It stays named in those comments; keeping it importable is what invites the
+// next edit to reach for the unsafe one.
+import { kvGetProbe, kvSet } from "@/lib/kv";
 
 /** One paid tool call, from the payer's point of view. */
 export interface SpendReceipt {
