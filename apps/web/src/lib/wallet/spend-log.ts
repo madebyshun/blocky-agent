@@ -41,7 +41,7 @@
  * "amount ≈ a catalog price and the timestamp is close" would be inference
  * dressed as a fact, which is the one thing this whole surface must not do.
  */
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvGetProbe, kvSet } from "@/lib/kv";
 
 /** One paid tool call, from the payer's point of view. */
 export interface SpendReceipt {
@@ -114,6 +114,26 @@ export function payerFromPayload(payload: unknown): string | null {
  * Best-effort and non-throwing, for the same reason `recordSettlement` is: the
  * USDC has already moved, the user already has their answer, and a KV hiccup
  * must not turn a successful paid call into an error response.
+ *
+ * ⚠ "Best-effort" means THIS receipt may be lost. It has never meant the
+ * ninety-nine before it may be. This is a read-modify-write against a fixed-
+ * depth drawer, so the read failing and the write succeeding is the one
+ * combination that destroys data instead of merely dropping some:
+ *
+ *   read throws → treated as "no receipts yet" → append → write [1 row]
+ *
+ * — and up to MAX_RECEIPTS rows of a paying user's history are gone, with a
+ * fresh TTL on top. Which is why the read below goes through `kvGetProbe`: an
+ * error and an empty drawer must not arrive here as the same value. Same
+ * distinction `getSpendLog` needs for the same reason, in the opposite
+ * direction — there it misreports history, here it deletes it.
+ *
+ * Still lossy under concurrency, and knowingly so: two settlements for the same
+ * payer can both read N rows and both write N+1, dropping one. That is a
+ * one-row gap, not a wipe, and closing it needs RPUSH/LTRIM — which these keys
+ * cannot take without migrating every existing JSON-string row (RPUSH against a
+ * string key is a WRONGTYPE error), on the payment path. Not worth it for a
+ * figure `spend-summary.ts` already publishes as a floor over a bounded window.
  */
 export async function recordToolPayment(
   payer: string | null,
@@ -125,7 +145,26 @@ export async function recordToolPayment(
   if (!payer || !ADDR_RE.test(payer)) return;
   if (!tool || !Number.isFinite(units) || units <= 0) return;
   try {
-    const existing = (await kvGet<SpendReceipt[] | string>(key(payer))) ?? [];
+    const probe = await kvGetProbe<SpendReceipt[] | string>(key(payer));
+
+    // Unknown drawer contents → do not write. Skipping the append loses ONE
+    // receipt; appending to a wrongly-empty array overwrites up to a hundred.
+    // Between "this call is missing from the log" and "the log is gone", the
+    // first is a gap and the second is a falsehood about how much a user has
+    // spent with us.
+    //
+    // Logged, not silent. `kvGet` used to emit `[kv:get] …` from its own catch
+    // on this path; `kvGetProbe` hands the error back instead of printing it,
+    // so without this line the fix would trade a data-loss bug for an
+    // invisibility one — receipts vanishing during a throttle with nothing in
+    // the logs to say why. The caller still gets nothing to act on: the USDC
+    // has already moved and a paid call must not fail over bookkeeping.
+    if (probe.status === "error") {
+      console.error(`[spend-log] skipped receipt for ${tool}: KV read failed — ${probe.message}`);
+      return;
+    }
+
+    const existing = probe.status === "hit" ? probe.value : [];
     const rows: SpendReceipt[] = Array.isArray(existing)
       ? existing
       : (() => { try { return JSON.parse(existing) as SpendReceipt[]; } catch { return []; } })();
