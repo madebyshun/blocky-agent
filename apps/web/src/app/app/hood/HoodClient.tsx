@@ -150,8 +150,10 @@ export default function HoodClient() {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [s, a, lr] = await Promise.all([
-        fetch("/api/hood/snapshot", { cache: "no-store", signal }).then((r) => r.json() as Promise<SnapshotRes>),
-        fetch("/api/hood/arrows", { cache: "no-store", signal }).then((r) => r.json() as Promise<ArrowsRes>),
+        // Both public and now `s-maxage`-cached; `no-store` is gone on purpose
+        // so the shared edge cache is actually consulted. See useHoodShellData.
+        fetch("/api/hood/snapshot", { signal }).then((r) => r.json() as Promise<SnapshotRes>),
+        fetch("/api/hood/arrows", { signal }).then((r) => r.json() as Promise<ArrowsRes>),
         // Inbox unread count needs the read bookmark. Cheap GET, one KV
         // read; noop if the endpoint errors (nav still works, just no
         // badge). Never throws upward.

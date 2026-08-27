@@ -63,7 +63,10 @@ export default function TrackRecordClient() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const r = await fetch("/api/hood/arrows?limit=200", { cache: "no-store", signal });
+      // Public + `s-maxage`; no `no-store` so the shared edge cache is used.
+      // This page was the single most expensive poller in the app — see the
+      // header comment on /api/hood/arrows.
+      const r = await fetch("/api/hood/arrows?limit=200", { signal });
       const body = (await r.json()) as ArrowsRes;
       if (body.ok) {
         setData(body);
