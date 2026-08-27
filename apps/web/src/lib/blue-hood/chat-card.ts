@@ -22,7 +22,7 @@
  * `/api/hood/chat/card/[id]` (public GET) so the eventual chat consumer
  * or the LLM tool can fetch by id without importing internal libs.
  */
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import { absoluteUrl } from "@/lib/site-url";
 import { kvChatCard, KV_CHAT_CARD_FEED, TTL_CHAT_CARD } from "./kv-keys";
 import type { Arrow } from "./types";
@@ -90,12 +90,15 @@ export async function writeChatCard(a: Arrow): Promise<ChatCard | null> {
   try {
     const card = buildChatCard(a);
     await kvSet(kvChatCard(a.id), card, TTL_CHAT_CARD);
-    const feed = (await kvGet<string[]>(KV_CHAT_CARD_FEED)) ?? [];
-    // Guard against duplicate pushes (e.g. if fireArrow is retried while
-    // the card write already succeeded).
-    if (!feed.includes(a.id)) {
-      feed.unshift(a.id);
-      await kvSet(KV_CHAT_CARD_FEED, feed);
+    // `kvMutate` skips the write when the read failed, instead of replacing
+    // the whole card feed with `[a.id]` (task #150). The `null` return is the
+    // old duplicate guard — e.g. if fireArrow is retried while the card write
+    // already succeeded.
+    const res = await kvMutate<string[]>(KV_CHAT_CARD_FEED, [], (feed) =>
+      feed.includes(a.id) ? null : [a.id, ...feed],
+    );
+    if (res === "skipped") {
+      console.warn(`[chat-card] ${a.serial} written but not indexed — KV read failed`);
     }
     console.log(`[chat-card] written arrow=${a.serial} ticker=${a.ticker} headline_len=${card.headline.length}`);
     return card;

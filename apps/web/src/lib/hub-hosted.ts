@@ -29,7 +29,7 @@
  * by passing the creator prompt straight through as the system message.
  */
 
-import { kv, kvGet, kvSet, kvDel } from "@/lib/kv";
+import { kv, kvGet, kvSet, kvDel, kvMutate } from "@/lib/kv";
 import { assertSafeMcpUrl } from "@/lib/mcp-client";
 import { callBankrLLM } from "@/app/api/_lib/llm";
 
@@ -161,16 +161,20 @@ export async function getBuilderHostedTools(addr: string): Promise<PublicHostedT
 export async function putHostedTool(tool: HostedTool): Promise<void> {
   await kvSet(K.item(tool.slug), tool);
 
-  const slugs = await listHostedSlugs();
-  if (!slugs.includes(tool.slug)) {
-    slugs.push(tool.slug);
-    await kvSet(K.index, slugs);
-  }
-
-  const builderSlugs = (await kvGet<string[]>(K.builder(tool.builderAddress))) ?? [];
-  if (!builderSlugs.includes(tool.slug)) {
-    builderSlugs.push(tool.slug);
-    await kvSet(K.builder(tool.builderAddress), builderSlugs);
+  // Both indexes go through `kvMutate` (task #150). `listHostedSlugs()` reads
+  // through the swallowing `kvGet`, so under the old code a throttled read
+  // returned `[]`, the `includes` guard passed, and `K.index` — the master
+  // list of every hosted tool in the marketplace — was overwritten with a
+  // single slug. Every other builder's tool would vanish from /hub while its
+  // record sat intact under `K.item(...)`, unreferenced.
+  const idxRes = await kvMutate<string[]>(K.index, [], (slugs) =>
+    slugs.includes(tool.slug) ? null : [...slugs, tool.slug],
+  );
+  const bRes = await kvMutate<string[]>(K.builder(tool.builderAddress), [], (bslugs) =>
+    bslugs.includes(tool.slug) ? null : [...bslugs, tool.slug],
+  );
+  if (idxRes === "skipped" || bRes === "skipped") {
+    console.error(`[hub-hosted] ${tool.slug} saved but NOT fully indexed (index=${idxRes} builder=${bRes}) — KV read failed; re-submit to index it`);
   }
 }
 
@@ -204,10 +208,25 @@ export async function removeHostedTool(slug: string): Promise<void> {
  * Money does NOT move here — this is the bookkeeping the batched payout reads.
  */
 export async function addBuilderEarnings(addr: string, usdcUnits: number): Promise<void> {
-  const cur = (await kvGet<number>(K.earned(addr))) ?? 0;
-  await kvSet(K.earned(addr), cur + usdcUnits);
+  // ⚠ MONEY BOOKKEEPING. The old `(await kvGet(...)) ?? 0` reset a builder's
+  // accrued balance to just this one call's share whenever the read failed —
+  // a KV blip silently erased everything they had earned and not yet been
+  // paid, with no receipt anywhere to reconstruct it from. Skipping instead
+  // under-credits by ONE call, which is a rounding error against wiping the
+  // balance, and it is logged so the gap is at least attributable.
+  const res = await kvMutate<number>(K.earned(addr), 0, (cur) => cur + usdcUnits);
+  if (res !== "ok") {
+    console.error(`[hub-hosted] builder earnings NOT accrued addr=${addr} units=${usdcUnits} result=${res} — balance left untouched rather than reset`);
+  }
 }
 
+/**
+ * ⚠ Returns 0 for "KV unreachable" as well as for "genuinely earned nothing" —
+ * `kvGet` collapses the two. That is a Group-B honesty bug from the same family
+ * as #150 and is deliberately NOT fixed here: this PR is scoped to the writes
+ * that DESTROY data, and changing this return type touches every dashboard
+ * caller. Tracked as follow-up; do not read a 0 from this as a fact about money.
+ */
 export async function getBuilderEarnings(addr: string): Promise<number> {
   return (await kvGet<number>(K.earned(addr))) ?? 0;
 }

@@ -3,7 +3,7 @@
  * KV-backed persistent memory (fallback to in-memory when KV not configured).
  */
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet, kvDel, isKVEnabled } from "@/lib/kv";
+import { kvGet, kvDel, kvMutate, isKVEnabled } from "@/lib/kv";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -41,10 +41,25 @@ export async function POST(req: NextRequest) {
   }
 
   const wallet = body.wallet ?? "anon";
-  const existing = await kvGet<Record<string, unknown>>(KEY(wallet)) ?? {};
-  const updated = { ...existing, [body.key]: body.value, updatedAt: Date.now() };
 
-  await kvSet(KEY(wallet), updated, TTL);
+  // `kvMutate` (task #150): this is a read-modify-write against the wallet's
+  // ENTIRE memory blob. The old `?? {}` meant a throttled read spread an empty
+  // object, so saving one key silently deleted every other memory that wallet
+  // had — and the response still said `ok: true`. Refusing the write loses the
+  // one new key instead, which the caller can retry.
+  let updated: Record<string, unknown> = {};
+  const res = await kvMutate<Record<string, unknown>>(
+    KEY(wallet),
+    {},
+    (existing) => (updated = { ...existing, [body.key]: body.value, updatedAt: Date.now() }),
+    TTL,
+  );
+  if (res === "skipped" || res === "failed") {
+    return NextResponse.json(
+      { error: "Memory store temporarily unavailable — nothing was saved or changed" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
   return NextResponse.json({
     ok: true,
