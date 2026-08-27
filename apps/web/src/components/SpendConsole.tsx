@@ -96,13 +96,74 @@ export interface SpendSummaryDTO {
  *
  * Derived from the oldest row that was actually counted, so it cannot drift
  * from the data no matter which cap bites first.
+ *
+ * ⚠ Returns `null` for "no span can be stated", which is NOT the same as the
+ * string "no activity recorded". `oldestTs` is null in two situations that look
+ * identical from here and are opposites: nothing was spent, or nothing could be
+ * read. The first shipped as the second on 2026-08-27, when Upstash suspended
+ * the production database and /wallet printed "no activity recorded" in the
+ * header directly above two rails that said "unavailable" — the exact adjacency
+ * bug as "Stablecoin 0%" under "No assets yet" (#322), reintroduced one PR after
+ * it was fixed, because the render guard checked whether the FETCH succeeded and
+ * a 200 carrying two dead rails passes that test.
+ *
+ * So the statuses are read here, and read from the same two fields the rails
+ * themselves render — not from the sibling `partial` flag, which is derived from
+ * the same nulls but is a second copy of the fact. One source, so the header and
+ * the rails under it cannot contradict each other.
  */
-function scopeLabel(oldestTs: number | null): string {
-  if (oldestTs == null) return "no activity recorded";
-  const days = Math.floor((Date.now() - oldestTs) / 86_400_000);
-  if (days <= 0) return "today";
-  if (days === 1) return "since yesterday";
-  return `last ${days} days`;
+export function scopeLabel(d: SpendSummaryDTO): string | null {
+  const usdcDown = d.usdc.status === "unavailable";
+  const crDown   = d.credits.status === "unavailable";
+
+  // Neither rail readable → there is no window to describe. Silence, because
+  // "no activity" is precisely the claim the rails below are refusing to make.
+  if (usdcDown && crDown) return null;
+
+  if (d.oldestTs == null) {
+    // The readable rail is genuinely empty — a fact. But if the OTHER one is
+    // unknown, the wallet as a whole still is, and one rail's emptiness must
+    // not be promoted into a statement about both.
+    return usdcDown || crDown ? null : "no activity recorded";
+  }
+
+  const days = Math.floor((Date.now() - d.oldestTs) / 86_400_000);
+  const span = days <= 0 ? "today" : days === 1 ? "since yesterday" : `last ${days} days`;
+  // A span measured over one rail while the other is unreadable is a floor, not
+  // the window. Say so rather than let it read as the whole picture.
+  return usdcDown || crDown ? `${span} · partial` : span;
+}
+
+/**
+ * Which "there is nothing here" sentence the body may print.
+ *
+ * `"none"` — every rail answered and every rail is empty. A fact.
+ * `"unreadable"` — the rails that answered are empty, and at least one did not.
+ *                  Half a picture, and must not be worded as an empty wallet.
+ * `"rows"` — there is something to draw.
+ *
+ * The distinction was previously `!bothDown`, a hole exactly one rail wide: with
+ * x402 dark and credits readable-and-empty, every other term held and the page
+ * printed "No agent spending recorded yet" beside a rail reading "unavailable".
+ * That is the same adjacency lie as `scopeLabel`'s above and as "Stablecoin 0%"
+ * under "No assets yet" (#322) — a known-empty claim sitting next to an
+ * admission that we do not know.
+ *
+ * Exported for scripts/spend-console-states-test.ts, which walks the whole
+ * rail × rail × rows matrix. This got to production twice; a build cannot see it
+ * and neither could I, so the matrix is written down instead.
+ */
+export function emptyState(d: SpendSummaryDTO): "none" | "unreadable" | "rows" {
+  const other = d.other ?? { credits: 0, calls: 0 };
+  const noRows =
+    d.tools.length === 0 &&
+    d.chat.calls === 0 &&
+    other.calls === 0 &&
+    !d.days.some(x => x.calls > 0);
+  if (!noRows) return "rows";
+  return d.usdc.status === "unavailable" || d.credits.status === "unavailable"
+    ? "unreadable"
+    : "none";
 }
 
 /**
@@ -184,16 +245,17 @@ function Rail({ label, value, unit, sub, accent, unavailable }: {
 export default function SpendConsole({ address }: { address?: string }) {
   const load = useSpendSummary(address);
 
+  // Two gates, because there are two ways to have nothing worth saying. The
+  // transport one (`s === "ok"`) rules out a spinner, an error and a wallet we
+  // never asked about; `scopeLabel` returning null rules out a 200 whose rails
+  // came back dead. Only the first was here, and the outage found the gap.
+  const scope = load.s === "ok" ? scopeLabel(load.d) : null;
+
   return (
     <div className="rounded-2xl border border-[#1A1A2E] bg-[#0A0A12] p-4 sm:p-5">
       <div className="flex items-baseline justify-between mb-1">
         <div className="font-mono text-[9px] text-slate-500 tracking-widest">AGENT SPEND</div>
-        {/* Only once there is data to describe. Printing a span next to a
-            spinner, an error, or a wallet we haven't asked about would be a
-            claim about numbers that aren't on screen. */}
-        {load.s === "ok" && (
-          <div className="font-mono text-[9px] text-slate-700">{scopeLabel(load.d.oldestTs)}</div>
-        )}
+        {scope && <div className="font-mono text-[9px] text-slate-700">{scope}</div>}
       </div>
       <p className="font-mono text-[9px] text-slate-600 mb-4 leading-relaxed">
         What your payments actually bought — the part no block explorer can see.
@@ -237,8 +299,7 @@ function Body({ d }: { d: SpendSummaryDTO }) {
 
   const maxCalls = Math.max(1, ...d.days.map(x => x.calls));
   const anyActivity = d.days.some(x => x.calls > 0);
-  const nothingYet =
-    !bothDown && d.tools.length === 0 && d.chat.calls === 0 && other.calls === 0 && !anyActivity;
+  const empty = emptyState(d);
 
   if (bothDown) {
     return (
@@ -282,10 +343,15 @@ function Body({ d }: { d: SpendSummaryDTO }) {
         </p>
       )}
 
-      {nothingYet ? (
+      {empty === "none" ? (
         <p className="font-mono text-[10px] text-slate-600 py-8 text-center leading-relaxed">
           No agent spending recorded yet.<br />
           <span className="text-slate-700">Hub tool calls and chat runs show up here.</span>
+        </p>
+      ) : empty === "unreadable" ? (
+        <p className="font-mono text-[10px] text-[#F59E0B] py-8 text-center leading-relaxed">
+          Nothing on the rail we can read — and the other one is unreachable.<br />
+          <span className="text-slate-600">Half the picture, not an empty wallet.</span>
         </p>
       ) : (
         <>
