@@ -93,13 +93,22 @@ async function loadLedger(addr: string): Promise<LedgerRow> {
 }
 
 /**
+ * How many ledger events one wallet's row keeps. Exported because any surface
+ * that BREAKS DOWN this history — per tool, per day — is summarising a window,
+ * not a lifetime, and has to say so. A reader that hand-types `50` to decide
+ * whether to print that caveat is one edit away from printing a total it calls
+ * "all-time" over a silently-truncated list.
+ */
+export const HISTORY_CAP = 50;
+
+/**
  * Persist a wallet's row. Throws if the write didn't land — see `kvSetOrThrow`.
  * A silently-dropped write here means a paid top-up vanishes, so this is the
  * one place we want the caller to hear about a KV failure.
  */
 async function saveLedger(addr: string, row: LedgerRow): Promise<void> {
-  // Cap history at last 50 events so the row never grows unbounded.
-  if (row.history.length > 50) row.history = row.history.slice(-50);
+  // Cap history so the row never grows unbounded.
+  if (row.history.length > HISTORY_CAP) row.history = row.history.slice(-HISTORY_CAP);
   await kvSetOrThrow(key(addr), JSON.stringify(row));
 }
 
@@ -250,6 +259,57 @@ export async function getBalance(address: string): Promise<BalanceSummary> {
     balance,
     recent:  ledger.history.slice(-10).reverse(),
   };
+}
+
+/** A wallet's recorded credit history, for surfaces that break it down. */
+export interface LedgerHistory {
+  /** Up to HISTORY_CAP events, oldest first (the order they were written). */
+  history: LedgerEvent[];
+  /**
+   * Cumulative credits drained from the PAID pool, all-time. This is the only
+   * figure here that survives the history cap, because `spend()` accumulates it
+   * on the row instead of deriving it from the event list.
+   */
+  spentFromPool: number;
+  /**
+   * True when the event list is at the cap and therefore probably truncated —
+   * i.e. any per-tool or per-day breakdown built from it is a floor, not a total.
+   */
+  truncated: boolean;
+}
+
+/**
+ * Read a wallet's credit history WITHOUT touching the row.
+ *
+ * Split out from `getBalance` on purpose: that one also does a tier lookup and
+ * returns only the last 10 events, which is right for a balance widget and
+ * useless for a breakdown. This returns the whole recorded window and nothing
+ * else, so a spend console can group it.
+ *
+ * `null` means WE DO NOT KNOW — `loadLedger` throws `LEDGER_UNAVAILABLE` when KV
+ * errors, and that is deliberately NOT flattened into an empty history here. A
+ * console that renders a KV outage as "you have spent nothing" tells a paying
+ * user a falsehood about their own money; the caller must render the two apart.
+ *
+ * ⚠ What this CANNOT tell you: how much of any single event was real money.
+ * `spend()` drains the free daily allowance first and only the overflow hits the
+ * paid pool, but `history` records the event's TOTAL and never the split. So a
+ * 50-credit event may have cost the user nothing. Per-event credits→USD is not
+ * derivable from this data and must not be printed; `spentFromPool` is the only
+ * honest dollar-convertible figure, and only in aggregate.
+ */
+export async function getLedgerHistory(address: string): Promise<LedgerHistory | null> {
+  try {
+    const ledger = await loadLedger(address.toLowerCase());
+    const history = Array.isArray(ledger.history) ? ledger.history : [];
+    return {
+      history,
+      spentFromPool: ledger.spent ?? 0,
+      truncated: history.length >= HISTORY_CAP,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

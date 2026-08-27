@@ -173,9 +173,24 @@ function bankGate(
 
 // Public product surfaces that stay open even when the waitlist gate is armed:
 // Blue Chat (also the farcaster / Base-App deep-link target, homeUrl=/app/chat),
-// Blue Hood (public track record) and Blue Hub (builder marketplace + publish
-// flow). Everything else in APP_SEGMENTS is the private workspace and is walled.
-const WAITLIST_EXEMPT = new Set(["chat", "hood", "hub"]);
+// Blue Hood (public track record), Blue Hub (builder marketplace + publish
+// flow) and Wallet. Everything else in APP_SEGMENTS is the private workspace
+// and is walled.
+//
+// `wallet` joined the list when the spend console shipped, and it is a fix, not
+// an expansion: the product is named as four things — Chat / Hood / Hub /
+// Wallet — while this set shipped three, so the fourth pillar 307'd to the
+// waitlist for everyone including the users whose USDC it accounts for. It is
+// also the surface that makes the other three legible ("what did that tool call
+// actually cost me"), which is worth nothing behind a gate.
+//
+// Nothing here is private-by-address: /api/wallet/spend, /api/wallet/spend-
+// summary and /api/credits/balance/[address] are all unauthenticated GETs
+// already, so this opens a page, not a dataset. If those should be gated, they
+// get gated together behind one signature check — see the header of
+// lib/wallet/spend-log.ts — not by leaving the page walled and calling it
+// privacy.
+const WAITLIST_EXEMPT = new Set(["chat", "hood", "hub", "wallet"]);
 
 /**
  * BlueAgent Agent-OS waitlist gate. OFF by default — arms only when

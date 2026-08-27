@@ -186,19 +186,26 @@ export async function recordToolPayment(
  * differently: an empty drawer is a fact, an unreachable drawer is not. Get
  * this wrong and a KV outage silently tells a paying user they have never
  * paid for anything.
+ *
+ * ⚠ Reads through `kvGetProbe`, NOT `kvGet`. That is the whole contract, not a
+ * style preference: `kvGet` catches a KV throw and returns null, so an outage
+ * arrives here indistinguishable from an absent key and gets reported as `[]` —
+ * the precise falsehood the paragraph above forbids, with the `null` branch left
+ * unreachable and this doc quietly untrue. The same collapse is what made the
+ * 2026-07-27 Upstash cap outage read as "the poller never ran" (see kv.ts).
  */
 export async function getSpendLog(address: string): Promise<SpendReceipt[] | null> {
   if (!ADDR_RE.test(address)) return null;
-  try {
-    const raw = await kvGet<SpendReceipt[] | string>(key(address));
-    if (raw == null) return [];
-    const rows: SpendReceipt[] = Array.isArray(raw)
-      ? raw
-      : (() => { try { return JSON.parse(raw) as SpendReceipt[]; } catch { return []; } })();
-    return rows
-      .filter(r => r && typeof r.ts === "number" && typeof r.tool === "string")
-      .sort((a, b) => b.ts - a.ts);
-  } catch {
-    return null;
-  }
+
+  const probe = await kvGetProbe<SpendReceipt[] | string>(key(address));
+  if (probe.status === "error") return null;   // unknown — say so, do not guess
+  if (probe.status === "miss")  return [];     // known-empty — a real fact
+
+  const raw = probe.value;
+  const rows: SpendReceipt[] = Array.isArray(raw)
+    ? raw
+    : (() => { try { return JSON.parse(raw) as SpendReceipt[]; } catch { return []; } })();
+  return rows
+    .filter(r => r && typeof r.ts === "number" && typeof r.tool === "string")
+    .sort((a, b) => b.ts - a.ts);
 }

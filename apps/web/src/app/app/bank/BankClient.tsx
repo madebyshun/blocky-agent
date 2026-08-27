@@ -25,6 +25,8 @@ import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payme
 import OrdersPanel from "./OrdersPanel";
 import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
+// Shared with the Blue Hub home — lives in components/, not this route folder.
+import SpendConsole from "@/components/SpendConsole";
 import TokenTable from "./TokenTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
 import { useWalletIdentity } from "@/lib/wallet/identity";
@@ -933,6 +935,18 @@ export default function BankPage() {
               )}
             </div>
 
+          </div>
+
+          {/* ── Section 1.5: AGENT SPEND ───────────────────────────────────
+              Deliberately ABOVE the portfolio/yield grid, not tucked beside it.
+              Balances, allocation donuts and APY tables are what every wallet
+              on Base already shows; this panel is the only thing on the page
+              that no other wallet CAN show, because the tool behind a payment
+              exists only in the request we served. Ordering the page by what is
+              differentiated rather than by what is conventional is the point of
+              the section, so please don't "tidy" it back down the page. */}
+          <div className="mb-3">
+            <SpendConsole address={acct} />
           </div>
 
           {/* ── Section 2: Wallet+Earn | AI+Portfolio ─────────────────────── */}
