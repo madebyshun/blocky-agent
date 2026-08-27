@@ -15,6 +15,7 @@
     "sync:soul": "tsx scripts/sync-soul.ts",
     "test:ledger": "tsx scripts/ledger-race-test.ts",
     "test:spend-log": "tsx scripts/spend-log-write-test.ts",
+    "test:spend-console": "tsx scripts/spend-console-states-test.ts",
     "test:cohorts": "tsx scripts/cohort-stats-test.ts",
     "test:series": "tsx scripts/series-persist-test.ts",
     "test:series-api": "tsx scripts/series-endpoint-test.ts",
