@@ -176,6 +176,81 @@ export async function kvDel(...keys: string[]): Promise<void> {
 }
 
 /**
+ * Outcome of a `kvMutate`. Four states, because "didn't write" has three very
+ * different causes and collapsing them is how this bug family started:
+ *   • ok        — read succeeded, value changed, write landed
+ *   • unchanged — read succeeded, `mutate` returned null (nothing to do)
+ *   • skipped   — READ FAILED. We did not write. Contents still unknown.
+ *   • failed    — read succeeded, the write itself failed
+ */
+export type KvMutateResult = "ok" | "unchanged" | "skipped" | "failed";
+
+/**
+ * Read-modify-write against a single key, WITHOUT the wipe.
+ *
+ * ⚠ This exists to close a specific, repeated, data-destroying bug. The shape
+ * it replaces appears ~30 times in this repo:
+ *
+ *     const list = (await kvGet<string[]>(K)) ?? [];   // throw → null → []
+ *     list.push(x);
+ *     await kvSet(K, list);                            // writes [x]
+ *
+ * `kvGet` catches a KV throw and returns null, so a throttle is indistinguishable
+ * from an absent key. Feed that `?? []` into a write against THE SAME KEY and a
+ * transient read error doesn't drop one item — it replaces the entire collection
+ * with a one-element array. The Upstash cap outages (#123, #148) made exactly
+ * this failure mode routine, not theoretical: throttled reads for minutes at a
+ * time, every one of them a chance to flatten an index that has no TTL and no
+ * backup. Same reasoning, same author, same fix as `recordToolPayment` (#147).
+ *
+ * So: the read goes through `kvGetProbe`, and on `error` we DO NOT WRITE. The
+ * cost of skipping is that one mutation is lost. The cost of not skipping is
+ * that every prior mutation is lost. Those are not comparable, and the whole
+ * point of this helper is that the safe choice is now also the shorter one to
+ * write — a rule nobody has to remember is a rule nobody can forget.
+ *
+ * `mutate` returns the next value, or `null` to mean "no change, skip the
+ * write" (the `if (!list.includes(x))` guard, expressed as a return value).
+ * It receives `empty` when the key is genuinely absent — a real miss, never an
+ * error masquerading as one.
+ *
+ * NOT atomic. This is still read-then-write, so two concurrent mutators can
+ * interleave and one update can be lost. That is a one-item gap, categorically
+ * different from the wipe this prevents, and closing it needs native Redis ops
+ * (SADD/SREM — see `kvSAdd`/`kvSRem`, which ARE atomic and are the better
+ * choice for pure membership sets). Use this for the JSON-blob keys that can't
+ * take a type change without a migration.
+ */
+export async function kvMutate<T>(
+  key: string,
+  empty: T,
+  mutate: (current: T) => T | null,
+  ttlSeconds?: number,
+): Promise<KvMutateResult> {
+  const probe = await kvGetProbe<T>(key);
+
+  // The entire reason this function exists. Logged rather than silent:
+  // `kvGet` used to print `[kv:get] …` from its own catch, and `kvGetProbe`
+  // deliberately doesn't log — so without this line the fix would trade a
+  // data-loss bug for an invisibility one.
+  if (probe.status === "error") {
+    console.error(`[kv:mutate] ${key}: SKIPPED write — read failed: ${probe.message}`);
+    return "skipped";
+  }
+
+  const next = mutate(probe.status === "hit" ? probe.value : empty);
+  if (next === null) return "unchanged";
+
+  try {
+    await kv.set(key, next, ttlSeconds ? { ex: ttlSeconds } : undefined);
+    return "ok";
+  } catch (e) {
+    console.error(`[kv:mutate] ${key}: write failed: ${(e as Error).message}`);
+    return "failed";
+  }
+}
+
+/**
  * Durable write — the counterpart to `kvSet` that does NOT swallow failures.
  *
  * `kvSet` catches, logs and returns normally, so a throttled/failed write is

@@ -31,7 +31,7 @@
  * `bh:alert:addr:{addr}` + a `delivered.webpush` cursor and must NOT drain the
  * queue.
  */
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import {
   kvAlert,
   kvAlertsByAddr,
@@ -212,22 +212,28 @@ async function writeAlertRecord(args: {
 
   // Per-address index (newest-first, capped) — the read endpoint + web-push
   // cursor. Broadcast copies have no wallet, so they skip the index entirely.
+  // Both indexes use `kvMutate` (task #150): a failed read must not rewrite a
+  // whole queue as `[id]`. For the per-address index that would erase a user's
+  // entire alert history; for the pending queue it would drop every alert
+  // waiting to be delivered to Telegram — undeliverable and unrecoverable,
+  // since the queue is the only record that they had not been sent yet.
   if (address) {
-    const idxKey = kvAlertsByAddr(address);
-    const idx = (await kvGet<string[]>(idxKey)) ?? [];
-    if (!idx.includes(id)) {
-      idx.unshift(id);
-      await kvSet(idxKey, idx.slice(0, ALERT_ADDR_MAX), TTL_ALERT);
-    }
+    const res = await kvMutate<string[]>(
+      kvAlertsByAddr(address),
+      [],
+      (idx) => (idx.includes(id) ? null : [id, ...idx].slice(0, ALERT_ADDR_MAX)),
+      TTL_ALERT,
+    );
+    if (res === "skipped") console.error(`[alerts] ${id} not added to index for ${address} — KV read failed`);
   }
 
   // Telegram (2.2) pending queue (FIFO, ceilinged so a stalled consumer can't bloat KV).
-  const pend = (await kvGet<string[]>(KV_ALERT_PENDING)) ?? [];
-  if (!pend.includes(id)) {
-    pend.push(id);
-    const trimmed = pend.length > ALERT_PENDING_MAX ? pend.slice(pend.length - ALERT_PENDING_MAX) : pend;
-    await kvSet(KV_ALERT_PENDING, trimmed);
-  }
+  const pendRes = await kvMutate<string[]>(KV_ALERT_PENDING, [], (pend) => {
+    if (pend.includes(id)) return null;
+    const next = [...pend, id];
+    return next.length > ALERT_PENDING_MAX ? next.slice(next.length - ALERT_PENDING_MAX) : next;
+  });
+  if (pendRes === "skipped") console.error(`[alerts] ${id} not enqueued for Telegram — KV read failed`);
   return true;
 }
 

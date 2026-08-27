@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractJsonObject, runAeonSkill, runMiroSharkSkill, runBlueSkill } from "@/app/api/_lib/llm";
 import { fetchGitHubRepo, fetchGitHubCommits, fetchGitHubContents, formatRepoForLLM } from "@/app/api/_lib/realdata";
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,14 +39,17 @@ export type AgentProfile = {
 const KEY_INDEX   = "registry:index";
 const KEY_AGENT   = (h: string) => `registry:agent:${h}`;
 
-async function getIndex(): Promise<string[]> {
-  return (await kvGet<string[]>(KEY_INDEX)) ?? [];
-}
-
 async function addToIndex(handle: string): Promise<void> {
-  const idx = await getIndex();
-  if (!idx.includes(handle)) {
-    await kvSet(KEY_INDEX, [...idx, handle]);
+  // `kvMutate` (task #150). The old code read the index through a swallowing
+  // `kvGet` that turns a KV throw into `[]`, so the `includes` guard passed and
+  // we wrote `[handle]` — replacing the registry index of every submitted agent
+  // with a single entry. The profiles survive under `registry:agent:*` but
+  // nothing lists them.
+  const res = await kvMutate<string[]>(KEY_INDEX, [], (idx) =>
+    idx.includes(handle) ? null : [...idx, handle],
+  );
+  if (res === "skipped") {
+    console.error(`[agent-registry] ${handle} saved but NOT indexed — KV read failed; re-submit to index it`);
   }
 }
 

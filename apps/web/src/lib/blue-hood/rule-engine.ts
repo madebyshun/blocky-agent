@@ -16,7 +16,7 @@
  * snapshot; whale (D1) is informational and heavy (1h/cadence) — both
  * land in a follow-up commit so the drift board can ship first.
  */
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import {
   KV_ARROW_SERIAL_COUNTER,
   kvArrow,
@@ -196,11 +196,21 @@ export function detectArrow(row: TickerSnapshot): Candidate | null {
 
 // ── Fire path ──────────────────────────────────────────────────────────────
 
-async function nextSerial(): Promise<string> {
-  const cur = (await kvGet<number>(KV_ARROW_SERIAL_COUNTER)) ?? 0;
-  const next = cur + 1;
-  await kvSet(KV_ARROW_SERIAL_COUNTER, next);
-  return `#${String(next).padStart(4, "0")}`;
+/**
+ * Mint the next public arrow serial (#0001, #0002, …).
+ *
+ * Returns null when the counter could not be read. That is deliberate and the
+ * caller MUST abort the fire: this number is the arrow's public identity — it
+ * lands in permalinks, share cards and the Telegram alert — and the old
+ * `(await kvGet(...)) ?? 0` shape reset it to 1 on any KV read error, minting a
+ * second #0001 that collides with a real, already-published arrow. A missing
+ * arrow is a gap; two different arrows answering to the same serial is a
+ * corrupted public record, and only one of those is recoverable.
+ */
+async function nextSerial(): Promise<string | null> {
+  let next = 0;
+  const res = await kvMutate<number>(KV_ARROW_SERIAL_COUNTER, 0, (cur) => (next = cur + 1));
+  return res === "ok" ? `#${String(next).padStart(4, "0")}` : null;
 }
 
 interface OpenIndex {
@@ -255,7 +265,7 @@ export async function fireArrow(
      *  fine — the arrow lands stamped `insufficient/none`. */
     confidence?: TickerConfidenceTable | null;
   } = {},
-): Promise<{ arrow: Arrow | null; skipReason?: "dedup_ticker" | "dedup_type" | "cooldown" }> {
+): Promise<{ arrow: Arrow | null; skipReason?: "dedup_ticker" | "dedup_type" | "cooldown" | "serial_unavailable" }> {
   // Base-stocks P3: every dedup/cooldown/open-index key is chain-qualified
   // so the Base NVDA/META/GOOGL/AAPL arrows do NOT collide with the RH tickers of
   // the same name. `chainOf` defaults absent⟹"robinhood", so RH keys stay
@@ -284,7 +294,11 @@ export async function fireArrow(
   const existing = await kvGet<OpenIndex>(idxKey);
   if (existing) return { arrow: null, skipReason: "dedup_type" };
 
+  // No serial ⟹ no arrow. See `nextSerial` — firing without a trustworthy
+  // serial publishes a duplicate public identity, which is worse than a miss.
   const serial = await nextSerial();
+  if (serial === null) return { arrow: null, skipReason: "serial_unavailable" };
+
   const id = cryptoUuid();
   const now = new Date().toISOString();
   // Reviewer T-A #1: `origin` is the primary "public feed eligibility"
@@ -352,9 +366,18 @@ export async function fireArrow(
 
   // Push id onto the feed list (newest-first). We keep the feed unbounded
   // for now; when it grows past ~500 we can trim in a follow-up.
-  const feed = (await kvGet<string[]>(KV_ARROW_FEED)) ?? [];
-  feed.unshift(id);
-  await kvSet(KV_ARROW_FEED, feed);
+  //
+  // `kvMutate`, not `kvGet ?? []` — this key is the ONLY index of the public
+  // arrow feed, it carries no TTL and has no backup. Under the old shape a
+  // single throttled read rewrote it as `[thisArrowId]`, orphaning every
+  // arrow ever fired: the records themselves survive under their own keys,
+  // but nothing points at them, so /hood and the track record both go blank
+  // and only a `kvScan` sweep gets them back. Skipping one append costs one
+  // arrow its feed slot. See `kvMutate` in lib/kv.ts.
+  const feedRes = await kvMutate<string[]>(KV_ARROW_FEED, [], (feed) => [id, ...feed]);
+  if (feedRes === "skipped") {
+    console.error(`[fire] ${serial} ${ticker} persisted but NOT indexed — KV read failed; arrow is orphaned until re-indexed`);
+  }
 
   if (skipAsync) {
     // Seeded/test path — write a chat card inline so QA has one, but
@@ -371,12 +394,22 @@ export async function fireArrow(
 
   // Engine path — enqueue for the async worker. Queue is FIFO (append,
   // shift at worker time) so the OLDEST pending brief attaches first.
-  const queue = (await kvGet<string[]>(KV_BRIEF_QUEUE)) ?? [];
-  if (!queue.includes(id)) {
-    queue.push(id);
-    await kvSet(KV_BRIEF_QUEUE, queue);
-  }
-  console.log(`[fire] ${serial} ${ticker} type=${detected.type} origin=${origin} enqueued queue_len=${queue.length}`);
+  // Same reasoning as the feed above: a failed read used to replace the whole
+  // pending-brief queue with `[id]`, silently dropping every other arrow
+  // waiting for a brief. `null` from the callback is the old `includes` guard.
+  let queueLen = 0;
+  const queueRes = await kvMutate<string[]>(KV_BRIEF_QUEUE, [], (queue) => {
+    queueLen = queue.length;
+    if (queue.includes(id)) return null;
+    queueLen = queue.length + 1;
+    return [...queue, id];
+  });
+  console.log(
+    `[fire] ${serial} ${ticker} type=${detected.type} origin=${origin}` +
+    (queueRes === "skipped"
+      ? " enqueue=SKIPPED (KV read failed — no brief will attach)"
+      : ` enqueued queue_len=${queueLen}`),
+  );
   return { arrow };
 }
 
@@ -558,6 +591,13 @@ export async function runRuleEngine(snap: HoodSnapshot): Promise<RuleEngineRepor
         case "dedup_type":
           skipped_dedup_type++;
           console.log(`[engine] skipped_dedup_type ticker=${row.ticker} type=${candidate.type}`);
+          break;
+        case "serial_unavailable":
+          // NOT a dedup — an infrastructure skip. Logged at error level and
+          // left out of the dedup counters on purpose: rolling it into
+          // `skipped_dedup_*` would make a KV outage read as "the dedup rules
+          // are working", which is the exact class of blindness #150 closes.
+          console.error(`[engine] skipped_serial_unavailable ticker=${row.ticker} type=${candidate.type} — KV read failed, refusing to mint a duplicate serial`);
           break;
       }
     }
