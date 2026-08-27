@@ -79,7 +79,10 @@ export default function InboxClient() {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [a, lr] = await Promise.all([
-        fetch("/api/hood/arrows?limit=200", { cache: "no-store", signal }).then((r) => r.json() as Promise<ArrowsRes>),
+        // Public + `s-maxage` → no `no-store`, so the edge cache is used. The
+        // `?limit=200` variant is its own cache key, which is fine.
+        fetch("/api/hood/arrows?limit=200", { signal }).then((r) => r.json() as Promise<ArrowsRes>),
+        // Per-user (keyed on X-Blue-User) — MUST stay uncached and `no-store`.
         fetch("/api/hood/inbox/last-read", { cache: "no-store", signal }).then((r) => r.json() as Promise<LastReadRes>),
       ]);
       if (a.ok) setArrows(a.arrows);

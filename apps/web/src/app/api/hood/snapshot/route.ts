@@ -114,6 +114,18 @@ export async function GET() {
         count: baseRows.length,
       },
     },
-    { headers: { "Cache-Control": "no-store, max-age=0" } },
+    // CDN-cached on the SUCCESS PATH ONLY — the placement is the guarantee,
+    // exactly as it is for the Base merge above. Both 503 branches returned
+    // long before this line and keep their own `no-store`, so neither
+    // `kv_error` ("we are BLIND") nor `never_polled` can ever be held at the
+    // edge. That distinction is the whole point of this route and a cached
+    // 503 would pin a transient KV blip across every visitor for 30s.
+    //
+    // NOTE the asymmetry with /api/hood/arrows, which additionally carries
+    // `stale-while-revalidate`. That route has no 503 branch at all, so a
+    // stale 200 can only ever replace a WORSE 200. This route DOES have one,
+    // so SWR is deliberately absent here: it would serve a stale 200 over a
+    // live outage and un-say the honest answer the 503 exists to give.
+    { headers: { "Cache-Control": "public, max-age=0, s-maxage=30" } },
   );
 }
