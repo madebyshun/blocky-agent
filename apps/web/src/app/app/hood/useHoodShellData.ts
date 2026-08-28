@@ -14,7 +14,8 @@
  * provider tree for the 3-page section.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { usePolling } from "@/hooks/usePolling";
 import type { Arrow, HoodSnapshot } from "@/lib/blue-hood/types";
 
 const REFRESH_MS = 15_000;
@@ -88,15 +89,8 @@ export function useHoodShellData(): HoodShellData {
     }
   }, []);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => {
-      ctl.abort();
-      clearInterval(t);
-    };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
 
   const marketLabel = useMemo(() => {
     if (!snap) return "…";

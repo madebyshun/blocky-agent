@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { usePolling } from "@/hooks/usePolling";
 import { AppChromeProvider, useAppChrome } from "./AppChrome";
 import LanguageToggle from "@/components/LanguageToggle";
 import { useLang } from "@/lib/i18n/context";
@@ -11,22 +12,33 @@ import { useLang } from "@/lib/i18n/context";
 // `/api/hood/inbox/unread-count` every 30s and shows a red dot with the count
 // on the Hood nav item. Only mounted for the Hood item so other nav items don't
 // trigger the fetch.
+//
+// ⚠ This badge lives in the nav, so it runs on EVERY /app page — not just Hood.
+// That made it the single most-amplified fetch in the app, and the largest
+// contributor to the Upstash suspensions (#123, #148) back when one GET cost
+// ~202 KV commands. #148 ② took the per-GET cost to 2; #148 ③ (below) stops
+// the loop entirely while the tab is hidden.
+const NAV_BADGE_POLL_MS = 30_000;
+
 function HoodNavBadge() {
   const [n, setN] = useState<number | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const r = await fetch("/api/hood/inbox/unread-count", { cache: "no-store" });
-        if (!r.ok) return;
-        const body = (await r.json()) as { unread?: number };
-        if (alive && typeof body.unread === "number") setN(body.unread);
-      } catch { /* offline is fine */ }
-    };
-    load();
-    const t = setInterval(load, 30_000);
-    return () => { alive = false; clearInterval(t); };
+
+  const load = useCallback(async (signal: AbortSignal) => {
+    try {
+      const r = await fetch("/api/hood/inbox/unread-count", { cache: "no-store", signal });
+      // 503 means "unread count UNKNOWN" (KV unreachable), not "zero unread".
+      // Returning early keeps the last known count on screen; letting it fall
+      // through to 0 would hide the badge and look exactly like "all caught
+      // up", which is the one reading that is definitely wrong.
+      if (!r.ok) return;
+      const body = (await r.json()) as { unread?: number };
+      if (typeof body.unread === "number") setN(body.unread);
+    } catch { /* offline or aborted — both fine, keep the last count */ }
   }, []);
+
+  // The `signal` replaces the old `alive` flag: it not only suppresses the
+  // post-unmount setState, it cancels the request that is still on the wire.
+  usePolling(load, NAV_BADGE_POLL_MS);
   if (!n) return null;
   const label = n > 99 ? "99+" : String(n);
   return (

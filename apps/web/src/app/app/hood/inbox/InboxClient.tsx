@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAccount } from "wagmi";
+import { usePolling } from "@/hooks/usePolling";
 import type { Arrow } from "@/lib/blue-hood/types";
 import ArrowBriefBlock from "../ArrowBriefBlock";
 import EnableAlertsButton from "./EnableAlertsButton";
@@ -93,12 +94,8 @@ export default function InboxClient() {
     }
   }, []);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => { ctl.abort(); clearInterval(t); };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
 
   const cutoff = useMemo(() => (lastRead ? new Date(lastRead).getTime() : 0), [lastRead]);
   const unread = useMemo(

@@ -31,6 +31,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
+import { usePolling } from "@/hooks/usePolling";
 import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow, HoodChain } from "@/lib/blue-hood/types";
 import { chainOf, rowKey, ARB_MIN_ABS_PCT, DRIFT_MIN_ABS_PCT } from "@/lib/blue-hood/types";
 import HoodSidebar from "./HoodSidebar";
@@ -191,12 +192,8 @@ export default function HoodClient() {
     return arrows.filter((a) => new Date(a.fired_at).getTime() > cutoff).length;
   }, [arrowsData, inboxLastRead]);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => { ctl.abort(); clearInterval(t); };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
 
   // Base P — venue counts come from the FULL snapshot (never chain-scoped) so
   // the chain selector always shows how many rows each desk has, even when a
