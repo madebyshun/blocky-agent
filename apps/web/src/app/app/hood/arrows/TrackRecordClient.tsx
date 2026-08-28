@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { usePolling } from "@/hooks/usePolling";
 import { chainOf, type Arrow } from "@/lib/blue-hood/types";
 import ArrowBriefBlock from "../ArrowBriefBlock";
 import HoodShellFrame from "../HoodShellFrame";
@@ -79,12 +80,8 @@ export default function TrackRecordClient() {
     }
   }, []);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => { ctl.abort(); clearInterval(t); };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
 
   const filtered = useMemo<Arrow[]>(() => {
     if (!data) return [];
