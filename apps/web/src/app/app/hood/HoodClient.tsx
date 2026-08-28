@@ -34,6 +34,7 @@ import { useAccount } from "wagmi";
 import { usePolling } from "@/hooks/usePolling";
 import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow, HoodChain } from "@/lib/blue-hood/types";
 import { chainOf, rowKey, ARB_MIN_ABS_PCT, DRIFT_MIN_ABS_PCT } from "@/lib/blue-hood/types";
+import { closedAlignedLabel, oracleRoundAgeText } from "@/lib/blue-hood/oracle-age";
 import HoodSidebar from "./HoodSidebar";
 import TickerDetailPanel from "./TickerDetailPanel";
 import ArrowBriefBlock from "./ArrowBriefBlock";
@@ -1095,7 +1096,16 @@ function DriftRow({
           {/* T-V4 — right-align verdict badge so it hangs off the same
               edge as every numeric column above. Consistent alignment
               per user feedback 2026-07-23. */}
-          {dust ? <DustBadge /> : <VerdictBadge verdict={r.verdict} session={r.market.session} />}
+          {dust ? <DustBadge /> : (
+            <VerdictBadge
+              verdict={r.verdict}
+              session={r.market.session}
+              // Base rows carry a real round timestamp; RH rows leave it
+              // `undefined`. Passed straight through — the badge is what
+              // distinguishes the two absences, not this call site.
+              oracleUpdatedAt={r.oracle_updated_at}
+            />
+          )}
         </td>
       </tr>
       {expanded && (
@@ -1219,9 +1229,13 @@ function DustBadge() {
 function VerdictBadge({
   verdict,
   session,
+  oracleUpdatedAt,
 }: {
   verdict: M5Verdict | "ERROR";
   session?: string;
+  /** `TickerSnapshot.oracle_updated_at`. Optional AND nullable on purpose —
+   *  the two absences mean different things (see `oracleRoundAgeText`). */
+  oracleUpdatedAt?: number | null;
 }) {
   // T4 — semantic colors by direction/state:
   //   LONG DEX  = green  (DEX cheaper than oracle → buy DEX)
@@ -1234,19 +1248,33 @@ function VerdictBadge({
   // session === "weekend" we relabel so the badge doesn't lie about
   // being "AH DRIFT" on a Saturday afternoon. Enum stays untouched.
   const isWeekend = session === "weekend";
+
+  // ── The FROZEN_ALIGNED label no longer asserts a frozen feed ──────────────
+  // It used to read literally "FROZEN" on any non-weekend closed session — a
+  // claim about the ORACLE inferred purely from the MARKET CLOCK. The label and
+  // the age string both live in `blue-hood/oracle-age.ts`, which carries the
+  // full reasoning and is behaviour-tested by
+  // `scripts/hood-badge-honesty-check.ts`; this file only renders them.
   const map: Record<M5Verdict | "ERROR", { label: string; color: string; bg: string }> = {
     ALIGNED:          { label: "ALIGNED",   color: "#94a3b8", bg: "#0f1218" },
     LONG_DEX:         { label: "LONG DEX",  color: GREEN_TEXT, bg: "rgba(34,197,94,0.10)" },
     SHORT_DEX:        { label: "SHORT DEX", color: RED,        bg: "rgba(239,68,68,0.10)" },
-    FROZEN_ALIGNED:   { label: isWeekend ? "WKND ALIGN" : "FROZEN",   color: AMBER, bg: "rgba(245,179,66,0.10)" },
+    FROZEN_ALIGNED:   { label: closedAlignedLabel(session), color: AMBER, bg: "rgba(245,179,66,0.10)" },
     PREMARKET_DRIFT:  { label: "PRE DRIFT", color: AMBER, bg: "rgba(245,179,66,0.10)" },
     AFTERHOURS_DRIFT: { label: isWeekend ? "WKND DRIFT" : "AH DRIFT", color: AMBER, bg: "rgba(245,179,66,0.10)" },
     INSUFFICIENT_DATA:{ label: "NO DATA",   color: MUTED, bg: "#0f1218" },
     ERROR:            { label: "ERR",       color: RED,   bg: "rgba(239,68,68,0.10)" },
   };
   const s = map[verdict];
+  // Scoped to the arm this change owns, so no other badge silently gains a
+  // tooltip whose wording nobody reviewed.
+  const title =
+    verdict === "FROZEN_ALIGNED"
+      ? `Market closed · ${oracleRoundAgeText(oracleUpdatedAt)} · DEX drift inside the closed-session aligned band`
+      : undefined;
   return (
     <span
+      title={title}
       className="rounded px-2 py-0.5 font-mono text-[10px] font-semibold tracking-wider"
       style={{ color: s.color, backgroundColor: s.bg }}
     >
