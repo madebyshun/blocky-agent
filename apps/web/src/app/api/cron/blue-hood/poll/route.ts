@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { persistSnapshot, runPollCycle } from "@/lib/blue-hood/poller";
 import { pollBaseStocks } from "@/lib/base-stocks/base-poller";
+import { persistBaseSeriesPoint } from "@/lib/base-stocks/base-series";
 import { runRuleEngine } from "@/lib/blue-hood/rule-engine";
 import { runGrader, backfillVoidGrades, backfillDriftRegrade } from "@/lib/blue-hood/grader";
 import { refreshTickerConfidence } from "@/lib/blue-hood/ticker-confidence";
@@ -127,6 +128,24 @@ async function handle(req: NextRequest) {
       // anything Base does.
       const baseLatest: BaseDeskLatest = { started_at: snap.started_at, rows: baseRows };
       await kvSet(KV_BASE_ROWS_LATEST, baseLatest, TTL_BASE_ROWS);
+
+      // Base P2 — append this cycle to the PERMANENT Base series
+      // (`bh:base:series:day:*`, no TTL). The key above expires in 15 minutes,
+      // so without this the Base desk keeps no history at all and can never
+      // answer whether Base drift reaches DRIFT_MIN_ABS_PCT — the question that
+      // decides whether the desk is a product. History cannot be backfilled;
+      // every un-persisted hour is gone permanently.
+      //
+      // Takes `baseRows` (Base-only) and writes ONLY the `bh:base:series:*`
+      // prefix — disjoint from the bare-ticker RH archive `bh:series:day:*`
+      // that `persistSnapshot` owns. The two are kept apart by a `chain`
+      // discriminator on each record type, NOT by their field lists: a
+      // `BaseSeriesDay` satisfies `SeriesDay`'s `{day, v, points}` on shape
+      // alone, so without that literal the two would be interchangeable. See
+      // the header of base-series.ts for what is and is not compiler-enforced.
+      //
+      // Also inside this try/catch, for the same reason as the write above.
+      await persistBaseSeriesPoint(baseRows, snap.started_at);
     } catch (e) {
       console.error(`[poller] base desk failed, degrading to RH-only: ${(e as Error).message}`);
       baseRows = [];

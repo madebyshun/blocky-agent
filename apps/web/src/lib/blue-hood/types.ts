@@ -300,6 +300,82 @@ export interface SeriesDay {
   v: number;
   /** Hourly points, oldest first. At most 24. */
   points: SeriesPoint[];
+  /** Always RH. Absent ⟹ "robinhood", mirroring `TickerSnapshot.chain` — every
+   *  record written before the Base desk existed lacks the field, so it must
+   *  stay optional or the whole archive stops parsing.
+   *
+   *  This field is never WRITTEN (`persistSeriesPoint` omits it). It exists to
+   *  make the chain split a type error: without it `BaseSeriesDay` satisfies
+   *  `{day, v, points}` structurally and is therefore silently assignable to
+   *  `SeriesDay`. With it, `chain: "base"` fails against `"robinhood" |
+   *  undefined`. Verified by compiling the assignment both ways — the version
+   *  of this comment that claimed the split was already enforced was wrong. */
+  chain?: "robinhood";
+}
+
+// ── Base desk permanent series ────────────────────────────────────────────
+// Stored at `bh:base:series:day:YYYYMMDD` (see `kvBaseSeriesDay`). Kept apart
+// from `SeriesDay` because NVDA/META/GOOGL/AAPL exist on BOTH chains, and one
+// Base row in the bare-ticker RH archive corrupts RH price history irreversibly.
+//
+// The split is enforced by the `chain` discriminator on BOTH interfaces, not by
+// their field lists: `SeriesDay` requires only `{day, v, points}`, all of which
+// `BaseSeriesDay` has, so without `chain` the two are silently interchangeable.
+// That was true in the first draft of this file and was caught by compiling the
+// assignment rather than by reading it.
+
+/**
+ * Per-ticker daily extreme of |drift|, sampled EVERY 5-min cycle.
+ *
+ * WHY THIS IS NOT REDUNDANT WITH THE HOURLY POINTS: the rule engine evaluates
+ * `detectCandidate` against `DRIFT_MIN_ABS_PCT` on every cycle, not once an
+ * hour. So an hourly sample under-measures precisely the quantity that decides
+ * whether Base ever fires — a 40-minute excursion above threshold would leave
+ * no trace in an hourly series, and we would conclude "Base never approaches
+ * 2%" from a sampling artifact. Measuring at a coarser resolution than the
+ * decision is the same class of error as the period-confounded null model
+ * documented in the gap-closure notes.
+ *
+ * Cost stays near zero because the write is conditional: on a quiet series the
+ * high-water mark stops moving after the first few cycles of the day.
+ */
+export interface BaseSeriesPeak {
+  ticker: string;
+  /** Largest |drift_pct| seen today. Signed value is kept in `drift_pct` so
+   *  direction is not lost — `abs_drift_pct` exists only to make the
+   *  comparison and the threshold question direct. */
+  abs_drift_pct: number;
+  drift_pct: number;
+  /** ISO instant of the cycle that set this high-water mark. */
+  at: string;
+  /** Market clock AT THE PEAK, not at write time. The engine fires drift only
+   *  while closed and arb only while open, so a peak's session is what decides
+   *  which rule it could ever have triggered. */
+  is_open: boolean;
+  session: MarketSession;
+}
+
+/** One UTC day of Base-desk history — value at `bh:base:series:day:YYYYMMDD`. */
+export interface BaseSeriesDay {
+  /** `YYYYMMDD` UTC. Redundant with the key on purpose. */
+  day: string;
+  /** Schema version, independent of `SeriesDay.v` — the two records evolve
+   *  separately and a shared number would imply a coupling that isn't there. */
+  v: number;
+  /** Marks this blob as the Base archive even after it is separated from its
+   *  key. A `SeriesDay` has no such field, so a mis-filed blob is detectable
+   *  by inspection and not only by which key it came from. */
+  chain: "base";
+  /** Hourly points, oldest first. At most 24. Same shape as the RH archive so
+   *  one reader can walk both, but stored under a disjoint key prefix. */
+  points: SeriesPoint[];
+  /** Per-ticker daily |drift| extremes, sampled every cycle. See
+   *  `BaseSeriesPeak` for why this is not redundant with `points`. */
+  peaks: BaseSeriesPeak[];
+  /** How many poll cycles contributed to `peaks` today. Without it, a day with
+   *  a low peak is ambiguous between "the market was calm" and "we only sampled
+   *  twice" — the unknown-vs-known-empty distinction, applied to a denominator. */
+  cycles: number;
 }
 
 // ── Arrow ──────────────────────────────────────────────────────────────────

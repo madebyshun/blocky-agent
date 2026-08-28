@@ -42,6 +42,59 @@ export const kvSnapshotHour = (yyyymmddhh: string) => `bh:snapshot:hour:${yyyymm
  */
 export const KV_BASE_ROWS_LATEST = "bh:base:rows:latest";
 
+/**
+ * PERMANENT Base-desk price series — one key per UTC day. Payload
+ * `BaseSeriesDay`.
+ *
+ * WHY THIS EXISTS: until now the ONLY Base write was `KV_BASE_ROWS_LATEST`
+ * above, which carries `TTL_BASE_ROWS` = 15 minutes. So the Base desk had no
+ * history at all — three poll cycles and the evidence was gone. That is the
+ * exact hole that makes the RH archive so valuable, restated: 107 of 112
+ * published RH drift arrows predate `SERIES_ARCHIVE_START` and can therefore
+ * never be audited after the fact. Base is currently at the *start* of that
+ * curve, and every hour not persisted now is an hour that can never be
+ * recovered later.
+ *
+ * WHY A SEPARATE KEY AND NOT `bh:series:day:*`: that archive is keyed by BARE
+ * TICKER and NVDA/META/GOOGL/AAPL trade on both chains. One Base row landing
+ * there silently corrupts RH price history — irreversibly, because history
+ * cannot be backfilled. The `bh:base:` prefix keeps the two disjoint under a
+ * prefix scan, and the two record types are held apart by paired `chain`
+ * discriminators — NOT by their field lists, which overlap enough that
+ * `BaseSeriesDay` was silently assignable to `SeriesDay` until the
+ * discriminator was added. See the header of `base-series.ts` for exactly what
+ * the compiler does and does not enforce here. Same belt-and-braces reasoning
+ * as `KV_BASE_ROWS_LATEST`, for the same reason.
+ *
+ * NO TTL, deliberately — this is the archive, not a cache.
+ *
+ * MEASURED COST at the current 4-ticker `BASE_STOCKS` registry: ~0.4 KB per
+ * hourly point (the RH archive measures 2.6 KB at 24 tickers), so ~10 KB/day
+ * and under 4 MB/year. Request budget is ~288 reads/day (one per 5-min cycle)
+ * plus ~24–40 writes — roughly 2% of the 500K/month Upstash cap that starved
+ * this engine in task #123. Same order as the RH archive already deemed
+ * affordable; revisit if `BASE_STOCKS` grows past ~20 tickers.
+ */
+export const kvBaseSeriesDay = (yyyymmdd: string) => `bh:base:series:day:${yyyymmdd}`;
+
+/**
+ * First UTC day the Base archive recorded anything.
+ *
+ * ⚠️ NOT YET CONSUMED. There is no Base series READ route yet — this ships
+ * with the writer only, deliberately, because history cannot be backfilled and
+ * every hour spent building a reader first is an hour permanently lost. The RH
+ * twin `SERIES_ARCHIVE_START` *is* wired (see `/api/hood/series`), and this
+ * constant exists so whoever builds the Base reader inherits the distinction
+ * already made rather than reinventing it: a day before this is
+ * "before_archive" — a KNOWN gap — not "no data", which would read as the
+ * unknown/empty case. Conflating those is how an absent record becomes a
+ * claimed fact.
+ *
+ * Set to the day the writer shipped. Do NOT move it backwards to make a chart
+ * look fuller: that converts a known gap into a silent lie.
+ */
+export const BASE_SERIES_ARCHIVE_START = "20260828";
+
 /** Monotonic counter for the aesthetic `#0001` serial. */
 export const KV_ARROW_SERIAL_COUNTER = "bh:arrow:serial";
 
