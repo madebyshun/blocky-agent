@@ -67,8 +67,12 @@ export default function ArrowBriefBlock({
           Brief unavailable — A4 chain failed for this arrow. Numbers still stand on their own.
         </div>
       ) : (
+        // brief_status "skipped" (or absent). Deliberately states NO cause: this
+        // branch covers both "seeded arrow, brief skipped on purpose" and "Base
+        // arrow, A4 is Robinhood-only" — and the old copy asserted "A4 was
+        // unavailable", which is untrue of both.
         <div className="hood-prose text-[13px] leading-relaxed" style={{ color: MUTED }}>
-          No brief attached — A4 was unavailable when this arrow fired. Numbers still stand on their own.
+          No brief attached to this arrow. Numbers still stand on their own.
         </div>
       )}
       {a.outcome_detail && (

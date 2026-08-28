@@ -143,10 +143,31 @@ export interface TickerSnapshot {
   /** Wall-clock ms since cycle start when this row was polled. Used by the
    *  UI to compute per-row freshness (`age_s = now - snap.started_at - polled_at_ms`). */
   polled_at_ms: number;
-  /** How stale the GT pool response was when reshaped (seconds). Null on
-   *  cold fetch, a number when memo-served. Reviewer T1(d): "any token
-   *  served from stale cache MUST be surfaced". */
+  /** ⚠️ THIS FIELD MEANS DIFFERENT THINGS ON THE TWO CHAINS. Do not aggregate
+   *  it across them.
+   *    • RH  — how stale the GeckoTerminal **DEX** response was when reshaped
+   *            (`poller.ts` → `cacheAgeS`). Null on cold fetch, a number when
+   *            memo-served. Reviewer T1(d): "any token served from stale cache
+   *            MUST be surfaced".
+   *    • Base — the age of the **Chainlink oracle** round (`base-poller.ts` →
+   *            `q.feed_age_seconds`). The opposite side of the trade.
+   *  Averaging the two would mix DEX cache latency with oracle latency and call
+   *  the result "freshness". Reach for `oracle_updated_at` below when you want
+   *  the oracle specifically; it is unambiguous by construction. */
   data_age_s: number | null;
+  /** Unix SECONDS of the Chainlink round this row priced against — the raw
+   *  `latestRoundData().updatedAt`, not a derived age.
+   *
+   *  Absolute on purpose. An age is only meaningful against the instant it was
+   *  measured, and a poll cycle currently runs ~280s, so `cycle_start - age`
+   *  can be minutes off. More importantly, two cycles that read the SAME round
+   *  are indistinguishable by age alone — and "did the oracle move between
+   *  these two observations?" is exactly the question the Base archive exists
+   *  to answer (see `base-series.ts`).
+   *
+   *  `undefined` on RH: that desk never had the value to record, which is a
+   *  different fact from `null` (Base read it and the feed was unreadable). */
+  oracle_updated_at?: number | null;
   /** T-B1 — hourly close prices (up to 24 points, oldest first) served
    *  from `bh:spark:{ticker}`. Populated by the `sparkline-refresh` cron;
    *  the main 72s poll only reads cache, never fetches. `null` on cold
@@ -269,6 +290,29 @@ export interface SeriesRow {
    *  disagreed with the oracle" means nothing without knowing how much
    *  depth was standing behind the disagreement. */
   total_tvl_usd: number | null;
+  /** Unix seconds of the Chainlink round behind `oracle_usd`. Base only.
+   *
+   *  Without it, a recorded `drift_pct` is three different findings wearing one
+   *  number, and no later analysis can separate them:
+   *    1. the DEX genuinely moved away from a live oracle — a real dislocation;
+   *    2. the oracle simply had not crossed its 0.5% deviation deadband yet —
+   *       quantisation, not signal (every Base drift observed so far, 0.094% /
+   *       0.31% / 0.3782%, is BELOW that deadband);
+   *    3. the oracle was frozen for a corporate action while the token kept
+   *       trading on-chain — the B20 spec pauses mint/redeem off-chain but
+   *       explicitly does NOT pause transfers, so `isPaused(TRANSFER)` reads
+   *       false throughout, and `is_stale` only trips after 2 x 24h.
+   *  Compare this across consecutive points and the three separate cleanly.
+   *
+   *  Three-valued on purpose:
+   *    • a number  — the round the price came from;
+   *    • `null`    — Base read the feed and could not date it;
+   *    • `undefined` — this archive never recorded the field (every RH point,
+   *      and every Base point written at `v: 1`).
+   *  Collapsing `undefined` into `null` would turn "we never looked" into "we
+   *  looked and found nothing", which is the unknown-vs-known-empty error this
+   *  archive is built to avoid. */
+  oracle_updated_at?: number | null;
 }
 
 /** One hour bucket within a day. */
@@ -353,6 +397,17 @@ export interface BaseSeriesPeak {
    *  which rule it could ever have triggered. */
   is_open: boolean;
   session: MarketSession;
+  /** Unix seconds of the Chainlink round the peak was measured against. See
+   *  `SeriesRow.oracle_updated_at` for the three cases this separates.
+   *
+   *  Recorded on the PEAK and not only on the hourly point because the peak is
+   *  the record that answers "did Base ever approach the firing threshold?" —
+   *  and a high-water mark set while the oracle was frozen is an artefact of
+   *  the freeze, not evidence about Base. That is precisely the peak that would
+   *  otherwise be quoted as the strongest case for the desk.
+   *
+   *  `undefined` for peaks written at `v: 1`, before this existed. */
+  oracle_updated_at?: number | null;
 }
 
 /** One UTC day of Base-desk history — value at `bh:base:series:day:YYYYMMDD`. */

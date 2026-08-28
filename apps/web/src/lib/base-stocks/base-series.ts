@@ -61,6 +61,33 @@
  * above threshold would leave no trace, and we would "measure" that Base never
  * approaches 2% when in fact we never looked. Measuring at a coarser
  * resolution than the decision is how a sampling artifact becomes a finding.
+ *
+ * ## Why a drift number alone is not evidence (v2)
+ *
+ * A recorded `drift_pct` does not say whether the oracle was LIVE when it was
+ * measured, and on Base that is not a detail — it decides what the number means:
+ *
+ *   • The Chainlink B20 feed only republishes on a **0.5% deviation** (or a 24h
+ *     heartbeat). Every Base drift observed so far — 0.094%, 0.31%, 0.3782% —
+ *     is BELOW that step. Those readings are indistinguishable from the feed
+ *     simply not having moved yet. They are quantisation, not dislocation, and
+ *     a distribution built from them would be a picture of the deadband.
+ *   • During a corporate action the feed freezes while the token keeps trading:
+ *     the B20 spec pauses mint/redeem OFF-chain and explicitly does not pause
+ *     transfers. So `isPaused(TRANSFER)` stays false throughout, and `is_stale`
+ *     only trips after 2 x 24h — a freeze shorter than that is invisible to
+ *     both existing gates and shows up as pure drift.
+ *   • The feed is **24/5**, not tied to the NYSE session. Measured 2026-08-28:
+ *     the four B20 feeds last updated at 00:10, 05:55, 08:07 and 08:43 UTC —
+ *     after-hours, overnight and premarket respectively, every one of them
+ *     outside regular hours. This matters because `base-poller.ts` reuses the
+ *     RH verdict map verbatim, including the names FROZEN_ALIGNED and
+ *     PREMARKET_DRIFT, which encode "closed ⟹ the oracle is frozen". That
+ *     premise holds on RH and does NOT hold here.
+ *
+ * `oracle_updated_at` is what separates those cases, and it can only be
+ * recorded AT POLL TIME. There is no later query that recovers the round a past
+ * cycle read — which is the same asymmetry that motivates this whole file.
  */
 import { kvGetProbe, kvSet } from "@/lib/kv";
 import {
@@ -77,9 +104,20 @@ import type {
   TickerSnapshot,
 } from "@/lib/blue-hood/types";
 
-/** Schema version for `BaseSeriesDay`. Independent of the RH `SERIES_VERSION`
- *  — the two records evolve separately. */
-export const BASE_SERIES_VERSION = 1;
+/**
+ * Schema version for `BaseSeriesDay`. Independent of the RH `SERIES_VERSION` —
+ * the two records evolve separately.
+ *
+ *   v1 (2026-08-28, ~09:00–10:00Z) — points + peaks, no oracle timestamp.
+ *   v2 (2026-08-28)                — adds `oracle_updated_at` to both.
+ *
+ * The version is what makes v1's missing field READABLE rather than merely
+ * absent: a v1 point is a point we could not have dated, a v2 point with
+ * `oracle_updated_at: null` is one we tried to date and failed. Without the
+ * bump those two collapse into the same `undefined` and the archive quietly
+ * loses the difference between "not yet recorded" and "unreadable".
+ */
+export const BASE_SERIES_VERSION = 2;
 
 /**
  * Did this row observe a price at all?
@@ -132,6 +170,11 @@ export function mergeBaseSeriesPoint(
       dex_usd:       t.dex_usd,
       drift_pct:     t.drift_pct,
       total_tvl_usd: t.total_tvl_usd ?? t.tvl_usd,
+      // `?? null`, never omitted. The Base desk records this field, so a row
+      // that reaches here without one is "the feed could not be dated", which
+      // must not be written as `undefined` — that is reserved for archives that
+      // never had the field at all.
+      oracle_updated_at: t.oracle_updated_at ?? null,
     }));
     const point: SeriesPoint = {
       hour,
@@ -167,6 +210,10 @@ export function mergeBaseSeriesPoint(
       at:            startedAt,
       is_open:       t.market.is_open,
       session:       t.market.session,
+      // Taken from the cycle that SET the mark, like every other field here. A
+      // peak carrying a later cycle's oracle timestamp would date the drift to
+      // an oracle it was never measured against.
+      oracle_updated_at: t.oracle_updated_at ?? null,
     });
     peaksMoved = true;
   }
