@@ -13,7 +13,34 @@
  *     llm_context_unavailable, …) are carried through verbatim.
  */
 import { callTool } from "./tool-caller";
-import type { ArrowBrief } from "./types";
+import type { ArrowBrief, HoodChain } from "./types";
+
+/**
+ * Which desks have a brief path at all.
+ *
+ * A4 (`rh-stock-agent-brief`) resolves its ticker against the **Robinhood
+ * Chain** RWA registry and reads RH's Chainlink feed and RH's DEX pool. It
+ * takes a ticker and NOTHING else — no chain, no address. So calling it for a
+ * Base B20 arrow does not "degrade"; it silently answers about a DIFFERENT
+ * TOKEN ON A DIFFERENT CHAIN that happens to share a ticker string. NVDA,
+ * META, GOOGL and AAPL all exist on both, which is precisely the case that
+ * would be wrong and precisely the case Blue Hood fires on.
+ *
+ * That output is not cosmetic. It becomes `arrow.brief.verdict_note` +
+ * `facts_at_fire` on a permanent arrow record, and chat hands it to the model
+ * as "Facts you may quote verbatim (do NOT invent numbers beyond these)".
+ *
+ * The existing `detectMarketContradiction` guard in brief-worker cannot catch
+ * this: it compares A4's market-hours prose against the arrow's fire-time
+ * clock, and both chains trade the SAME NYSE session — an RH brief pinned to a
+ * Base arrow agrees on hours perfectly and sails through.
+ *
+ * So: one predicate, one place. When a Base brief path is built, this is the
+ * single line that admits it.
+ */
+export function hasBriefPath(chain: HoodChain): boolean {
+  return chain === "robinhood";
+}
 
 // Subset of A4's response we care about — kept here so a change in the
 // tool trips a compile error before we start silently persisting stale
@@ -43,10 +70,23 @@ interface A4Response {
 }
 
 /**
- * Fetch the brief for a ticker. Never throws; returns null on any failure
- * so the caller can persist `arrow.brief = null` and move on.
+ * Fetch the brief for a ticker on a given chain. Never throws; returns null on
+ * any failure so the caller can persist `arrow.brief = null` and move on.
+ *
+ * `chain` is REQUIRED, not optional-defaulting-to-robinhood. A default would
+ * make the dangerous case (a caller that forgot to thread the chain through)
+ * the silent one, which is the exact bug this guard exists to stop. Callers
+ * that genuinely have no row pass `chainOf(...)`, whose absent⟹"robinhood"
+ * default is deliberate and documented at its own definition.
  */
-export async function fetchArrowBrief(ticker: string): Promise<ArrowBrief | null> {
+export async function fetchArrowBrief(ticker: string, chain: HoodChain): Promise<ArrowBrief | null> {
+  // Chain gate FIRST — before the network call, so a non-RH arrow costs no
+  // request and no LLM spend, and so there is no window in which A4's
+  // wrong-chain answer exists in memory at all.
+  if (!hasBriefPath(chain)) {
+    console.log(`[brief] skipping ${ticker}: no brief path for chain=${chain} (A4 is Robinhood-only)`);
+    return null;
+  }
   // A4 runs the Virtuals → Venice → Bankr LLM chain internally. Give it
   // a generous timeout — Virtuals is usually 2-5s, Bankr fallback ~10s.
   const r = await callTool<A4Response>("rh-stock-agent-brief", { ticker }, { timeoutMs: 25_000 });
