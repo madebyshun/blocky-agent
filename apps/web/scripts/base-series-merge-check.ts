@@ -293,6 +293,49 @@ check("version was bumped for the new field", BASE_SERIES_VERSION >= 2, `v=${BAS
 const copies = code.match(/oracle_updated_at:\s*t\.oracle_updated_at\s*\?\?\s*null/g) ?? [];
 check("two copy sites (point row + peak)", copies.length === 2, `${copies.length} found`);
 
+// ── 13. The read route stays on the Base side of the fence ─────────────────
+// Group 10 asserts the writer never sees the RH key builder. The READ route is
+// the second file where the same mistake is expressible and equally invisible
+// to tsc: `kvSeriesDay(day)` and `kvBaseSeriesDay(day)` are both `string`, so
+// serving RH history from the Base endpoint typechecks perfectly. Because
+// NVDA/META/GOOGL/AAPL exist on BOTH chains, the result would not look wrong —
+// it would look like Base data, which is the failure mode that matters.
+//
+// The route additionally must not touch the RH ARCHIVE START. Reusing it would
+// mislabel days as `before_archive` against the wrong epoch — reporting the
+// Base archive as not-yet-recording for the 18 days between the two starts.
+console.log("\n13. /api/hood/base-series route is chain-isolated");
+
+const routeFile = join(process.cwd(), "src/app/api/hood/base-series/route.ts");
+if (!existsSync(routeFile)) {
+  console.log(`  FAIL  cannot read ${routeFile} — run this from apps/web`);
+  process.exit(1);
+}
+const routeSrc = readFileSync(routeFile, "utf8");
+const routeCode = routeSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+const rhHits = routeCode.match(/\bkvSeriesDay\b/g) ?? [];
+check("no RH key builder in the route", rhHits.length === 0, `${rhHits.length} hit(s)`);
+// `\b` will not match inside BASE_SERIES_ARCHIVE_START — `_` is a word char, so
+// there is no boundary before `SERIES`. The next check proves that empirically.
+const rhStart = routeCode.match(/\bSERIES_ARCHIVE_START\b/g) ?? [];
+check("no RH archive-start constant in the route", rhStart.length === 0, `${rhStart.length} hit(s)`);
+check("...and the Base one IS used (proves the \\b above is not vacuous)",
+  /\bBASE_SERIES_ARCHIVE_START\b/.test(routeCode));
+// The route asks for DAYS, never for a KEY. Keeping every key builder out of it
+// means "serve Base" and "write Base into RH history" are not one branch apart.
+const anyBuilder = routeCode.match(/\bkvBaseSeriesDay\b/g) ?? [];
+check("route builds no KV key at all", anyBuilder.length === 0, `${anyBuilder.length} hit(s)`);
+
+// The threshold SWAPS WITH THE SESSION (2% closed / 1% open). Scoring a mixed
+// set against DRIFT alone compiles, runs, and silently undercounts every
+// open-market peak in the 1–2% band — biasing the archive's only question
+// toward "no". Caught in review once; asserted here so it cannot come back.
+check("peak scoring is session-aware", /abs_drift_pct >= thresholdFor\(/.test(routeCode));
+const bareCmp = routeCode.match(/abs_drift_pct\s*>=\s*DRIFT_MIN_ABS_PCT/g) ?? [];
+check("no bare single-threshold comparison", bareCmp.length === 0, `${bareCmp.length} hit(s)`);
+check("both thresholds are imported", /\bARB_MIN_ABS_PCT\b/.test(routeCode));
+
 console.log(
   failures === 0
     ? `\nALL ${checks} CHECKS PASSED\n`

@@ -91,6 +91,7 @@
  */
 import { kvGetProbe, kvSet } from "@/lib/kv";
 import {
+  BASE_SERIES_ARCHIVE_START,
   kvBaseSeriesDay,
   yyyymmdd,
   yyyymmddhh,
@@ -292,4 +293,128 @@ export async function persistBaseSeriesPoint(
       ` points=${next.points.length} cycles=${next.cycles}` +
       ` peak=${topPk ? `${topPk.ticker} ${topPk.abs_drift_pct}%` : "—"}`,
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// READ SIDE
+//
+// Lives here, not in the route, so the route never builds a KV key. That keeps
+// the structural guard from the header intact by construction: `kvBaseSeriesDay`
+// stays confined to this one file, and adding a Base read path did not widen the
+// blast radius for the RH archive.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One day's read outcome, kept distinct all the way to the caller. Mirrors the
+ *  RH `SeriesDayRead` on purpose — same four states, so a reader that already
+ *  understands the RH archive needs no new vocabulary for this one. */
+export type BaseSeriesDayRead =
+  | { day: string; status: "hit"; value: BaseSeriesDay }
+  | { day: string; status: "miss" }
+  | { day: string; status: "error"; message: string }
+  | { day: string; status: "before_archive" };
+
+/**
+ * Read a set of days, reporting each outcome separately.
+ *
+ * `kvGetProbe`, not `kvGet`, for the same reason the writer uses it: `kvGet`
+ * turns a KV outage into `null`, and this route would then publish "that day
+ * holds nothing" about a day it simply could not read. In an archive whose only
+ * job is to be evidence, serving a blackout as an empty market is the worst
+ * available failure.
+ *
+ * Days before the archive began cost no KV request — the answer is known
+ * without asking, and the Upstash request cap has starved this engine three
+ * times (#148, #123).
+ */
+export async function readBaseSeriesDays(days: string[]): Promise<BaseSeriesDayRead[]> {
+  return Promise.all(
+    days.map(async (day): Promise<BaseSeriesDayRead> => {
+      if (day < BASE_SERIES_ARCHIVE_START) return { day, status: "before_archive" };
+      const probe = await kvGetProbe<BaseSeriesDay>(kvBaseSeriesDay(day));
+      if (probe.status === "error") return { day, status: "error", message: probe.message };
+      if (probe.status === "miss") return { day, status: "miss" };
+      return { day, status: "hit", value: probe.value };
+    }),
+  );
+}
+
+/** How much of a day is on record, and against what window that was judged. */
+export interface BaseSeriesCoverage {
+  hours_present: number;
+  /** Hours inside the expected window holding no point, as `YYYYMMDDHH`. */
+  hours_absent: string[];
+  first_hour: string | null;
+  last_hour: string | null;
+  expected_from: string | null;
+  expected_to: string | null;
+}
+
+/**
+ * Which hours of a Base day were missed.
+ *
+ * ## Why this is not `seriesCoverage` from poller.ts
+ *
+ * That function is the RH twin and computes the identical thing — but it reads
+ * `SERIES_ARCHIVE_START` ("20260810") from its own module scope. Handed a Base
+ * day it would use the RH start date to decide the lower bound, and on the Base
+ * archive's FIRST day that is not a cosmetic difference: recording began mid-
+ * morning on 2026-08-28, so the RH-anchored version would compute `from = 0`
+ * and report hours 00–08 as absent — nine hours of gap that never existed,
+ * published as fact on the archive's first and most-scrutinised day.
+ *
+ * Reuse would have been the tidier-looking choice and a wrong one. The shared
+ * shape is a coincidence of both archives being hourly; the anchor is genuinely
+ * per-archive. Two dates, two functions.
+ *
+ * Everything else matches the RH semantics deliberately: the future (including
+ * the hour now running) is never a hole, because the poll appends partway
+ * through an hour and calling the current hour overdue would manufacture a gap
+ * for part of every hour and train readers to ignore the field.
+ *
+ * `now` is a parameter, not `new Date()`, so this is testable at any wall clock.
+ */
+export function baseSeriesCoverage(
+  day: string,
+  points: SeriesPoint[],
+  now: Date,
+): BaseSeriesCoverage {
+  const hours = points.map((p) => p.hour).sort();
+  const first = hours[0] ?? null;
+  const last  = hours[hours.length - 1] ?? null;
+
+  // Upper bound: the last hour that has finished. A past day is owed all 24.
+  const to = day === yyyymmdd(now) ? now.getUTCHours() - 1 : 23;
+  // Lower bound: 0 for any day the archive covered in full; on its first day,
+  // the earliest hour actually held — nothing before that was ever promised.
+  // `24` when that first day holds nothing, which crosses the bounds below and
+  // correctly claims no window at all.
+  const from =
+    day === BASE_SERIES_ARCHIVE_START ? (first === null ? 24 : +first.slice(8, 10)) : 0;
+
+  if (from > to || to < 0) {
+    return {
+      hours_present: points.length,
+      hours_absent: [],
+      first_hour: first,
+      last_hour: last,
+      expected_from: null,
+      expected_to: null,
+    };
+  }
+
+  const present = new Set(hours);
+  const absent: string[] = [];
+  for (let h = from; h <= to; h++) {
+    const key = `${day}${String(h).padStart(2, "0")}`;
+    if (!present.has(key)) absent.push(key);
+  }
+
+  return {
+    hours_present: points.length,
+    hours_absent: absent,
+    first_hour: first,
+    last_hour: last,
+    expected_from: `${day}${String(from).padStart(2, "0")}`,
+    expected_to: `${day}${String(to).padStart(2, "0")}`,
+  };
 }
