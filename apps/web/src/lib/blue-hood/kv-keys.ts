@@ -59,9 +59,12 @@ export const KV_BASE_ROWS_LATEST = "bh:base:rows:latest";
  * TICKER and NVDA/META/GOOGL/AAPL trade on both chains. One Base row landing
  * there silently corrupts RH price history — irreversibly, because history
  * cannot be backfilled. The `bh:base:` prefix keeps the two disjoint under a
- * prefix scan, and `BaseSeriesDay` is a distinct type so `persistSeriesPoint`
- * and `persistBaseSeriesPoint` cannot be swapped by accident. Same belt-and-
- * braces reasoning as `KV_BASE_ROWS_LATEST`, for the same reason.
+ * prefix scan, and the two record types are held apart by paired `chain`
+ * discriminators — NOT by their field lists, which overlap enough that
+ * `BaseSeriesDay` was silently assignable to `SeriesDay` until the
+ * discriminator was added. See the header of `base-series.ts` for exactly what
+ * the compiler does and does not enforce here. Same belt-and-braces reasoning
+ * as `KV_BASE_ROWS_LATEST`, for the same reason.
  *
  * NO TTL, deliberately — this is the archive, not a cache.
  *
@@ -75,11 +78,20 @@ export const KV_BASE_ROWS_LATEST = "bh:base:rows:latest";
 export const kvBaseSeriesDay = (yyyymmdd: string) => `bh:base:series:day:${yyyymmdd}`;
 
 /**
- * First UTC day the Base archive recorded anything. Reads for days before this
- * answer "before_archive" (a known gap) instead of "no data" (an unknown one) —
- * the same absent-vs-unknown distinction `SERIES_ARCHIVE_START` draws for RH.
- * Set to the day this shipped; do NOT move it backwards to make a chart look
- * fuller, because that converts a known gap into a silent lie.
+ * First UTC day the Base archive recorded anything.
+ *
+ * ⚠️ NOT YET CONSUMED. There is no Base series READ route yet — this ships
+ * with the writer only, deliberately, because history cannot be backfilled and
+ * every hour spent building a reader first is an hour permanently lost. The RH
+ * twin `SERIES_ARCHIVE_START` *is* wired (see `/api/hood/series`), and this
+ * constant exists so whoever builds the Base reader inherits the distinction
+ * already made rather than reinventing it: a day before this is
+ * "before_archive" — a KNOWN gap — not "no data", which would read as the
+ * unknown/empty case. Conflating those is how an absent record becomes a
+ * claimed fact.
+ *
+ * Set to the day the writer shipped. Do NOT move it backwards to make a chart
+ * look fuller: that converts a known gap into a silent lie.
  */
 export const BASE_SERIES_ARCHIVE_START = "20260828";
 
