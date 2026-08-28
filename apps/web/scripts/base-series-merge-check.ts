@@ -18,8 +18,13 @@ import { mergeBaseSeriesPoint, BASE_SERIES_VERSION } from "@/lib/base-stocks/bas
 import type { BaseSeriesDay, TickerSnapshot } from "@/lib/blue-hood/types";
 
 let failures = 0;
+/** Counted, not hardcoded. The old footer said "(11 groups)" — a number kept
+ *  correct by hand, i.e. a number that goes stale the first time someone adds a
+ *  group and forgets. Deriving it costs one line and cannot lie. */
+let checks = 0;
 
 function check(name: string, cond: boolean, detail = "") {
+  checks++;
   if (cond) {
     console.log(`  PASS  ${name}`);
   } else {
@@ -36,7 +41,16 @@ function check(name: string, cond: boolean, detail = "") {
  *  cast to typecheck is no longer proof that the real function accepts it. */
 function row(
   ticker: string,
-  opts: { oracle?: number | null; dex?: number | null; drift?: number | null; open?: boolean } = {},
+  opts: {
+    oracle?: number | null;
+    dex?: number | null;
+    drift?: number | null;
+    open?: boolean;
+    /** Chainlink round timestamp. Left OFF by default so every group above
+     *  exercises the absent case — the archive must still record the field
+     *  (as `null`) rather than dropping it. Group 12 covers both. */
+    oracleAt?: number | null;
+  } = {},
 ): TickerSnapshot {
   const { oracle = 100, dex = 100, drift = 0, open = false } = opts;
   return {
@@ -59,6 +73,13 @@ function row(
     warnings: [],
     polled_at_ms: 0,
     data_age_s: null,
+    // Spread, not `oracle_updated_at: opts.oracleAt`. The distinction the
+    // archive turns on is `undefined` (never recorded) vs `null` (recorded,
+    // unreadable), and writing the key explicitly would make the default
+    // `undefined` — same value, but as a PRESENT key. Structurally absent is
+    // what a pre-v2 row actually looks like, so that is what the fixture
+    // reproduces.
+    ...("oracleAt" in opts ? { oracle_updated_at: opts.oracleAt } : {}),
     sparkline: null,
     no_data_reason: dex === null ? "no_pool" : null,
   };
@@ -214,9 +235,67 @@ check("condition is not duplicated inline", raw.length === 1, `${raw.length} occ
 check("merge filters through it", /\.filter\(isPriced\)/.test(code));
 check("persist pre-checks through it", /\.some\(isPriced\)/.test(code));
 
+// ── 12. The oracle timestamp reaches the permanent record ──────────────────
+// A `drift_pct` with no oracle timestamp is three findings wearing one number:
+// a real dislocation, a feed that has not crossed its 0.5% deviation deadband,
+// or a feed frozen for a corporate action while the token keeps trading. The
+// archive is permanent and forward-only, so a cycle written without the
+// timestamp is a cycle whose drift can NEVER be classified — there is no later
+// query that recovers which Chainlink round a past poll read.
+//
+// That makes dropping this field a silent, unrepairable loss, which is exactly
+// the shape of failure the rest of this file exists to catch.
+console.log("\n12. oracle timestamp is recorded on points AND peaks");
+const ORACLE_AT = 1_787_904_439; // a real NVDAc round, 2026-08-28T08:07:19Z
+
+const withTs = mergeBaseSeriesPoint(null, [row("NVDAc", { drift: 0.5, oracleAt: ORACLE_AT })], T0);
+check("point row carries it", withTs?.points[0].rows[0].oracle_updated_at === ORACLE_AT);
+check("peak carries it", withTs?.peaks[0].oracle_updated_at === ORACLE_AT);
+
+// The peak must be dated by the cycle that SET it, not by whichever cycle wrote
+// last — otherwise a drift gets attributed to an oracle it never priced against.
+const later = mergeBaseSeriesPoint(
+  withTs,
+  [row("NVDAc", { drift: 0.2, oracleAt: ORACLE_AT + 3600 })],
+  T1,
+);
+check("smaller cycle does not re-date the peak", later === null, `got ${JSON.stringify(later)?.slice(0, 60)}`);
+const bigger = mergeBaseSeriesPoint(
+  withTs,
+  [row("NVDAc", { drift: 9.9, oracleAt: ORACLE_AT + 3600 })],
+  T1,
+);
+check("a NEW peak takes its own cycle's timestamp",
+  bigger?.peaks[0].oracle_updated_at === ORACLE_AT + 3600);
+
+// Absent ⟹ null, never dropped. `undefined` means "this archive never recorded
+// the field"; a Base row that reached the merge without a timestamp means "we
+// looked and could not date the feed". Collapsing the second into the first is
+// the unknown-vs-known-empty error, one level up.
+const noTs = mergeBaseSeriesPoint(null, [row("NVDAc", { drift: 0.5 })], T0);
+check("absent timestamp is recorded as null", noTs?.points[0].rows[0].oracle_updated_at === null);
+check("...and the key is PRESENT, not dropped",
+  "oracle_updated_at" in (noTs?.points[0].rows[0] ?? {}));
+check("peak likewise", noTs?.peaks[0].oracle_updated_at === null);
+
+// An explicit null from the poller (feed read threw) must survive as null too.
+const nullTs = mergeBaseSeriesPoint(null, [row("NVDAc", { drift: 0.5, oracleAt: null })], T0);
+check("explicit null survives", nullTs?.points[0].rows[0].oracle_updated_at === null);
+
+// Adding the field without bumping the version would make a v1 record (field
+// never existed) and a v2 record (field exists, was null) both read as
+// `undefined` — the archive would lose the difference permanently.
+check("version was bumped for the new field", BASE_SERIES_VERSION >= 2, `v=${BASE_SERIES_VERSION}`);
+
+// Source-level: both copy sites must remain. Deleting either one still
+// compiles, still passes every check above that touches the other, and quietly
+// halves the record.
+const copies = code.match(/oracle_updated_at:\s*t\.oracle_updated_at\s*\?\?\s*null/g) ?? [];
+check("two copy sites (point row + peak)", copies.length === 2, `${copies.length} found`);
+
 console.log(
   failures === 0
-    ? `\nALL CHECKS PASSED (11 groups)\n`
-    : `\n${failures} CHECK(S) FAILED\n`,
+    ? `\nALL ${checks} CHECKS PASSED\n`
+    : `\n${failures} of ${checks} CHECK(S) FAILED\n`,
 );
 process.exit(failures === 0 ? 0 : 1);
