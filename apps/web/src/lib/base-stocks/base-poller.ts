@@ -104,6 +104,11 @@ export function baseQuoteToSnapshot(
       warnings: q.suppressed_reason ? [`base_suppressed_${q.suppressed_reason}`] : [],
       polled_at_ms,
       data_age_s: q.feed_age_seconds,
+      // Carried on the SUPPRESSED row too, not just the healthy one: a row
+      // suppressed for `feed_stale` is exactly the row whose oracle timestamp a
+      // later reader most wants, and dropping it here would leave the archive
+      // unable to show why the desk went quiet.
+      oracle_updated_at: q.feed_updated_at,
       sparkline: null,
       // A null DEX spot on a can_fire=false row is "no_pool" for the UI; any
       // other suppression (paused, multiplier, stale, sequencer) still has a
@@ -133,6 +138,7 @@ export function baseQuoteToSnapshot(
     warnings: [],
     polled_at_ms,
     data_age_s: q.feed_age_seconds,
+    oracle_updated_at: q.feed_updated_at,
     sparkline: null,
     no_data_reason: null,
   };
@@ -167,6 +173,10 @@ function baseErrorRow(
     error: message,
     polled_at_ms,
     data_age_s: null,
+    // `null`, not omitted: this desk records the field, and the read threw —
+    // "we looked and got nothing" is a different fact from "this archive never
+    // recorded it", which is what `undefined` means here.
+    oracle_updated_at: null,
     sparkline: null,
     no_data_reason: "fetch_failed",
   };
