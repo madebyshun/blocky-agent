@@ -40,6 +40,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kvGet, kvSet } from "@/lib/kv";
 import { kvArrow } from "@/lib/blue-hood/kv-keys";
+import { onArrowUpdated } from "@/lib/blue-hood/arrow-cache";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
 import type { Arrow, UserAction } from "@/lib/blue-hood/types";
 
@@ -126,7 +127,17 @@ export async function POST(
     updated = [...existing, next];
   }
 
-  await kvSet(kvArrow(id), { ...arrow, user_actions: updated });
+  const saved: Arrow = { ...arrow, user_actions: updated };
+  await kvSet(kvArrow(id), saved);
+  // #148 ② — `bh:arrow:{id}` is the source of truth and was just written; the
+  // hydrated blob is a COPY of it and would otherwise keep serving the
+  // pre-action version for up to 6h. That matters most on the very path this
+  // route exists for: the panel writes "broadcast" then upgrades to
+  // "success"/"reverted" seconds later, and a stale blob would freeze the
+  // receipt at "broadcast" — a swap that reverted would render as pending
+  // forever. `onArrowUpdated` patches in place, or drops the blob if the
+  // patch can't be applied honestly.
+  await onArrowUpdated(saved);
   console.log(`[user-action] arrow=${arrow.serial} ticker=${arrow.ticker} wallet=${wallet.slice(0, 6)}… tx=${tx_hash.slice(0, 10)}… status=${status} count=${updated.length}`);
   return NextResponse.json({ ok: true, action: next, action_count: updated.length }, { headers: { "Cache-Control": "no-store" } });
 }

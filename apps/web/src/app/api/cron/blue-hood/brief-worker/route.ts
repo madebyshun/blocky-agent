@@ -29,6 +29,7 @@ import { pushArrowToAll } from "@/lib/blue-hood/push";
 import { writeChatCard } from "@/lib/blue-hood/chat-card";
 import { emitAlertsForArrow, type AlertHealthGate } from "@/lib/blue-hood/alerts";
 import { computeEngineHealth } from "@/lib/blue-hood/health";
+import { onArrowUpdated } from "@/lib/blue-hood/arrow-cache";
 import type { Arrow } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -144,6 +145,14 @@ async function processOne(id: string, health: AlertHealthGate): Promise<WorkerRo
     brief_worker_at: workerAt,
   };
   await kvSet(kvArrow(id), enriched);
+  // #148 ② — THE most important patch site in the set. `onArrowFired` put this
+  // arrow into the hydrated blob seconds ago with `brief: null,
+  // brief_status: "pending"`; this line is where the brief actually arrives.
+  // Skip the patch and the blob keeps serving a permanently briefless arrow for
+  // the full 6h TTL — the arrow would render, but the analysis that makes it
+  // worth reading never would. Must run BEFORE the push fan-out below, so a
+  // user who taps the notification within a second lands on the enriched copy.
+  await onArrowUpdated(enriched);
 
   const chainStr = brief
     ? (brief.llm_attempts.map((a) => `${a.provider}:${a.status}`).join("→") || "n/a")

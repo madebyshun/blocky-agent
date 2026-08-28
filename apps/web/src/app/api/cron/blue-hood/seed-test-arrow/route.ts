@@ -21,6 +21,7 @@ import { pushArrowToAll, ensureVapidConfigured } from "@/lib/blue-hood/push";
 import { writeChatCard } from "@/lib/blue-hood/chat-card";
 import { kvGet, kvSet } from "@/lib/kv";
 import { kvArrow } from "@/lib/blue-hood/kv-keys";
+import { onArrowUpdated } from "@/lib/blue-hood/arrow-cache";
 import type { ArrowType, Arrow } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -105,7 +106,15 @@ export async function POST(req: NextRequest) {
       demo = { attempted: true, delivered: stats.delivered, gone: stats.gone, errored: stats.errored };
       // Persist `brief_worker_at` so the UI shows the demo actually fired.
       const stored = await kvGet<Arrow>(kvArrow(arrow.id));
-      if (stored) await kvSet(kvArrow(arrow.id), { ...stored, brief_worker_at: new Date().toISOString() });
+      if (stored) {
+        const patched: Arrow = { ...stored, brief_worker_at: new Date().toISOString() };
+        await kvSet(kvArrow(arrow.id), patched);
+        // #148 ② — dev-only route, but the blob is shared with the read path
+        // QA uses (`?include_test=1`). Without this the demo would report
+        // "fired" while /app/hood kept showing it as never worked — which is
+        // exactly the confusing signal this demo path exists to rule out.
+        await onArrowUpdated(patched);
+      }
     }
   }
 

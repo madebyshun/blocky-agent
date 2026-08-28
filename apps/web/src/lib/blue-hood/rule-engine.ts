@@ -17,6 +17,7 @@
  * land in a follow-up commit so the drift board can ship first.
  */
 import { kvGet, kvSet, kvMutate } from "@/lib/kv";
+import { onArrowFired } from "./arrow-cache";
 import {
   KV_ARROW_SERIAL_COUNTER,
   kvArrow,
@@ -378,6 +379,13 @@ export async function fireArrow(
   if (feedRes === "skipped") {
     console.error(`[fire] ${serial} ${ticker} persisted but NOT indexed — KV read failed; arrow is orphaned until re-indexed`);
   }
+
+  // #148 ② — keep the hydrated read-cache in step with the index we just wrote.
+  // This is a CACHE update, so it is deliberately best-effort and deliberately
+  // AFTER the authoritative write above: if it fails, `onArrowFired` drops the
+  // blob and the next reader rebuilds from the index. The cache can never be
+  // the reason an arrow fails to persist.
+  await onArrowFired(arrow);
 
   if (skipAsync) {
     // Seeded/test path — write a chat card inline so QA has one, but
