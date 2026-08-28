@@ -171,28 +171,52 @@ check("chain literal present on every write", asDay?.chain === "base");
 // and reports a false positive — which is exactly what happened when this check
 // was first written by hand.
 console.log("\n10. RH key builder is out of scope in base-series.ts");
-{
-  // Resolved from cwd, not `import.meta.dirname` — tsx emits CJS, where that is
-  // `undefined` and `join` throws ERR_INVALID_ARG_TYPE. The header says to run
-  // this from apps/web; if you did not, fail saying so rather than silently
-  // skipping the assertion.
-  const target = join(process.cwd(), "src/lib/base-stocks/base-series.ts");
-  if (!existsSync(target)) {
-    console.log(`  FAIL  cannot read ${target} — run this from apps/web`);
-    process.exit(1);
-  }
-  const src = readFileSync(target, "utf8");
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  const hits = code.match(/\bkvSeriesDay\b/g) ?? [];
-  check("no reference to the RH key builder in code", hits.length === 0, `${hits.length} hit(s)`);
-  // Guard the guard: if the strip ever stops working, the check above passes
-  // vacuously. Confirm the Base builder IS still visible after stripping.
-  check("strip did not eat the file", /\bkvBaseSeriesDay\b/.test(code));
+
+// Resolved from cwd, not `import.meta.dirname` — tsx emits CJS, where that is
+// `undefined` and `join` throws ERR_INVALID_ARG_TYPE. The header says to run
+// this from apps/web; if you did not, fail saying so rather than silently
+// skipping the assertion.
+const target = join(process.cwd(), "src/lib/base-stocks/base-series.ts");
+if (!existsSync(target)) {
+  console.log(`  FAIL  cannot read ${target} — run this from apps/web`);
+  process.exit(1);
 }
+const src = readFileSync(target, "utf8");
+const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+const hits = code.match(/\bkvSeriesDay\b/g) ?? [];
+check("no reference to the RH key builder in code", hits.length === 0, `${hits.length} hit(s)`);
+// Guard the guard: if the strip ever stops working, the check above passes
+// vacuously. Confirm the Base builder IS still visible after stripping.
+check("strip did not eat the file", /\bkvBaseSeriesDay\b/.test(code));
+
+// ── 11. One price predicate, two call sites ────────────────────────────────
+// `persistBaseSeriesPoint` returns early when no row is priced, so it does not
+// spend a KV read on a cycle the merge would discard anyway. That early exit is
+// only safe while it asks EXACTLY the question the merge asks. If the two ever
+// drift apart, the cheap pre-check starts skipping cycles the merge would have
+// recorded — silent data loss in an archive that cannot be backfilled, which is
+// the one failure here with no repair path.
+//
+// Group 7 covers the merge side by calling it. The early return lives in the
+// KV-touching function and cannot be called from here, so the property asserted
+// instead is the one that actually prevents the bug: there is a SINGLE
+// definition and both sites go through it. A future inline re-test of the same
+// condition would compile, pass every runtime check, and reintroduce exactly
+// the divergence — so it is failed here at the source level.
+console.log("\n11. price predicate is defined once and shared");
+const defs = code.match(/const\s+isPriced\s*=/g) ?? [];
+check("exactly one isPriced definition", defs.length === 1, `${defs.length} found`);
+// The raw condition must appear only inside that definition. More than one
+// occurrence means someone re-tested the condition inline instead of calling it.
+const raw = code.match(/oracle_usd\s*!==\s*null/g) ?? [];
+check("condition is not duplicated inline", raw.length === 1, `${raw.length} occurrence(s)`);
+check("merge filters through it", /\.filter\(isPriced\)/.test(code));
+check("persist pre-checks through it", /\.some\(isPriced\)/.test(code));
 
 console.log(
   failures === 0
-    ? `\nALL CHECKS PASSED (10 groups)\n`
+    ? `\nALL CHECKS PASSED (11 groups)\n`
     : `\n${failures} CHECK(S) FAILED\n`,
 );
 process.exit(failures === 0 ? 0 : 1);

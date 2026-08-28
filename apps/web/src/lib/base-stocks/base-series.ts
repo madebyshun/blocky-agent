@@ -81,6 +81,21 @@ import type {
 export const BASE_SERIES_VERSION = 1;
 
 /**
+ * Did this row observe a price at all?
+ *
+ * A row that failed to price is ABSENT from the record, never
+ * present-with-nulls. A null row would read as "the market had no price here",
+ * which is a claim; absence is the honest record of "we did not observe one".
+ *
+ * One definition, used both to build the record and to decide whether to open
+ * the read-modify-write at all. If those two ever disagree, the cheap pre-check
+ * starts skipping cycles the merge would have recorded — a silent data loss in
+ * a permanent archive, which is the one failure here that cannot be repaired.
+ */
+const isPriced = (t: TickerSnapshot): boolean =>
+  t.oracle_usd !== null || t.dex_usd !== null;
+
+/**
  * Fold one poll cycle's Base rows into the day record.
  *
  * Pure and exported so it can be tested directly rather than through a
@@ -100,10 +115,7 @@ export function mergeBaseSeriesPoint(
   const day  = yyyymmdd(at);
   const hour = yyyymmddhh(at);
 
-  // A row that failed to price is ABSENT, never present-with-nulls. A null row
-  // would read as "the market had no price here", which is a claim; absence is
-  // the honest record of "we did not observe one".
-  const priced = rows.filter((t) => t.oracle_usd !== null || t.dex_usd !== null);
+  const priced = rows.filter(isPriced);
   if (priced.length === 0) return null;
 
   const prevPoints = existing?.points ?? [];
@@ -197,6 +209,14 @@ export async function persistBaseSeriesPoint(
   rows: TickerSnapshot[],
   startedAt: string,
 ): Promise<void> {
+  // Nothing priced ⟹ the merge would return null anyway, so skip the read
+  // rather than spend a KV request to confirm it. This is not hypothetical: in
+  // task #140 the whole Base desk went dark (dexPrice silently nulling), which
+  // is precisely the state that would otherwise burn 288 reads/day producing
+  // nothing — against the Upstash cap that has now suspended this engine three
+  // times (#148, #123).
+  if (!rows.some(isPriced)) return;
+
   const day = yyyymmdd(new Date(startedAt));
 
   const probe = await kvGetProbe<BaseSeriesDay>(kvBaseSeriesDay(day));
