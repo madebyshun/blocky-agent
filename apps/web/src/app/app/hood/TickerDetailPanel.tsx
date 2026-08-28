@@ -3,17 +3,30 @@
 /**
  * Blue Hood — row-expand detail panel (T-B2).
  *
- * Fetches `/api/hood/ticker-detail?ticker=X` lazily on first mount for
- * that ticker (accordion pattern above collapses the previous panel, so
+ * Fetches `/api/hood/ticker-detail?ticker=X&chain=C` lazily on first mount for
+ * that row (accordion pattern above collapses the previous panel, so
  * we only ever have one instance mounted). Renders:
  *   • LIQUIDITY block — deepest pool, all pools, slippage strip
  *   • HOLDERS block — top 5, concentration + HHI, amber when top1 > 30%
- *   • ARROW BRIEF — inline if this ticker has an open arrow
- *   • LINKS strip — Blockscout token, deepest pool
+ *   • ARROW BRIEF — inline if this row has an open arrow
+ *   • LINKS strip — chain's own explorer, deepest pool
+ *
+ * ⚠️ `chain` IS REQUIRED AND IS NOT DECORATIVE. The two upstream tools take a
+ * BARE TICKER and read Robinhood Chain only, so before this prop existed every
+ * Base row rendered RH pools, RH TVL, RH holders and an RH slippage table under
+ * a BASE badge — NVDA showed $109.52M against $1.71M in its own row. What the
+ * panel may show per chain is decided in `blue-hood/detail-support.ts`, which is
+ * dependency-free precisely so a script can test it; this file is a `"use
+ * client"` tree nothing can import. Do not re-derive the decision here.
  */
 
 import { useEffect, useState } from "react";
-import type { Arrow } from "@/lib/blue-hood/types";
+import type { Arrow, HoodChain } from "@/lib/blue-hood/types";
+import {
+  detailPanelPlan,
+  explorerAddressUrl,
+  explorerTokenUrl,
+} from "@/lib/blue-hood/detail-support";
 
 const BORDER = "#1A1A2E";
 const SURFACE = "#0B0D13";
@@ -62,26 +75,35 @@ interface Detail {
 
 export default function TickerDetailPanel({
   ticker,
+  chain,
   contract,
   openArrow,
 }: {
   ticker: string;
+  chain: HoodChain;
   contract: string;
   openArrow: Arrow | null;
 }) {
+  const plan = detailPanelPlan(chain);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [cache, setCache] = useState<boolean>(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    // No source for this chain ⟹ do not call. Fetching and then hiding would
+    // still burn two 15s tool calls AND leave the provenance line below saying
+    // "fresh · updated 5s ago", which asserts a measurement on THIS desk that
+    // never happened. The absence has to go all the way down.
+    if (!detailPanelPlan(chain).fetch) return;
     let cancelled = false;
     setDetail(null);
     setErr(null);
     (async () => {
       try {
-        const r = await fetch(`/api/hood/ticker-detail?ticker=${encodeURIComponent(ticker)}`, {
-          cache: "no-store",
-        });
+        const r = await fetch(
+          `/api/hood/ticker-detail?ticker=${encodeURIComponent(ticker)}&chain=${encodeURIComponent(chain)}`,
+          { cache: "no-store" },
+        );
         const body = await r.json() as { ok: boolean; detail?: Detail; cache?: boolean; error?: string };
         if (cancelled) return;
         if (body.ok && body.detail) {
@@ -95,7 +117,39 @@ export default function TickerDetailPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [ticker]);
+  }, [ticker, chain]);
+
+  // Skipped chain: render the frame, the honest notes, and the open arrow —
+  // which IS chain-correct, being matched on `chainOf` by the parent. Returning
+  // null instead would drop a real, measured block along with the missing ones.
+  if (!plan.fetch) {
+    return (
+      <div className="flex flex-col gap-4 text-[12px]">
+        <div className="flex items-center gap-3 font-mono text-[10px]" style={{ color: MUTED }}>
+          <span>{chain} desk</span>
+          <a
+            href={explorerTokenUrl(chain, contract)}
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto hover:text-white"
+          >
+            contract ↗
+          </a>
+        </div>
+        <Section label="// LIQUIDITY">
+          <p className="font-mono text-[11px] leading-relaxed" style={{ color: MUTED }}>
+            {plan.liquidityNote}
+          </p>
+        </Section>
+        <Section label="// HOLDERS">
+          <p className="font-mono text-[11px] leading-relaxed" style={{ color: MUTED }}>
+            {plan.holdersNote}
+          </p>
+        </Section>
+        <OpenArrowSection openArrow={openArrow} />
+      </div>
+    );
+  }
 
   if (err) {
     return (
@@ -118,7 +172,7 @@ export default function TickerDetailPanel({
         <span>·</span>
         <span>updated {relTime(detail.fetched_at)}</span>
         <a
-          href={liq?.explorer_url ?? `https://robinhoodchain.blockscout.com/token/${contract}`}
+          href={liq?.explorer_url ?? explorerTokenUrl(chain, contract)}
           target="_blank"
           rel="noreferrer"
           className="ml-auto hover:text-white"
@@ -219,7 +273,7 @@ export default function TickerDetailPanel({
                   <li key={h.address ?? i} className="font-mono text-[11px] flex items-center gap-3">
                     <span className="text-slate-500 tabular-nums">{i + 1}.</span>
                     <a
-                      href={h.address ? `https://robinhoodchain.blockscout.com/address/${h.address}` : "#"}
+                      href={h.address ? explorerAddressUrl(chain, h.address) : "#"}
                       target="_blank"
                       rel="noreferrer"
                       className="text-slate-300 hover:text-white truncate max-w-[240px]"
@@ -244,34 +298,47 @@ export default function TickerDetailPanel({
         )}
       </Section>
 
-      {/* Inline open arrow brief — sourced from parent to avoid a second fetch */}
-      {openArrow && (
-        <Section label={`// OPEN ARROW · ${openArrow.serial}`}>
-          {openArrow.brief ? (
-            <div className="flex flex-col gap-1.5">
-              <div className="font-mono text-white leading-relaxed">{openArrow.brief.verdict_note}</div>
-              {openArrow.brief.one_line_context && (
-                <div className="italic" style={{ color: "#cbd5e1" }}>&ldquo;{openArrow.brief.one_line_context}&rdquo;</div>
-              )}
-              <div className="font-mono text-[10px]" style={{ color: MUTED }}>
-                brief · {openArrow.brief.llm_provider ?? "no LLM"} · {relTime(openArrow.brief.fetched_at)}
-              </div>
-            </div>
-          ) : (
-            <div className="font-mono text-[11px]" style={{ color: MUTED }}>
-              open arrow · no brief attached (A4 unavailable at fire time)
-            </div>
-          )}
-          <div className="mt-1 font-mono text-[11px]" style={{ color: RH_GREEN }}>
-            {openArrow.type.toUpperCase()} {openArrow.expected_direction === "up" ? "↑" : openArrow.expected_direction === "down" ? "↓" : ""} · ref ${openArrow.reference_price.toFixed(2)} · grading window {openArrow.grading_window_h}h
-          </div>
-        </Section>
-      )}
+      <OpenArrowSection openArrow={openArrow} />
     </div>
   );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
+
+/**
+ * Inline open-arrow brief — sourced from the parent to avoid a second fetch.
+ *
+ * Extracted so the skipped-chain branch renders THE SAME component rather than
+ * a copy: this block is chain-correct already (the parent matches on `chainOf`,
+ * not on ticker), and it is the one thing a Base row has a real source for. A
+ * duplicated JSX version would be free to drift out from under that guarantee.
+ */
+function OpenArrowSection({ openArrow }: { openArrow: Arrow | null }) {
+  if (!openArrow) return null;
+  return (
+    <Section label={`// OPEN ARROW · ${openArrow.serial}`}>
+      {openArrow.brief ? (
+        <div className="flex flex-col gap-1.5">
+          <div className="font-mono text-white leading-relaxed">{openArrow.brief.verdict_note}</div>
+          {openArrow.brief.one_line_context && (
+            <div className="italic" style={{ color: "#cbd5e1" }}>&ldquo;{openArrow.brief.one_line_context}&rdquo;</div>
+          )}
+          <div className="font-mono text-[10px]" style={{ color: MUTED }}>
+            brief · {openArrow.brief.llm_provider ?? "no LLM"} · {relTime(openArrow.brief.fetched_at)}
+          </div>
+        </div>
+      ) : (
+        <div className="font-mono text-[11px]" style={{ color: MUTED }}>
+          open arrow · no brief attached (A4 unavailable at fire time)
+        </div>
+      )}
+      <div className="mt-1 font-mono text-[11px]" style={{ color: RH_GREEN }}>
+        {openArrow.type.toUpperCase()} {openArrow.expected_direction === "up" ? "↑" : openArrow.expected_direction === "down" ? "↓" : ""} · ref ${openArrow.reference_price.toFixed(2)} · grading window {openArrow.grading_window_h}h
+      </div>
+    </Section>
+  );
+}
+
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>

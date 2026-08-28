@@ -73,7 +73,12 @@ async function handle(req: NextRequest) {
     const t = tradable[i];
     const t0 = Date.now();
     try {
-      await fetchAndCacheDetail(t.ticker);
+      // "robinhood" is READ OFF THE SOURCE, not assumed: `tradable` is filtered
+      // from `KV_SNAPSHOT_LATEST`, which `persistSnapshot` writes for the RH
+      // desk alone — the Base desk has its own disjoint `bh:base:*` namespace
+      // (see the KV_BASE_ROWS_LATEST doc). If a Base warm pass is ever wanted it
+      // must read that key and pass "base"; it must not widen this loop.
+      await fetchAndCacheDetail("robinhood", t.ticker);
       warm.push({ ticker: t.ticker, ok: true });
       console.log(`[detail-warm] seq=${i + 1}/${tradable.length} ticker=${t.ticker} ok elapsed_ms=${Date.now() - t0}`);
     } catch (e) {
