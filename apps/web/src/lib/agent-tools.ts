@@ -1387,15 +1387,35 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
     x402Url: `${X402_BASE}/narrative-scan`,
     x402Body: () => ({}),
   },
+  // ⚠ PAUSED, AND FREE BECAUSE IT IS PAUSED. This sold for $0.05 while its
+  // input queue had been structurally unwritable since 2026-06-27: the only
+  // writer of `feed:picks:pending` is `base-token-scan`, which runs solely in
+  // the HOURLY feed cron — and that route both short-circuits on FEED_PAUSED
+  // and has had no scheduler at all since its GH Actions workflow was deleted
+  // 2026-07-17. Both KV keys aged out (pending 7d, history 30d) in July. So a
+  // paying caller could only ever receive an empty record. Charging for a
+  // measurement the system cannot take is the same dishonesty as #143/#144/
+  // #145, with money attached.
+  //
+  // Kept listed rather than deleted so the tool declares its own state instead
+  // of silently vanishing, and so catalog count == handler count still holds.
+  // `priceUnits === 0` is an explicitly supported path in
+  // api/x402/[tool]/route.ts (see the `!priceUnits` warnings there).
+  //
+  // ⚠ THIS TEXT IS STATIC and cannot read FEED_PAUSED — agent-tools.ts is
+  // imported by client components, so pulling in the cron module would drag
+  // @/lib/kv into the browser bundle. Resuming the feed therefore means
+  // updating this entry BY HAND. (The handler's own `reason` string does read
+  // the flag, so that half self-corrects.)
   {
     id: "picks-check",
-    name: "Signal Track Record",
-    description: "Measures base-token-scan signal filter accuracy 22h after detection. WIN/LOSS = filter direction correct, not trading profit. Not financial advice.",
+    name: "Signal Track Record (paused)",
+    description: "PAUSED — Blue Feed stopped writing the signal queue on 2026-06-27, so this returns an EMPTY record, not a measured one. Free while paused. When running it measures base-token-scan filter accuracy 22h after detection; WIN/LOSS = filter direction correct, not trading profit. Not financial advice.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "signal",
     inputs: [],
     isComposite: false,
-    price: "$0.05", priceUSDC: 50000,
+    price: "$0.00", priceUSDC: 0,
     x402Url: `${X402_BASE}/picks-check`,
     x402Body: () => ({}),
   },
