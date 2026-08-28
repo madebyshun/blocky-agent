@@ -315,6 +315,15 @@ export async function fireArrow(
   // async-brief guard is lifted. Push stays hard-gated on origin==="engine"
   // inside `pushArrowToAll` + brief-worker; forceBrief cannot cross that.
   const skipAsync = (opts.test || origin === "seeded") && !opts.forceBrief;
+  // ⚠️ DO NOT add `|| chain !== "robinhood"` here. A Base arrow must NOT get an
+  // RH brief (A4 is Robinhood-only and takes a bare ticker — see
+  // `brief.ts::hasBriefPath`), but this flag is the wrong lever: the brief
+  // QUEUE is also the delivery rail for the chat card, the Web Push fan-out and
+  // the watchlist alerts (`brief-worker` lines ~169/177/onward). Skipping the
+  // enqueue would decline the brief AND silently mute the entire Base desk —
+  // arrows firing that nobody is ever told about, which is a far worse failure
+  // than a missing paragraph. The chain gate lives inside `fetchArrowBrief`
+  // instead, so Base arrows ride these rails and simply land `brief: null`.
   const row = opts.row;
   const arrow: Arrow = {
     id,

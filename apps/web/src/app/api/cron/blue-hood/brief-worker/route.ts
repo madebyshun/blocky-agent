@@ -24,13 +24,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kvGet, kvSet } from "@/lib/kv";
 import { KV_BRIEF_QUEUE, kvArrow } from "@/lib/blue-hood/kv-keys";
-import { fetchArrowBrief } from "@/lib/blue-hood/brief";
+import { fetchArrowBrief, hasBriefPath } from "@/lib/blue-hood/brief";
 import { pushArrowToAll } from "@/lib/blue-hood/push";
 import { writeChatCard } from "@/lib/blue-hood/chat-card";
 import { emitAlertsForArrow, type AlertHealthGate } from "@/lib/blue-hood/alerts";
 import { computeEngineHealth } from "@/lib/blue-hood/health";
 import { onArrowUpdated } from "@/lib/blue-hood/arrow-cache";
-import type { Arrow } from "@/lib/blue-hood/types";
+import { chainOf, type Arrow } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -49,7 +49,16 @@ interface WorkerRowResult {
   arrow_id: string;
   serial?: string;
   ticker?: string;
-  status: "attached" | "failed" | "skipped_missing" | "skipped_already_done";
+  /**
+   * The WORKER's report on this queue entry — deliberately NOT the same
+   * vocabulary as `Arrow["brief_status"]`, which is the state persisted on the
+   * arrow. They overlap on "attached"/"failed" and diverge on the skips,
+   * because the worker distinguishes WHY it skipped and the arrow record does
+   * not care. Keep them separate: reusing `skipped_already_done` for a Base
+   * arrow would put a false cause in the ops log — the same bug this PR fixes
+   * one layer down, where "failed" was a false cause in the UI.
+   */
+  status: "attached" | "failed" | "skipped_missing" | "skipped_already_done" | "skipped_no_brief_path";
   llm_chain?: string;
   push_delivered?: number;
   push_gone?: number;
@@ -76,11 +85,22 @@ async function processOne(id: string, health: AlertHealthGate): Promise<WorkerRo
   }
   const workerAt = new Date().toISOString();
 
+  // The arrow's own chain, not a literal. `chainOf` supplies the documented
+  // absent⟹"robinhood" default that keeps every pre-Base arrow behaving
+  // byte-identically.
+  const arrowChain = chainOf(arrow);
+  // Whether a wrong-chain brief is even possible for this arrow. Split out
+  // from `brief === null` because the two mean different things downstream:
+  // "A4 was asked and could not answer" vs "A4 was never the right thing to
+  // ask". Conflating them is how a Base arrow ends up telling a reader that
+  // the LLM chain failed, when in truth we deliberately declined.
+  const briefable = hasBriefPath(arrowChain);
+
   // Attempt brief. `fetchArrowBrief` never throws by contract — it
   // returns null on failure — but wrap in try just in case.
   let brief: Awaited<ReturnType<typeof fetchArrowBrief>> = null;
   try {
-    brief = await fetchArrowBrief(arrow.ticker);
+    brief = await fetchArrowBrief(arrow.ticker, arrowChain);
   } catch (e) {
     console.warn(`[brief-worker] fetch crashed for ${arrow.serial} ${arrow.ticker}: ${(e as Error).message}`);
   }
@@ -137,7 +157,18 @@ async function processOne(id: string, health: AlertHealthGate): Promise<WorkerRo
     }
   }
 
-  const finalStatus: Arrow["brief_status"] = brief ? "attached" : "failed";
+  // Three outcomes, not two. `"failed"` is a claim — the UI renders it as "A4
+  // chain failed for this arrow" — and that claim is false for a desk we never
+  // asked. A Base arrow lands `"skipped"`: no brief, and no invented reason for
+  // why. (Everything BELOW this line still runs for it — chat card, push
+  // fan-out, watchlist alerts. Declining the brief must not mute the desk.)
+  // `Extract` rather than the full `Arrow["brief_status"]`: it still fails the
+  // build if any of these three stops being a legal arrow status (catching a
+  // typo or a renamed enum member), but it excludes "pending", which this line
+  // provably never produces. The narrower type is what lets the worker-report
+  // mapping below be exhaustive instead of needing a dead default arm.
+  const finalStatus: Extract<Arrow["brief_status"], "attached" | "failed" | "skipped"> =
+    brief ? "attached" : briefable ? "failed" : "skipped";
   const enriched: Arrow = {
     ...arrow,
     brief: brief ?? null,
@@ -201,7 +232,11 @@ async function processOne(id: string, health: AlertHealthGate): Promise<WorkerRo
     arrow_id: id,
     serial: enriched.serial,
     ticker: enriched.ticker,
-    status: finalStatus,
+    // Translate arrow-state → worker-report. Not an alias: `finalStatus`
+    // "skipped" collapses every no-brief-on-purpose case, while the worker log
+    // wants the specific reason. `skipped_no_brief_path` is counted by the
+    // `startsWith("skipped")` aggregate below with no further wiring.
+    status: finalStatus === "skipped" ? "skipped_no_brief_path" : finalStatus,
     llm_chain: chainStr,
     push_delivered: deliveryStats.delivered,
     push_gone: deliveryStats.gone,
