@@ -13,7 +13,7 @@
  * and diffs against the stored snapshot. No cron, no push — zero new infra.
  */
 
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import { inspectB20 } from "@/lib/b20/inspect";
 import {
   snapshotFromInspection,
@@ -34,13 +34,20 @@ const EXPLORER: Record<Network, string> = {
 
 const key = (wallet: string) => `b20:watch:${wallet.toLowerCase()}`;
 
-async function load(wallet: string): Promise<WatchItem[]> {
-  const raw = await kvGet<WatchItem[] | string>(key(wallet));
+/**
+ * Rows are written as a JSON string (see `save`), but @vercel/kv sometimes hands
+ * one back already deserialized — so both shapes have to be tolerated on read.
+ */
+function parseItems(raw: WatchItem[] | string | null | undefined): WatchItem[] {
   if (!raw) return [];
   if (typeof raw === "string") {
     try { return JSON.parse(raw) as WatchItem[]; } catch { return []; }
   }
   return Array.isArray(raw) ? raw : [];
+}
+
+async function load(wallet: string): Promise<WatchItem[]> {
+  return parseItems(await kvGet<WatchItem[] | string>(key(wallet)));
 }
 
 async function save(wallet: string, items: WatchItem[]): Promise<void> {
@@ -80,51 +87,77 @@ export async function listWatch(wallet: string): Promise<WatchEntryStatus[]> {
 /**
  * Add a token to the wallet's watchlist. Validates it is a real B20, captures
  * the baseline snapshot, dedups by address+network. Returns the refreshed list.
+ *
+ * `list: null` means "could not read the store" — the caller must keep whatever
+ * it is already showing rather than render an empty watchlist.
  */
 export async function addWatch(
   wallet:  string,
   token:   string,
   network: Network,
   label?:  string,
-): Promise<{ ok: boolean; error?: string; list: WatchEntryStatus[] }> {
+): Promise<{ ok: boolean; error?: string; list: WatchEntryStatus[] | null }> {
   if (!ADDR_RE.test(wallet)) return { ok: false, error: "Connect a wallet first.", list: [] };
   if (!ADDR_RE.test(token))  return { ok: false, error: "Invalid token address.", list: await listWatch(wallet) };
 
-  const items = await load(wallet);
-  const addr  = token.toLowerCase();
+  const addr = token.toLowerCase();
 
-  if (items.some(i => i.address === addr && i.network === network)) {
-    return { ok: false, error: "Already on your watchlist.", list: await listWatch(wallet) };
-  }
-  if (items.length >= MAX_WATCH) {
-    return { ok: false, error: `Watchlist is full (max ${MAX_WATCH}).`, list: await listWatch(wallet) };
-  }
-
-  let info;
-  try {
-    info = await inspectB20(addr, network);
-  } catch {
+  // On-chain validation runs BEFORE the KV read/write. The old order (read →
+  // inspect → write) held a stale snapshot of the row across a slow RPC
+  // round-trip, which is precisely the window another tab's add can be lost in.
+  const info = await inspectB20(addr, network).catch(() => null);
+  if (!info) {
     return { ok: false, error: "Could not read the token on-chain. Try again.", list: await listWatch(wallet) };
   }
   if (!info.isB20) {
     return { ok: false, error: `Not a B20 token on Base ${network}.`, list: await listWatch(wallet) };
   }
 
-  const now: number = Date.now();
-  const next: WatchItem[] = [
-    {
-      address:    addr,
-      network,
-      label:      label?.trim() ? label.trim().slice(0, 40) : undefined,
-      name:       info.name,
-      symbol:     info.symbol,
-      addedAt:    now,
-      snapshot:   snapshotFromInspection(info),
-      snapshotAt: now,
-    },
-    ...items,
-  ];
-  await save(wallet, next);
+  // #150 A-part2 — the dedup/cap read and the write were the same key. A
+  // throttled read returned `[]`, so the dedup found nothing, the cap check
+  // passed, and the write replaced up to 24 other watched tokens with this one.
+  // The user's only symptom is a watchlist that quietly got shorter.
+  //
+  // Dedup and cap now live INSIDE the mutate so they are decided against the
+  // value actually being written, and kvMutate declines to write at all when
+  // the read failed.
+  let rejection: string | null = null;
+
+  const res = await kvMutate<WatchItem[] | string>(key(wallet), [], (raw) => {
+    const items = parseItems(raw);
+    if (items.some(i => i.address === addr && i.network === network)) {
+      rejection = "Already on your watchlist.";
+      return null;
+    }
+    if (items.length >= MAX_WATCH) {
+      rejection = `Watchlist is full (max ${MAX_WATCH}).`;
+      return null;
+    }
+    const now: number = Date.now();
+    const next: WatchItem[] = [
+      {
+        address:    addr,
+        network,
+        label:      label?.trim() ? label.trim().slice(0, 40) : undefined,
+        name:       info.name,
+        symbol:     info.symbol,
+        addedAt:    now,
+        snapshot:   snapshotFromInspection(info),
+        snapshotAt: now,
+      },
+      ...items,
+    ];
+    return JSON.stringify(next.slice(0, MAX_WATCH));
+  });
+
+  if (res === "skipped" || res === "failed") {
+    // Never say "added" for a write we may not have made, and never hand back
+    // an empty list as if that were the user's watchlist.
+    return { ok: false, error: "Watchlist store unavailable — nothing was added. Retry shortly.", list: null };
+  }
+  if (rejection) {
+    return { ok: false, error: rejection, list: await listWatch(wallet) };
+  }
   return { ok: true, list: await listWatch(wallet) };
 }
 

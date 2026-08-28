@@ -15,7 +15,7 @@
 import { callLLM, extractJsonObject } from "@/app/api/_lib/llm";
 import { getBaseTrending }                   from "@/lib/market-data";
 import { filterScamPools }                   from "./_scam-filter";
-import { kvGet, kvSet }                      from "@/lib/kv";
+import { kvMutate }                          from "@/lib/kv";
 
 const KV_KEY            = "feed:narratives";
 const FADING_THRESHOLD  = 8  * 3_600_000; // 8 h
@@ -96,42 +96,67 @@ export default async function handler(_req: Request): Promise<Response> {
       (n) => Array.isArray(n.tokens) && n.tokens.some((t) => realTokens.has(t.toUpperCase()))
     );
 
-    const now     = Date.now();
-    const history = (await kvGet<NarrativeHistory>(KV_KEY)) ?? {};
+    const now       = Date.now();
     const seenNames = new Set(grounded.map((n) => n.name));
 
-    // Update history for seen narratives
-    for (const n of grounded) {
-      const prev = history[n.name];
-      history[n.name] = {
-        first_seen:  prev?.first_seen ?? now,
-        last_seen:   now,
-        scan_count:  (prev?.scan_count ?? 0) + 1,
-        tokens:      n.tokens,
-      };
-    }
-
-    // Detect fading — not seen for ≥ 8h → emit once, then prune
+    // #150 A-part2 — the history read and write are the SAME key, and the whole
+    // point of this handler is the accumulation. A throttled read gave `{}`, so:
+    //   • every narrative got `first_seen: now, scan_count: 1` → derivePhase
+    //     labelled a week-old narrative "Emerging" — a fabricated lifecycle
+    //     stage published straight into the feed;
+    //   • the fading sweep saw an empty map, so nothing was ever pruned;
+    //   • the write then replaced 7 days of tracking with this one scan.
+    // kvMutate refuses to write when the read failed, and the mutate body never
+    // runs — so `history` stays empty and `tracked` is false, which is exactly
+    // the signal the output builder below needs.
+    let history: NarrativeHistory = {};
     const fadingNarratives: Array<{ name: string; phase: string }> = [];
-    for (const [name, entry] of Object.entries(history)) {
-      if (!seenNames.has(name) && now - entry.last_seen >= FADING_THRESHOLD) {
-        fadingNarratives.push({ name, phase: "Fading" });
-        delete history[name];
+
+    const histRes = await kvMutate<NarrativeHistory>(KV_KEY, {}, (prev) => {
+      history = prev;
+
+      // Update history for seen narratives
+      for (const n of grounded) {
+        const before = history[n.name];
+        history[n.name] = {
+          first_seen:  before?.first_seen ?? now,
+          last_seen:   now,
+          scan_count:  (before?.scan_count ?? 0) + 1,
+          tokens:      n.tokens,
+        };
       }
+
+      // Detect fading — not seen for ≥ 8h → emit once, then prune
+      for (const [name, entry] of Object.entries(history)) {
+        if (!seenNames.has(name) && now - entry.last_seen >= FADING_THRESHOLD) {
+          fadingNarratives.push({ name, phase: "Fading" });
+          delete history[name];
+        }
+      }
+
+      return history;
+    }, 7 * 24 * 3600);
+
+    const tracked = histRes === "ok";
+    if (!tracked) {
+      console.error(`[narrative-scan] history NOT persisted (${histRes}) — lifecycle fields reported as unknown for this scan`);
     }
 
-    // Persist updated history (7-day TTL)
-    await kvSet(KV_KEY, history, 7 * 24 * 3600);
-
-    // Build output
-    const narratives = grounded.map((n) => ({
-      name:         n.name,
-      phase:        derivePhase(history[n.name]),
-      tokens:       n.tokens.filter((t) => realTokens.has(t.toUpperCase())),
-      rationale:    n.rationale,
-      scan_count:   history[n.name].scan_count,
-      first_seen_ms:history[n.name].first_seen,
-    }));
+    // Build output. `phase` / `scan_count` / `first_seen_ms` are lifecycle facts
+    // that only exist because of the KV history — with no history they are
+    // unknown, NOT "Emerging"/1/now. A narrative that has run for a week must
+    // never be published as brand-new just because a read timed out.
+    const narratives = grounded.map((n) => {
+      const entry = tracked ? history[n.name] : undefined;
+      return {
+        name:         n.name,
+        phase:        entry ? derivePhase(entry) : null,
+        tokens:       n.tokens.filter((t) => realTokens.has(t.toUpperCase())),
+        rationale:    n.rationale,
+        scan_count:   entry?.scan_count  ?? null,
+        first_seen_ms:entry?.first_seen  ?? null,
+      };
+    });
 
     const allNarratives = [...narratives, ...fadingNarratives];
 
@@ -150,9 +175,13 @@ export default async function handler(_req: Request): Promise<Response> {
       tool:         "narrative-scan",
       narratives:   allNarratives,
       count:        narratives.length,
-      fading:       fadingNarratives.length,
+      // Fading detection is a history query. Untracked → unknown, not "none
+      // faded" — 0 here would read as a positive finding.
+      fading:       tracked ? fadingNarratives.length : null,
       top:          narratives[0]?.name ?? null,
       scanned_pools: pools.length,
+      lifecycle_tracked: tracked,
+      ...(tracked ? {} : { code: "kv_unavailable", note: "Narrative history unavailable — phases and scan counts are unknown for this scan, and nothing was written." }),
       dataSource:   "GeckoTerminal + Virtuals LLM (narrative labelling)",
       timestamp:    new Date().toISOString(),
     });
