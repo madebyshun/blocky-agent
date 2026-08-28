@@ -35,6 +35,7 @@ import { usePolling } from "@/hooks/usePolling";
 import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow, HoodChain } from "@/lib/blue-hood/types";
 import { chainOf, rowKey, ARB_MIN_ABS_PCT, DRIFT_MIN_ABS_PCT } from "@/lib/blue-hood/types";
 import { closedAlignedLabel, oracleRoundAgeText } from "@/lib/blue-hood/oracle-age";
+import { explorerTokenUrl } from "@/lib/blue-hood/detail-support";
 import HoodSidebar from "./HoodSidebar";
 import TickerDetailPanel from "./TickerDetailPanel";
 import ArrowBriefBlock from "./ArrowBriefBlock";
@@ -1111,7 +1112,18 @@ function DriftRow({
       {expanded && (
         <tr style={{ borderBottom: "1px solid #0f1218" }}>
           <td colSpan={8} className="px-4 py-3" style={{ backgroundColor: "#07090e" }}>
-            <TickerDetailPanel ticker={r.ticker} contract={r.contract} openArrow={openArrow} />
+            {/* `chain` is load-bearing — see the header of TickerDetailPanel. The
+              panel's two data blocks resolve by BARE TICKER against RH-only
+              tools, so without this the Base rows rendered the RH token's
+              pools/holders under a BASE badge. Same defect family as the
+              open-arrow lookup above, which is why both now key off chainOf(r)
+              rather than r.ticker. */}
+          <TickerDetailPanel
+            ticker={r.ticker}
+            chain={chainOf(r)}
+            contract={r.contract}
+            openArrow={openArrow}
+          />
           </td>
         </tr>
       )}
@@ -1588,10 +1600,13 @@ function formatUsd(n: number | null | undefined): string {
 // (8453); an RH token on the RH Blockscout (4663). The Base contract does not
 // exist on RH's explorer, so this must key off the row's chain, never a
 // hardcoded host.
+//
+// The host mapping itself now lives in `blue-hood/detail-support.ts`. It was
+// duplicated here and in TickerDetailPanel, and the copy in the panel was the
+// one that had never been chain-aware — two copies, one of them wrong, is the
+// shape #308 fixed at this call site and missed one expand-panel away.
 function tokenExplorerUrl(r: TickerSnapshot): string {
-  return chainOf(r) === "base"
-    ? `https://basescan.org/token/${r.contract}`
-    : `https://robinhoodchain.blockscout.com/token/${r.contract}`;
+  return explorerTokenUrl(chainOf(r), r.contract);
 }
 
 // Base P — GeckoTerminal indexes both desks: Aerodrome pools under `base`, the
