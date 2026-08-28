@@ -84,6 +84,52 @@ export const kvArrowTickerCooldown = (ticker: string, chain: HoodChain = "robinh
 /** Rolling list of all arrow ids (newest first) — used by /hood feed + hit-rate math. */
 export const KV_ARROW_FEED = "bh:arrow:feed";
 
+/**
+ * #148 ② — the HYDRATED arrow feed: one KV value holding the newest
+ * `ARROW_HYDRATED_MAX` arrow RECORDS, not just their ids.
+ *
+ * WHY: reading the feed used to cost `1 + N` commands — one for the id index
+ * above, then one per arrow. At N≈200 that is ~401 commands PER REQUEST, and
+ * four pollers hit it every 15s. That fan-out (not tab count — `s-maxage`
+ * fixed tab count in ①) is what put a 500K/month Upstash allowance on the
+ * floor three separate times. Through this key the same read costs **1**.
+ *
+ * This is a CACHE, never the source of truth. `bh:arrow:feed` +
+ * `bh:arrow:{id}` remain authoritative; this key is rebuilt from them and is
+ * safe to delete at any moment. Deleting it costs one rebuild, never data.
+ * Same precedent as `KV_TICKER_CONFIDENCE` — recompute-per-request is the
+ * thing the budget cannot afford.
+ */
+export const KV_ARROW_HYDRATED = "bh:arrow:hydrated";
+
+/**
+ * How many arrow records the hydrated blob carries.
+ *
+ * 250 is derived, not taste. The widest read any caller performs is
+ * `?limit=200` (`MAX_LIMIT` on /api/hood/arrows, and what both the Inbox and
+ * Track Record pollers request), so the blob must cover 200 with headroom for
+ * the origin/test filter to cull without starving the result — hence ×1.25.
+ *
+ * The ceiling is a byte budget, and it was MEASURED (2026-08-27, live prod
+ * feed, n=200): p50 1,998 B/arrow, max 2,484 B, 394 KB total. So 250 ≈ 490 KB
+ * — under the 1 MB KV value limit with ~2× room. Do NOT raise this past ~400
+ * without re-measuring: at 600 the blob is ~1.13 MB and the write silently
+ * starts failing. If the feed needs to be deeper than this, shard the key —
+ * do not grow the value.
+ */
+export const ARROW_HYDRATED_MAX = 250;
+
+/**
+ * Backstop TTL only — freshness comes from write-time patching in
+ * `arrow-cache.ts` (fire prepends, grade patches in place), NOT from expiry.
+ *
+ * That distinction sets the number. If the TTL were the freshness mechanism it
+ * would have to be minutes, and a rebuild costs ~252 commands: at 10 min that
+ * is 36K commands/day, which re-creates the problem this key exists to solve.
+ * As a pure corruption backstop, 6h costs 4 rebuilds/day ≈ 1K commands — free.
+ */
+export const TTL_ARROW_HYDRATED = 60 * 60 * 6; // 6h
+
 /** T-B1 — hourly sparkline series per ticker. 24 close prices from M2.
  *  Refreshed by a separate cron (not the hot 72s poll cycle) so cycle
  *  time stays flat. See `sparkline-refresh` route + `getSparklineCached`. */

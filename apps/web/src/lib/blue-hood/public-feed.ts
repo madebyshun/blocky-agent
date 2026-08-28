@@ -9,7 +9,8 @@
  * list this returns; they never re-derive the filter.
  */
 import { kvGet } from "@/lib/kv";
-import { KV_ARROW_FEED, kvArrow } from "@/lib/blue-hood/kv-keys";
+import { KV_ARROW_FEED, kvArrow, ARROW_HYDRATED_MAX } from "@/lib/blue-hood/kv-keys";
+import { readArrowFeed } from "@/lib/blue-hood/arrow-cache";
 import type { Arrow } from "@/lib/blue-hood/types";
 
 /**
@@ -30,12 +31,38 @@ export function isPublicArrow(a: Arrow): boolean {
   return !a.test && (!a.origin || a.origin === "engine");
 }
 
+/**
+ * Probe-shaped public read — the one callers should prefer.
+ *
+ * Distinguishes "the feed is empty" from "we could not read the feed", which
+ * `readPublicArrows` below structurally cannot. Backed by the hydrated blob
+ * (#148 ②), so this costs ONE KV command instead of the ~401-command fan-out
+ * it replaced.
+ */
+export async function readPublicArrowsProbe(
+  limit = 200,
+): Promise<
+  | { status: "ok"; arrows: Arrow[]; built_at: string; source: "cache" | "rebuild"; kv_commands: number }
+  | { status: "unavailable"; reason: string }
+> {
+  const read = await readArrowFeed();
+  if (read.status !== "ok") return read;
+  return { ...read, arrows: read.arrows.filter(isPublicArrow).slice(0, limit) };
+}
+
+/**
+ * Read the newest public arrows, most-recent first.
+ *
+ * ⚠ GROUP-B GAP, KNOWN AND DELIBERATE (#150): this returns `[]` when KV is
+ * unreachable, so its callers cannot tell an empty feed from a dead database.
+ * That is unchanged from before the cache — converting the six call sites is a
+ * separate pass. New code should call `readPublicArrowsProbe` instead; this
+ * wrapper stays so the existing importers keep compiling and still get ②'s
+ * cost fix for free.
+ */
 export async function readPublicArrows(limit = 200): Promise<Arrow[]> {
-  const ids = ((await kvGet<string[]>(KV_ARROW_FEED)) ?? []).slice(0, limit * 3);
-  const all = (await Promise.all(ids.map((id) => kvGet<Arrow>(kvArrow(id))))).filter(
-    (a): a is Arrow => a !== null,
-  );
-  return all.filter(isPublicArrow).slice(0, limit);
+  const read = await readPublicArrowsProbe(limit);
+  return read.status === "ok" ? read.arrows : [];
 }
 
 /** Count of public arrows fired in the last 24 wall-clock hours. */
@@ -62,14 +89,30 @@ export function serialKey(serial: string): number | null {
  * serial. The trust boundary (`isPublicArrow`) is applied identically — a
  * seeded/test arrow is never resolvable through a public permalink.
  *
- * The scan is capped at 600 ids (the same ×3 over-read discipline as
- * `readPublicArrows(200)`). The feed is unbounded in principle but ~500 in
- * practice; the share page layers ISR so this scan isn't paid per request.
+ * TWO TIERS since #148 ②. The hydrated blob covers the newest
+ * `ARROW_HYDRATED_MAX` arrows and answers almost every real share link in ONE
+ * KV command. Only a serial older than that window falls through to the
+ * original 600-id scan — correctness is preserved for deep permalinks without
+ * paying ~601 commands for the recent ones people actually open. The share
+ * page layers ISR on top, so even the fallback isn't paid per request.
  */
 export async function getPublicArrowBySerial(serial: string): Promise<Arrow | null> {
   const wanted = serialKey(serial);
   if (wanted === null) return null;
-  const ids = ((await kvGet<string[]>(KV_ARROW_FEED)) ?? []).slice(0, 600);
+
+  const cached = await readArrowFeed();
+  if (cached.status === "ok") {
+    const hit = cached.arrows.find((a) => isPublicArrow(a) && serialKey(a.serial) === wanted);
+    if (hit) return hit;
+    // Genuinely not in the recent window — fall through to the deep scan below.
+  } else {
+    // KV just failed. Do NOT answer a failed read with 600 more reads; that is
+    // how a throttle becomes a suspension. Report "not found" — same as today.
+    console.error(`[public-feed] serial ${serial}: ${cached.reason}`);
+    return null;
+  }
+
+  const ids = ((await kvGet<string[]>(KV_ARROW_FEED)) ?? []).slice(0, 600).slice(ARROW_HYDRATED_MAX);
   const all = (await Promise.all(ids.map((id) => kvGet<Arrow>(kvArrow(id))))).filter(
     (a): a is Arrow => a !== null,
   );

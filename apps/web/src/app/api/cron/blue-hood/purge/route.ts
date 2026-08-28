@@ -20,6 +20,7 @@ import {
   kvArrow,
   kvChatCard,
 } from "@/lib/blue-hood/kv-keys";
+import { invalidateArrowCache } from "@/lib/blue-hood/arrow-cache";
 import type { Arrow } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -87,9 +88,18 @@ export async function POST(req: NextRequest) {
   await kvSet(KV_ARROW_FEED, []);
   await kvSet(KV_ARROW_SERIAL_COUNTER, 0);
 
+  // #148 ② — the hydrated read-cache holds full copies of the arrows we just
+  // deleted. Without this drop, a "clean slate" purge would keep serving the
+  // OLD track record from `bh:arrow:hydrated` for up to TTL_ARROW_HYDRATED (6h)
+  // while `bh:arrow:*` is already gone — i.e. the one operation whose entire
+  // purpose is "reset to zero" would visibly fail to reset anything.
+  // Drop, don't rebuild: rebuilding here would just re-read the empty index.
+  await invalidateArrowCache();
+
   return NextResponse.json({
     ok: true,
     arrows_deleted: deleted,
+    hydrated_cache_dropped: true,
     open_indexes_cleared,
     chat_cards_cleared,
     chat_feed_reset: true,

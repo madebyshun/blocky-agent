@@ -28,6 +28,7 @@
  * All outcomes are hard-mapped in code; the LLM never sees these.
  */
 import { kvGet, kvSet } from "@/lib/kv";
+import { onArrowUpdated, invalidateArrowCache } from "./arrow-cache";
 import { callTool } from "./tool-caller";
 import {
   kvArrow,
@@ -165,6 +166,11 @@ export async function runGrader(): Promise<GraderReport> {
       const nowIso = new Date().toISOString();
       const closed: Arrow = { ...arrow, status: "graded", outcome: outcome.outcome, graded_at: nowIso, outcome_detail: outcome.detail, grading_math: outcome.math ?? null };
       await kvSet(kvArrow(id), closed);
+      // #148 ② — patch the hydrated read-cache in place so the public hit rate
+      // reflects this grade immediately instead of waiting on the blob's TTL.
+      // Best-effort by construction: a failed patch drops the blob, and the
+      // next reader rebuilds from the record we just wrote above.
+      await onArrowUpdated(closed);
       // Clear both open indexes so a new arrow can fire on this ticker.
       // Keys are chain-qualified (Base P3) — clearing must use the SAME chain
       // the arrow fired on, or a Base close would wrongly free the RH ticker's
@@ -256,6 +262,10 @@ export async function backfillVoidGrades(): Promise<BackfillReport> {
       console.warn(`[grader-backfill] crash on ${id}: ${(e as Error).message}`);
     }
   }
+  // #148 ② — backfills rewrite arbitrarily OLD arrows in bulk, so one blob
+  // drop is both cheaper and more correct than N in-place patches (rows older
+  // than the blob's window aren't in it to patch). Invalidate once, at the end.
+  if (voided_ids.length) await invalidateArrowCache();
   console.log(`[grader-backfill] scanned=${scanned} voided=${voided_ids.length}`);
   return { scanned, voided: voided_ids.length, voided_ids };
 }
@@ -360,6 +370,8 @@ export async function backfillDriftRegrade(): Promise<DriftRegradeReport> {
     }
   }
 
+  // Same reasoning as `backfillVoidGrades` — one drop beats N patches here.
+  if (regraded) await invalidateArrowCache();
   console.log(`[drift-regrade] scanned=${scanned} regraded=${regraded} flipped=${flipped_ids.length} unmeasurable=${unmeasurable}`);
   return { scanned, regraded, flipped: flipped_ids.length, flipped_ids, unmeasurable };
 }
