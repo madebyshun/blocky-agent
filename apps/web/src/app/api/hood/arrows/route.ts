@@ -25,6 +25,12 @@
  * could perceive. `max-age=0` keeps the BROWSER revalidating every time, so
  * the shared edge cache is the only thing serving stale, never a private one.
  *
+ * ① and ② both attacked REQUEST COUNT. What was left is per-response SIZE:
+ * `?limit=200` — the URL the Inbox and the Track Record both poll — ships
+ * 49,771 B gzip, of which 26.3% is four fields no client renders. The default
+ * list now omits them and says so in the payload; `?fields=full` returns the
+ * complete record. Nothing is deleted — see lib/blue-hood/arrow-fields.ts.
+ *
  * ⚠ THIS ROUTE CAN NOW 503. It could not before ②, and the reasoning below
  * changed with it — read the CACHE_CONTROL note rather than assuming.
  */
@@ -32,6 +38,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readArrowFeed } from "@/lib/blue-hood/arrow-cache";
 import { isPublicArrow } from "@/lib/blue-hood/public-feed";
 import { computeHitRate } from "@/lib/blue-hood/hit-rate-gate";
+import { parseArrowFieldMode, projectArrows, omittedFieldsNote } from "@/lib/blue-hood/arrow-fields";
 
 export const runtime = "nodejs";
 
@@ -69,6 +76,13 @@ export async function GET(req: NextRequest) {
     MAX_LIMIT,
     Math.max(1, parseInt(url.searchParams.get("limit") ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT),
   );
+
+  // Default list drops four audit/provenance fields no client renders — 26.3%
+  // of a `?limit=200` response, which is the URL both the Inbox and the Track
+  // Record poll. `?fields=full` returns everything. See lib/blue-hood/
+  // arrow-fields.ts for the measurement and for why this is a projection and
+  // not a deletion. The CDN keys on the full URL, so the two modes cache apart.
+  const fieldMode = parseArrowFieldMode(url.searchParams);
 
   // ONE KV command (#148 ②). The blob already holds the newest
   // ARROW_HYDRATED_MAX records, so the old "over-read the id list ×3 so the
@@ -121,7 +135,14 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(
     {
       ok: true,
-      arrows: arrows.slice(0, limit),
+      // Hit rate is computed from the UNPROJECTED arrows above — the trim must
+      // never be able to move a published number. It can't today (the four
+      // fields aren't inputs to `computeHitRate`), and this ordering keeps that
+      // true if one ever becomes one.
+      arrows: projectArrows(arrows.slice(0, limit), fieldMode),
+      // Self-describing: the response names what it withheld and how to get it.
+      // An escape hatch nobody can discover is not an escape hatch.
+      ...omittedFieldsNote(fieldMode),
       arrows_today,
       hit_rate,
       per_type,
