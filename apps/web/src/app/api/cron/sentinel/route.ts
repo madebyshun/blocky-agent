@@ -16,7 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet, kvSetNX } from "@/lib/kv";
+import { kvGet, kvSet, kvSetNX, kvMutate } from "@/lib/kv";
 import { THREAT_CATALOG } from "@/lib/sentinel/catalog";
 import {
   SENTINEL_KV,
@@ -101,9 +101,17 @@ function resolveThreatName(indicators: string[], fallback: string): string {
 // ─── Scan log ─────────────────────────────────────────────────────────────────
 
 async function persistScanLog(entry: ScanLog): Promise<void> {
-  const existing = (await kvGet<ScanLog[]>(SENTINEL_KV.scanLogs)) ?? [];
-  const updated  = [entry, ...existing].slice(0, SCAN_CONFIG.maxScanLogs);
-  await kvSet(SENTINEL_KV.scanLogs, updated, SENTINEL_TTL.scanLogs);
+  // #150 A-part2 — read-modify-write on the SAME key. A throttled read gave
+  // `[]`, so this wrote back `[entry]` and erased the whole scan history. On a
+  // cron that runs every few minutes, one throttled tick used to cost every
+  // log line ever recorded. Skipping one append costs one line.
+  const res = await kvMutate<ScanLog[]>(
+    SENTINEL_KV.scanLogs,
+    [],
+    (existing) => [entry, ...existing].slice(0, SCAN_CONFIG.maxScanLogs),
+    SENTINEL_TTL.scanLogs,
+  );
+  if (res === "skipped") console.error("[sentinel] scan log NOT appended — KV read failed");
 }
 
 // ─── Batch scanner (rate-limit) ───────────────────────────────────────────────
@@ -608,29 +616,51 @@ export async function GET(req: NextRequest) {
     await recordFindings(allFindings);
 
     // 5. Persist findings — dedup by target+threatId before saving
-    const existing = (await kvGet<Finding[]>(SENTINEL_KV.findings)) ?? [];
-    const seenKeys = new Set<string>();
-    const merged   = [...allFindings, ...existing]
-      .filter(f => {
-        const k = `${f.target.toLowerCase()}:${f.threatId}`;
-        if (seenKeys.has(k)) return false;
-        seenKeys.add(k);
-        return true;
-      })
-      .slice(0, SCAN_CONFIG.maxFindings);
-    await kvSet(SENTINEL_KV.findings, merged, SENTINEL_TTL.findings);
+    // #150 A-part2: was `kvGet ?? []` → merge → kvSet the SAME key, so a
+    // throttled read discarded every previously-stored finding and wrote back
+    // only what this single scan happened to produce.
+    const findingsRes = await kvMutate<Finding[]>(SENTINEL_KV.findings, [], (existing) => {
+      const seenKeys = new Set<string>();
+      return [...allFindings, ...existing]
+        .filter(f => {
+          const k = `${f.target.toLowerCase()}:${f.threatId}`;
+          if (seenKeys.has(k)) return false;
+          seenKeys.add(k);
+          return true;
+        })
+        .slice(0, SCAN_CONFIG.maxFindings);
+    }, SENTINEL_TTL.findings);
+    if (findingsRes === "skipped") log.push("⚠ findings NOT persisted — KV read failed");
 
     // 6. Update stats
+    // These are CUMULATIVE counters, which made this the worst site in the
+    // file: `?? { totalScans: 0, … }` followed by `++` wrote back
+    // `totalScans: 1`, resetting a lifetime total to one. A truncated list can
+    // at least be partially rebuilt from its sources; a reset counter cannot.
     type Stats = { totalScans: number; totalFindings: number; lastScan: string; totalDiscovered: number };
-    const stats = (await kvGet<Stats>(SENTINEL_KV.scanStats)) ?? {
-      totalScans: 0, totalFindings: 0, lastScan: "", totalDiscovered: 0,
-    };
-    stats.totalScans++;
-    stats.totalFindings  += allFindings.length;
-    stats.totalDiscovered = (stats.totalDiscovered ?? 0) + discovered.length;
-    stats.lastScan        = new Date().toISOString();
-    await kvSet(SENTINEL_KV.scanStats, stats, SENTINEL_TTL.scanStats);
-    await kvSet(SENTINEL_KV.scanLast, stats.lastScan);
+    const scanAt = new Date().toISOString();
+    // null, NOT a zeroed Stats. If the read failed we do not know the totals,
+    // and reporting `{ totalScans: 0 }` in the response would recreate the very
+    // "absent reads as zero" bug this task exists to remove.
+    let stats: Stats | null = null;
+
+    const statsRes = await kvMutate<Stats>(
+      SENTINEL_KV.scanStats,
+      { totalScans: 0, totalFindings: 0, lastScan: "", totalDiscovered: 0 },
+      (s) => (stats = {
+        totalScans:      s.totalScans + 1,
+        totalFindings:   s.totalFindings + allFindings.length,
+        totalDiscovered: (s.totalDiscovered ?? 0) + discovered.length,
+        lastScan:        scanAt,
+      }),
+      SENTINEL_TTL.scanStats,
+    );
+    if (statsRes === "skipped") log.push("⚠ scan stats NOT incremented — KV read failed");
+
+    // `scanLast` is a bare timestamp, not a counter — writing it is always
+    // safe, and the health probe needs it to know the cron ran at all. It must
+    // land even when the counter above was skipped.
+    await kvSet(SENTINEL_KV.scanLast, scanAt);
 
     const durationMs = Date.now() - startAt;
     log.push(`✓ done · ${durationMs}ms`);

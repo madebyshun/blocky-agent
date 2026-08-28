@@ -9,7 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvMutate } from "@/lib/kv";
 import {
   SENTINEL_KV,
   SENTINEL_TTL,
@@ -52,13 +52,28 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Missing ?id= param" }, { status: 400 });
   }
 
-  const findings = (await kvGet<Finding[]>(SENTINEL_KV.findings)) ?? [];
-  const updated  = findings.filter(f => f.id !== id);
+  // Like the sibling DELETE in ../watch: already safe from the wipe (a failed
+  // read yields `[]`, the length check matches, and it returns before the
+  // write) — but it answered "Finding not found" for "the store is down",
+  // which tells the caller to give up on a dismissal that never happened.
+  let found = false;
 
-  if (updated.length === findings.length) {
+  const res = await kvMutate<Finding[]>(SENTINEL_KV.findings, [], (findings) => {
+    const updated = findings.filter(f => f.id !== id);
+    if (updated.length === findings.length) return null; // absent — write nothing
+    found = true;
+    return updated;
+  }, SENTINEL_TTL.findings);
+
+  if (res === "skipped" || res === "failed") {
+    return NextResponse.json(
+      { error: "Findings store unavailable — nothing was dismissed. Retry shortly.", code: "kv_unavailable" },
+      { status: 503 },
+    );
+  }
+  if (!found) {
     return NextResponse.json({ error: "Finding not found" }, { status: 404 });
   }
 
-  await kvSet(SENTINEL_KV.findings, updated, SENTINEL_TTL.findings);
   return NextResponse.json({ ok: true, dismissed: id });
 }

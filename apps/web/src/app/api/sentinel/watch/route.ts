@@ -16,7 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvMutate } from "@/lib/kv";
 import {
   SENTINEL_KV,
   SENTINEL_TTL,
@@ -71,20 +71,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Load existing watches
-  const watches = (await kvGet<WatchSubscription[]>(SENTINEL_KV.watches)) ?? [];
-
-  // Dedupe — reactivate if already exists
-  const existing = watches.find(w => w.target.toLowerCase() === target.toLowerCase());
-  if (existing) {
-    existing.active = true;
-    existing.label  = (body.label as string) ?? existing.label;
-    await kvSet(SENTINEL_KV.watches, watches);
-    return NextResponse.json({ ok: true, watch: existing, reactivated: true });
-  }
-
+  // #150 A-part2 — ONE read used to feed TWO write paths, and both wrote back
+  // a `?? []` default. A throttled read made `watches` empty, the dedup lookup
+  // below then found nothing, and the append path wrote `[thisWatch]` — which
+  // deletes every other subscriber's watch. kvMutate probes instead, and
+  // refuses to write at all when the read failed.
   const alertChannels = (body.alertChannels as string[]) ?? ["telegram"];
-  const watch: WatchSubscription = {
+  const candidate: WatchSubscription = {
     id:            nanoid(),
     target,
     targetType,
@@ -96,10 +89,37 @@ export async function POST(req: NextRequest) {
     active:        true,
   };
 
-  watches.push(watch);
-  await kvSet(SENTINEL_KV.watches, watches);
+  // Which branch ran is part of the response, so it is captured out of the
+  // mutate. Re-deriving it afterwards would cost a second read — and could
+  // disagree with what was actually written.
+  let saved: WatchSubscription = candidate;
+  let reactivated = false;
 
-  return NextResponse.json({ ok: true, watch }, { status: 201 });
+  const res = await kvMutate<WatchSubscription[]>(SENTINEL_KV.watches, [], (watches) => {
+    const existing = watches.find(w => w.target.toLowerCase() === target.toLowerCase());
+    if (existing) {
+      existing.active = true;
+      existing.label  = (body.label as string) ?? existing.label;
+      saved       = existing;
+      reactivated = true;
+      return watches;
+    }
+    return [...watches, candidate];
+  });
+
+  if (res === "skipped" || res === "failed") {
+    // Never report a subscription we may not have saved. 503 not 500: the
+    // request was valid, the store was not available.
+    return NextResponse.json(
+      { error: "Watch store unavailable — subscription NOT saved. Retry shortly.", code: "kv_unavailable" },
+      { status: 503 },
+    );
+  }
+
+  return NextResponse.json(
+    { ok: true, watch: saved, reactivated },
+    { status: reactivated ? 200 : 201 },
+  );
 }
 
 // ─── GET — list watches + findings ───────────────────────────────────────────
@@ -146,18 +166,33 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Provide ?target= or ?id= param" }, { status: 400 });
   }
 
-  const watches = (await kvGet<WatchSubscription[]>(SENTINEL_KV.watches)) ?? [];
-  const match   = watches.find(w =>
-    (target && w.target.toLowerCase() === target.toLowerCase()) ||
-    (id && w.id === id)
-  );
+  // This path was already SAFE from the wipe — a failed read yields `[]`, the
+  // lookup misses, and it returns before the write. What it was not safe from
+  // is LYING: it answered "Watch not found" (404) when the truth was "the
+  // store is down and I cannot tell". On a DELETE that is the worst possible
+  // wrong answer — the caller concludes the watch is already gone and stops
+  // retrying. So the read is a probe, and "unknown" gets its own status.
+  let match: WatchSubscription | undefined;
 
+  const res = await kvMutate<WatchSubscription[]>(SENTINEL_KV.watches, [], (watches) => {
+    match = watches.find(w =>
+      (target && w.target.toLowerCase() === target.toLowerCase()) ||
+      (id && w.id === id)
+    );
+    if (!match) return null; // nothing to change — kvMutate writes nothing
+    match.active = false;
+    return watches;
+  });
+
+  if (res === "skipped" || res === "failed") {
+    return NextResponse.json(
+      { error: "Watch store unavailable — nothing was removed. Retry shortly.", code: "kv_unavailable" },
+      { status: 503 },
+    );
+  }
   if (!match) {
     return NextResponse.json({ error: "Watch not found" }, { status: 404 });
   }
-
-  match.active = false;
-  await kvSet(SENTINEL_KV.watches, watches);
 
   return NextResponse.json({ ok: true, removed: match });
 }

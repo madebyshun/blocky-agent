@@ -195,8 +195,10 @@ export default function WatchlistTab({
       const res = await addWatch(wallet, token, network, addLabel.trim() || undefined);
       if (!res.ok) { setError(res.error ?? "Could not add token."); }
       else { setAddAddr(""); setAddLabel(""); }
-      setList(res.list);
-      setLoaded(true);
+      // `list: null` = the store could not be read. Keep what is on screen —
+      // blanking it here would show the user an empty watchlist as if it were
+      // a fact, which is the same lie this whole fix is about.
+      if (res.list) { setList(res.list); setLoaded(true); }
     });
   };
 

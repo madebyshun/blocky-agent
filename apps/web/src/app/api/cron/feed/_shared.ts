@@ -10,7 +10,7 @@
  *
  * Tools run via the internal x402 bypass (X-Blue-Internal + X-Blue-Service).
  */
-import { kvGet, kvSet }              from "@/lib/kv";
+import { kvSet, kvMutate }           from "@/lib/kv";
 import { internalX402Headers, hasInternalKey } from "@/lib/x402-internal";
 // PendingPick is written here and read by picks-check.ts handler (same schema).
 type PendingPick = {
@@ -333,7 +333,9 @@ function topTokenFrom(items: FeedItem[]): string {
 }
 
 /** Run one feed cycle: snapshot once, share context, dedup, store. */
-export async function runCycle(jobs: Job[]): Promise<{ ok: boolean; added: number; total: number; cycleId: number; token?: string }> {
+// `total` is `number | null`: null means the feed read failed and nothing was
+// written, which is NOT the same as a feed that legitimately holds 0 items.
+export async function runCycle(jobs: Job[]): Promise<{ ok: boolean; added: number; total: number | null; cycleId: number; token?: string }> {
   const cycleId = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
 
   // token-alpha + whale-tracker run AFTER context tools to use the cycle's top mover.
@@ -349,22 +351,31 @@ export async function runCycle(jobs: Job[]): Promise<{ ok: boolean; added: numbe
     const raw = (scanResult.data as { raw?: Any })?.raw ?? {};
     const signals: Array<Any> = Array.isArray(raw.signals) ? raw.signals : [];
     if (signals.length > 0) {
-      const now          = Date.now();
-      const CHECK_DELAY  = 22 * 3_600_000; // 22 hours
-      const existing     = (await kvGet<PendingPick[]>("feed:picks:pending")) ?? [];
-      const existingSyms = new Set(existing.map((p) => p.symbol.toUpperCase()));
-      const newPicks: PendingPick[] = signals
-        .filter((s) => s.symbol && !existingSyms.has(String(s.symbol).toUpperCase()))
-        .map((s) => ({
-          symbol:          String(s.symbol),
-          price_at_signal: typeof s.price_usd === "number" ? s.price_usd : null,
-          signal_ts:       now,
-          check_after:     now + CHECK_DELAY,
-          volume_24h:      typeof s.volume_24h === "number" ? s.volume_24h : null,
-          liquidity_usd:   typeof s.liquidity_usd === "number" ? s.liquidity_usd : null,
-        }));
-      if (newPicks.length > 0) {
-        await kvSet("feed:picks:pending", [...existing, ...newPicks], 7 * 24 * 3600);
+      const now         = Date.now();
+      const CHECK_DELAY = 22 * 3_600_000; // 22 hours
+
+      // #150 A-part2 — the dedup read and the write target the SAME key, so a
+      // throttled read used to drop every pick still waiting out its 22h
+      // window and replace them with this cycle's. Those picks ARE the
+      // pick track record: losing them doesn't just lose data, it silently
+      // biases the record by deleting open positions before they can grade.
+      const picksRes = await kvMutate<PendingPick[]>("feed:picks:pending", [], (existing) => {
+        const existingSyms = new Set(existing.map((p) => p.symbol.toUpperCase()));
+        const newPicks: PendingPick[] = signals
+          .filter((s) => s.symbol && !existingSyms.has(String(s.symbol).toUpperCase()))
+          .map((s) => ({
+            symbol:          String(s.symbol),
+            price_at_signal: typeof s.price_usd === "number" ? s.price_usd : null,
+            signal_ts:       now,
+            check_after:     now + CHECK_DELAY,
+            volume_24h:      typeof s.volume_24h === "number" ? s.volume_24h : null,
+            liquidity_usd:   typeof s.liquidity_usd === "number" ? s.liquidity_usd : null,
+          }));
+        if (newPicks.length === 0) return null; // nothing new — write nothing
+        return [...existing, ...newPicks];
+      }, 7 * 24 * 3600);
+      if (picksRes === "skipped") {
+        console.error("[feed] pending picks NOT appended — KV read failed; this cycle's signals are not tracked");
       }
     }
   }
@@ -400,13 +411,22 @@ export async function runCycle(jobs: Job[]): Promise<{ ok: boolean; added: numbe
   await kvSet(`feed:cycle:${cycleId}:context`, context);
 
   // dedup: drop any existing item for (cycleId, tool) we just refreshed
-  const existing = (await kvGet<FeedItem[]>("feed:items")) ?? [];
+  // #150 A-part2 — same key read and written. A throttled read truncated the
+  // whole 80-item feed down to this one cycle's items.
   const freshKeys = new Set(fresh.map((f) => `${f.cycleId}:${f.tool}`));
-  const kept = existing.filter((e) => !freshKeys.has(`${e.cycleId ?? 0}:${e.tool}`));
-  const merged = [...fresh, ...kept].slice(0, 80);
-  await kvSet("feed:items", merged);
+  let total: number | null = null;
 
-  return { ok: true, added: fresh.length, total: merged.length, cycleId, token };
+  const itemsRes = await kvMutate<FeedItem[]>("feed:items", [], (existing) => {
+    const kept   = existing.filter((e) => !freshKeys.has(`${e.cycleId ?? 0}:${e.tool}`));
+    const merged = [...fresh, ...kept].slice(0, 80);
+    total = merged.length;
+    return merged;
+  });
+  if (itemsRes === "skipped") console.error("[feed] items NOT written — KV read failed; feed left untouched");
+
+  // `total` is null when the write was skipped — the caller must be able to
+  // tell "feed has 0 items" from "we could not read the feed".
+  return { ok: itemsRes !== "skipped", added: fresh.length, total, cycleId, token };
 }
 
 /** Returns an error Response if auth fails, else null. Caller passes the Request. */
