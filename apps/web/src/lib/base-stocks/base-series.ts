@@ -108,14 +108,37 @@ import type {
  * Schema version for `BaseSeriesDay`. Independent of the RH `SERIES_VERSION` —
  * the two records evolve separately.
  *
- *   v1 (2026-08-28, ~09:00–10:00Z) — points + peaks, no oracle timestamp.
- *   v2 (2026-08-28)                — adds `oracle_updated_at` to both.
+ *   v1 (2026-08-28, ~09:00–14:00Z) — points + peaks, no oracle timestamp.
+ *   v2 (2026-08-28, ~14:00–15:00Z) — adds `oracle_updated_at` to both.
  *
- * The version is what makes v1's missing field READABLE rather than merely
- * absent: a v1 point is a point we could not have dated, a v2 point with
- * `oracle_updated_at: null` is one we tried to date and failed. Without the
- * bump those two collapse into the same `undefined` and the archive quietly
- * loses the difference between "not yet recorded" and "unreadable".
+ * ⚠️ `v` DATES THE WRITER, NOT THE ITEMS, and the difference is not academic.
+ * `mergeBaseSeriesPoint` re-stamps the whole day on every write while carrying
+ * already-written points and peaks forward untouched, so a `v: 2` day can — and
+ * on the archive's first day does — hold v1-vintage items. Measured on prod for
+ * 20260828: the day is stamped `v: 2`, its hour-15 and hour-16 points carry
+ * `oracle_updated_at` 4/4, and its hours 09–14 points plus ALL FOUR peaks carry
+ * no such key at all.
+ *
+ * An earlier revision of this comment claimed the bump was what made a missing
+ * field readable — "a v1 point is one we could not date, a v2 point with `null`
+ * is one we tried to date and failed". That distinction is real and it is the
+ * whole point; `v` is simply not what carries it, because `v` is per-day and
+ * vintage is per-item. A reader who trusts that claim gets 20260828 exactly
+ * backwards: it would conclude every item there was date-attempted, when ten of
+ * the fourteen predate the field entirely.
+ *
+ * What actually carries it is the FIELD'S OWN THREE STATES, read per item —
+ * absent ⟹ predates the field, `null` ⟹ read the feed and could not date it,
+ * number ⟹ dated. {@link oracleDating} is the single place that reads them.
+ * Derive vintage from the item, never from `v`.
+ *
+ * Peaks are what make this durable rather than transient. A peak is a
+ * strict-greater high-water mark (see the `<=` continue below), so one set
+ * under v1 is rewritten only if it is EXCEEDED; on a calm day it keeps its v1
+ * shape until the day rolls over. The blast radius is bounded — `kvBaseSeriesDay`
+ * is per-day and `prevPeaks` never crosses midnight, so every item of every
+ * later day is written by the current writer — but inside the crossover day it
+ * is permanent, and no backfill can repair it without inventing the timestamps.
  */
 export const BASE_SERIES_VERSION = 2;
 
@@ -303,6 +326,66 @@ export async function persistBaseSeriesPoint(
 // stays confined to this one file, and adding a Base read path did not widen the
 // blast radius for the RH archive.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Which of `oracle_updated_at`'s three states one archived item is in.
+ *
+ * `SeriesRow.oracle_updated_at` documents the three; this is the one place that
+ * READS them, so no consumer re-derives the rule and none can get it subtly
+ * wrong. Exported because the distinction is the archive's, not the route's: a
+ * peak of 0.56% measured against a live feed and the same 0.56% measured
+ * against a feed frozen for a corporate action are opposite findings wearing
+ * one number, and `abs_drift_pct` alone cannot tell them apart.
+ *
+ * ⚠️ Do NOT derive this from the day's `v` — see {@link BASE_SERIES_VERSION}.
+ * `v` is per-day, vintage is per-item, and on 20260828 the two disagree.
+ */
+export type OracleDating =
+  /** `oracle_updated_at` holds the Chainlink round the price was measured against. */
+  | "dated"
+  /** Base read the feed this cycle and could not date it. A recorded failure — we looked. */
+  | "undatable"
+  /** Written before the field existed. We never looked, which is NOT "looked and found nothing". */
+  | "predates_field";
+
+/**
+ * Read one item's dating state.
+ *
+ * Note the argument is structural, not `BaseSeriesPeak | SeriesRow`: both carry
+ * `oracle_updated_at?: number | null` and nothing else here is needed, so this
+ * also accepts a future record that adds the field without this function having
+ * to learn about it.
+ */
+export function oracleDating(item: { oracle_updated_at?: number | null }): OracleDating {
+  // `undefined` FIRST and separately. Folding it in with `null` — the tempting
+  // `?? null` one-liner — is precisely the "we never looked" ⟹ "we looked and
+  // found nothing" collapse that `SeriesRow.oracle_updated_at`'s doc forbids,
+  // and it would silently relabel every v1 item as a dating failure.
+  if (item.oracle_updated_at === undefined) return "predates_field";
+  return item.oracle_updated_at === null ? "undatable" : "dated";
+}
+
+/** Tally of {@link oracleDating} across a set of items. */
+export interface OracleDatingCounts {
+  dated: number;
+  undatable: number;
+  predates_field: number;
+}
+
+/**
+ * Count dating states over peaks or point-rows.
+ *
+ * Ships alongside every drift figure this archive publishes. A max peak is only
+ * evidence about Base if the oracle behind it was live, and the caller cannot
+ * establish that from the number — so the number does not travel alone.
+ */
+export function datingCounts(
+  items: Array<{ oracle_updated_at?: number | null }>,
+): OracleDatingCounts {
+  const counts: OracleDatingCounts = { dated: 0, undatable: 0, predates_field: 0 };
+  for (const item of items) counts[oracleDating(item)]++;
+  return counts;
+}
 
 /** One day's read outcome, kept distinct all the way to the caller. Mirrors the
  *  RH `SeriesDayRead` on purpose — same four states, so a reader that already
