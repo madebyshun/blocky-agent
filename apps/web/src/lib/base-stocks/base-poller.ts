@@ -34,7 +34,12 @@
  * RH stocks — we reuse `nyseMarketStatus()` verbatim (chain-agnostic hours).
  */
 import { nyseMarketStatus } from "@/lib/robinhood/rwa-market";
-import type { M5Verdict, MarketSession, TickerSnapshot } from "@/lib/blue-hood/types";
+// `BaseTickerSnapshot` — not `TickerSnapshot` — is the return type of every
+// producer below. The shared type leaves `chain` optional (the RH desk omits
+// it, and `chainOf` reads absence as robinhood), so a Base row that forgot the
+// marker would compile and then be read as an RH row. Declaring the narrow type
+// makes that omission a tsc error at the site that made it. See #162.
+import type { BaseTickerSnapshot, M5Verdict, MarketSession } from "@/lib/blue-hood/types";
 import { BASE_STOCKS, type BaseStock } from "./registry";
 import { readBaseStockQuote, type BaseStockQuote } from "./b20-quote";
 
@@ -73,7 +78,7 @@ export function baseQuoteToSnapshot(
   name: string,
   market: MarketClock,
   polled_at_ms: number,
-): TickerSnapshot {
+): BaseTickerSnapshot {
   // On Base the token trades in ONE Aerodrome pool, so primary == total depth.
   // `dex_liquidity_usd` is that pool's liquidity; null ⟹ the dust gate fails
   // closed (rowTotalTvl → 0 < $5k), which is the correct "can't confirm depth"
@@ -153,7 +158,7 @@ function baseErrorRow(
   market: MarketClock,
   polled_at_ms: number,
   message: string,
-): TickerSnapshot {
+): BaseTickerSnapshot {
   return {
     ticker: stock.ticker,
     chain: "base",
@@ -190,7 +195,7 @@ function baseErrorRow(
  * multicall, so we sit far under any rate limit. (Revisit the no-stagger
  * assumption if the admission gate ever admits a much longer list.)
  */
-export async function pollBaseStocks(cycleStart: number): Promise<TickerSnapshot[]> {
+export async function pollBaseStocks(cycleStart: number): Promise<BaseTickerSnapshot[]> {
   const status = nyseMarketStatus();
   const market: MarketClock = {
     is_open: status.is_open,
@@ -198,7 +203,7 @@ export async function pollBaseStocks(cycleStart: number): Promise<TickerSnapshot
     ny_time_iso: status.ny_time_iso,
   };
 
-  const rows: TickerSnapshot[] = [];
+  const rows: BaseTickerSnapshot[] = [];
   for (const stock of BASE_STOCKS) {
     const polled_at_ms = Date.now() - cycleStart;
     try {

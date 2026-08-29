@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { kvGet, kvGetProbe } from "@/lib/kv";
 import { KV_SNAPSHOT_LATEST, KV_BASE_ROWS_LATEST } from "@/lib/blue-hood/kv-keys";
+import { partitionBaseRows } from "@/lib/blue-hood/types";
 import type { BaseDeskLatest, HoodSnapshot } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -67,12 +68,43 @@ export async function GET() {
   const rh = probe.value;
   let baseRows: HoodSnapshot["tickers"] = [];
   let baseStale = false;
+  /** Rows the Base desk polled that arrived without a chain marker and were
+   *  therefore dropped rather than rendered as Robinhood. See the partition
+   *  below. Surfaced on the response so `count` never silently disagrees with
+   *  what the desk actually polled. */
+  let baseUnattributed = 0;
   try {
     const baseLatest = await kvGet<BaseDeskLatest>(KV_BASE_ROWS_LATEST);
     if (baseLatest?.rows?.length) {
       const ageMs = Date.now() - new Date(baseLatest.started_at).getTime();
       if (Number.isFinite(ageMs) && ageMs <= BASE_ROWS_MAX_AGE_MS) {
-        baseRows = baseLatest.rows;
+        // #162 — check the Base marker instead of inheriting it from the type.
+        // `kvGet<BaseDeskLatest>` is an unchecked cast over whatever JSON is at
+        // that key, so `rows: BaseTickerSnapshot[]` binds the WRITER and proves
+        // nothing here; a blob from an older deploy can hold rows with no
+        // `chain` at all.
+        //
+        // Dropping an unattributed row is the safe direction, and it is the
+        // same call `detail-support.ts` already makes for the panel: a row that
+        // cannot say which desk it came from would otherwise be rendered as
+        // Robinhood — RH badge, Basescan link replaced by Blockscout, RH pools
+        // in the expand, RH-qualified arrow key — because `chainOf` reads
+        // absence as robinhood for the legacy archive's sake. Showing nothing
+        // is recoverable; showing NVDA's Base row under an RH identity is the
+        // #161 defect wearing a fresh coat.
+        const split = partitionBaseRows(baseLatest.rows);
+        baseRows = split.attributed;
+        if (split.unattributed.length > 0) {
+          // Loud, because this is unreachable unless something upstream broke:
+          // every producer is typed to require the marker. Silence here would
+          // turn a writer regression into a board that quietly lists fewer
+          // stocks than the desk polled.
+          baseUnattributed = split.unattributed.length;
+          console.error(
+            `[hood/snapshot] dropped ${baseUnattributed} Base row(s) with no chain marker: ` +
+              split.unattributed.map((r) => r.ticker).join(", "),
+          );
+        }
       } else {
         // Present but old — drop the rows and SAY so, rather than rendering a
         // stale stock price that looks live. A wrong price that looks fresh is
@@ -112,6 +144,11 @@ export async function GET() {
       base_desk: {
         status: baseRows.length ? "live" : baseStale ? "stale" : "offline",
         count: baseRows.length,
+        // 0 in every healthy cycle. Non-zero means the desk polled rows this
+        // reader refused to attribute, so `count` is BELOW what was polled —
+        // stated rather than left as a silent shortfall, for the same reason
+        // the archive watchdog reports `empty` instead of going quiet.
+        unattributed: baseUnattributed,
       },
     },
     // CDN-cached on the SUCCESS PATH ONLY — the placement is the guarantee,
