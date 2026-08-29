@@ -229,6 +229,61 @@ export interface HoodSnapshot {
 }
 
 /**
+ * A row that SAID it is Base, as opposed to one we decided was Base.
+ *
+ * WHY THE WIDE TYPE IS NOT ENOUGH
+ * ------------------------------
+ * `TickerSnapshot.chain` is optional and must stay optional: the RH poller
+ * omits it on every one of its 24 live rows, and every arrow written before the
+ * Base desk landed omits it too. That is the `chainOf` contract and it is
+ * correct.
+ *
+ * The cost is that omission is LEGAL for the shared type, so a Base construction
+ * site that forgets `chain: "base"` type-checks cleanly and produces a row that
+ * `chainOf` then reads as Robinhood — silently, because there is no such thing
+ * as a suspicious absence when absence is the norm for the other desk. The row
+ * would take an RH badge, an RH explorer href, RH pools in the detail panel
+ * (the #161 defect, re-opened from underneath its own fix) and an RH-qualified
+ * arrow key.
+ *
+ * Requiring the literal here moves that from "reviewer notices" to "tsc
+ * refuses". Producers declare THIS type; the field stays optional on the shared
+ * one; nothing about the legacy default changes.
+ */
+export type BaseTickerSnapshot = TickerSnapshot & { chain: "base" };
+
+/**
+ * Split rows by whether they carry the Base marker, for readers that took their
+ * rows off the wire rather than from a typed producer.
+ *
+ * `BaseDeskLatest.rows` is typed `BaseTickerSnapshot[]`, which constrains
+ * whoever WRITES the blob. It proves nothing about whoever READS it:
+ * `kvGet<BaseDeskLatest>` is an unchecked cast over JSON that may have been
+ * written by an older deploy, so at that boundary the type is a claim and not a
+ * check. This function is the check.
+ *
+ * ⚠️ TESTS `r.chain === "base"` AND DELIBERATELY DOES NOT CALL `chainOf`.
+ * The two are behaviourally identical today, which is the trap: `chainOf`
+ * exists to APPLY the absent⟹robinhood default, and this function exists to
+ * refuse to rely on it. Routing this through `chainOf` would couple the Base
+ * desk's safety to the legacy back-compat rule, so that any later change to
+ * that default would silently redefine what counts as a Base row. Pinned by the
+ * source check in `scripts/hood-chain-attribution-check.ts`.
+ */
+export function partitionBaseRows(rows: readonly TickerSnapshot[]): {
+  attributed: BaseTickerSnapshot[];
+  unattributed: TickerSnapshot[];
+} {
+  const attributed: BaseTickerSnapshot[] = [];
+  const unattributed: TickerSnapshot[] = [];
+  for (const r of rows) {
+    if (r.chain === "base") attributed.push(r as BaseTickerSnapshot);
+    else unattributed.push(r);
+  }
+  return { attributed, unattributed };
+}
+
+/**
  * Base P1 — the Base desk's latest rows, stored under its OWN key
  * (`KV_BASE_ROWS_LATEST`), read by `/api/hood/snapshot` and merged into the
  * board response at read time.
@@ -256,8 +311,12 @@ export interface BaseDeskLatest {
   started_at: string;
   /** One row per Base B20 stock polled this cycle. Every row carries
    *  `chain: "base"` (set in `baseQuoteToSnapshot`), which is what every
-   *  downstream chain-qualified key and every board de-collision reads. */
-  rows: TickerSnapshot[];
+   *  downstream chain-qualified key and every board de-collision reads.
+   *
+   *  `BaseTickerSnapshot`, not `TickerSnapshot`, so the marker is required
+   *  where the blob is BUILT. On the read side this annotation is only a claim
+   *  about JSON — see `partitionBaseRows`, which is what actually checks it. */
+  rows: BaseTickerSnapshot[];
 }
 
 // ── Permanent price series ────────────────────────────────────────────────
