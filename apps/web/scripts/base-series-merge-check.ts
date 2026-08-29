@@ -1,5 +1,6 @@
 /**
- * Verify `mergeBaseSeriesPoint` — the pure core of the permanent Base archive.
+ * Verify the permanent Base archive — `mergeBaseSeriesPoint`, the pure fold that
+ * writes it, and the read side that interprets what it wrote.
  *
  * Run: `cd apps/web && npx tsx scripts/base-series-merge-check.ts`
  *
@@ -11,10 +12,21 @@
  * a permanent record: a merge bug that drops an hour cannot be fixed later by
  * redeploying, because the prices it would have held no longer exist anywhere.
  * That asymmetry is why this file exists at all.
+ *
+ * The read side is here rather than in its own file because it is the same
+ * invariant seen from the other end. Group 12 proves the writer RECORDS the
+ * oracle timestamp's three states; groups 14–16 prove nothing downstream
+ * collapses them back into two. Split across two scripts, either half would
+ * keep passing while the pair stopped meaning anything.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { mergeBaseSeriesPoint, BASE_SERIES_VERSION } from "@/lib/base-stocks/base-series";
+import {
+  mergeBaseSeriesPoint,
+  BASE_SERIES_VERSION,
+  oracleDating,
+  datingCounts,
+} from "@/lib/base-stocks/base-series";
 import type { BaseSeriesDay, TickerSnapshot } from "@/lib/blue-hood/types";
 
 let failures = 0;
@@ -335,6 +347,207 @@ check("peak scoring is session-aware", /abs_drift_pct >= thresholdFor\(/.test(ro
 const bareCmp = routeCode.match(/abs_drift_pct\s*>=\s*DRIFT_MIN_ABS_PCT/g) ?? [];
 check("no bare single-threshold comparison", bareCmp.length === 0, `${bareCmp.length} hit(s)`);
 check("both thresholds are imported", /\bARB_MIN_ABS_PCT\b/.test(routeCode));
+
+// ── 14. `v` dates the WRITER, not the items ────────────────────────────────
+// The defect this group exists for, reproduced through the shipping merge.
+// `mergeBaseSeriesPoint` re-stamps the whole day with the current version on
+// every write while carrying already-written points and peaks forward
+// untouched — so a day stamped `v: 2` can hold items written before the field
+// existed. That is not hypothetical: it is the shape of 20260828 on prod, where
+// the record reads `v: 2` and ten of its fourteen items have no such key.
+//
+// Why it matters more than a stale comment: the previous doc told readers the
+// bump was what made a missing field readable. Anyone who believed it would
+// conclude every item on the crossover day was date-attempted-and-failed, when
+// most of them were never looked at. Same number, opposite finding.
+console.log("\n14. a v-current day can hold v-prior items");
+
+/** Reproduce a v1 record. The current writer CANNOT produce one — it always
+ *  writes the key, as group 12 asserts — so the only honest fixture is a
+ *  current record with the key removed, which is exactly what v1 left behind. */
+function asV1(d: BaseSeriesDay): BaseSeriesDay {
+  const c = structuredClone(d);
+  for (const p of c.points) for (const r of p.rows) delete r.oracle_updated_at;
+  for (const pk of c.peaks) delete pk.oracle_updated_at;
+  return c;
+}
+
+const v1day = asV1(
+  mergeBaseSeriesPoint(null, [row("NVDAc", { drift: 1.2 }), row("METAc", { drift: 0.4 })], T0)!,
+);
+check("fixture is genuinely v1-shaped", datingCounts(v1day.peaks).predates_field === 2);
+
+// Current writer touches the day: a new hour, and METAc exceeds its old mark
+// while NVDAc does not.
+const crossover = mergeBaseSeriesPoint(
+  v1day,
+  [row("NVDAc", { drift: 0.1, oracleAt: ORACLE_AT }), row("METAc", { drift: 5.0, oracleAt: ORACLE_AT })],
+  T2,
+)!;
+const pk = datingCounts(crossover.peaks);
+check("day is re-stamped to the CURRENT version", crossover.v === BASE_SERIES_VERSION);
+check("un-exceeded peak keeps its v1 shape", pk.predates_field === 1, JSON.stringify(pk));
+check("exceeded peak was rewritten and IS dated", pk.dated === 1, JSON.stringify(pk));
+check(
+  "NVDAc specifically was NOT re-dated",
+  oracleDating(crossover.peaks.find((p) => p.ticker === "NVDAc")!) === "predates_field",
+);
+check(
+  "METAc specifically WAS re-dated",
+  oracleDating(crossover.peaks.find((p) => p.ticker === "METAc")!) === "dated",
+);
+// The claim itself, as one assertion: current `v`, mixed items. Any reader
+// deriving vintage from `v` is wrong on this record.
+check(
+  "`v` is current while items are mixed — `v` CANNOT be read as vintage",
+  crossover.v === BASE_SERIES_VERSION && pk.predates_field > 0 && pk.dated > 0,
+);
+const ptc = datingCounts(crossover.points.flatMap((p) => p.rows));
+check("carried-forward hour keeps its undated rows", ptc.predates_field === 2, JSON.stringify(ptc));
+check("the new hour's rows are dated", ptc.dated === 2, JSON.stringify(ptc));
+
+// Durable, not transient. Strict-greater means an undated peak is repaired only
+// by being EXCEEDED; a calm cycle leaves it as-is. This is why the crossover
+// day's gap is permanent rather than something the next poll cleans up.
+check(
+  "a smaller cycle does not repair an undated peak",
+  mergeBaseSeriesPoint(
+    crossover,
+    [row("NVDAc", { drift: 0.05, oracleAt: ORACLE_AT + 60 })],
+    "2026-08-28T11:05:00.000Z",
+  ) === null,
+);
+
+// ...and BOUNDED to that one day. `existing` is read from `kvBaseSeriesDay(day)`,
+// so tomorrow's fold starts from null and carries nothing across midnight. This
+// is the check that keeps the exposure at ONE day instead of the whole recording
+// window — an over-estimate this task was briefly written around.
+const tomorrow = mergeBaseSeriesPoint(
+  null,
+  [row("NVDAc", { drift: 0.1, oracleAt: ORACLE_AT })],
+  "2026-08-29T09:00:00.000Z",
+)!;
+check("a fresh day carries nothing forward", datingCounts(tomorrow.peaks).predates_field === 0);
+check("...and is fully dated", datingCounts(tomorrow.peaks).dated === 1);
+check("the key really is per-day", /kvBaseSeriesDay\(\s*day\s*\)/.test(code));
+
+// ── 15. The classifier keeps three states three ────────────────────────────
+console.log("\n15. oracleDating / datingCounts");
+check("absent key ⟹ predates_field", oracleDating({}) === "predates_field");
+check("explicit null ⟹ undatable", oracleDating({ oracle_updated_at: null }) === "undatable");
+check("number ⟹ dated", oracleDating({ oracle_updated_at: ORACLE_AT }) === "dated");
+// The one that matters. These are different inputs carrying different claims —
+// "we never looked" vs "we looked and found nothing" — and the entire reason
+// the field is three-valued is that they must not answer the same.
+check(
+  "absent and null are DISTINGUISHED",
+  oracleDating({}) !== oracleDating({ oracle_updated_at: null }),
+);
+// 0 is falsy, so a `||`-based classifier calls it undatable. Whether a round
+// stamped 0 is trustworthy is a separate question (#160 clamps future-dated
+// rounds); this function's job is to report what is stored, not to judge it.
+check("0 is dated, not falsy-collapsed", oracleDating({ oracle_updated_at: 0 }) === "dated");
+
+const tally = datingCounts([{}, {}, { oracle_updated_at: null }, { oracle_updated_at: ORACLE_AT }]);
+check(
+  "tallies each state",
+  tally.predates_field === 2 && tally.undatable === 1 && tally.dated === 1,
+  JSON.stringify(tally),
+);
+// A missing branch would silently drop items, and an undercount reads as a
+// smaller archive rather than as a bug — so assert the sum, not just the parts.
+check(
+  "nothing is dropped",
+  tally.dated + tally.undatable + tally.predates_field === 4,
+  JSON.stringify(tally),
+);
+check(
+  "empty input is all zeros, not empty",
+  JSON.stringify(datingCounts([])) ===
+    JSON.stringify({ dated: 0, undatable: 0, predates_field: 0 }),
+);
+
+// Source-level: the one-line "simplification" that reintroduces the bug is
+// `?? null` INSIDE the classifier. It compiles, and it passes every behavioural
+// check above that feeds only nulls and numbers — while silently relabelling
+// every pre-field item as a dating failure.
+const fnBody = /export function oracleDating\([\s\S]*?\n}/.exec(code)?.[0] ?? "";
+check("classifier body located", fnBody.length > 0);
+check("classifier tests undefined explicitly", /===\s*undefined/.test(fnBody));
+check("classifier does not `?? null`", !/\?\?\s*null/.test(fnBody), fnBody.slice(0, 120));
+
+// ── 16. The route ships vintage wherever a number travels ──────────────────
+// Every figure a reader might quote needs its own dating alongside it. A peak
+// set while the Chainlink feed was frozen and a peak set against a live feed are
+// the same number and opposite findings; shipping the number without the state
+// is how the first gets quoted as the second.
+console.log("\n16. read route surfaces vintage next to every figure");
+check("per-day peak vintage", /peak_dating:\s*datingCounts\(/.test(routeCode));
+check("per-day point vintage", /point_dating:\s*datingCounts\(/.test(routeCode));
+check("headline peak carries its own dating", /oracleDating\(maxPeak\)/.test(routeCode));
+check("the crossers are tallied", /crossed_dating:\s*datingCounts\(/.test(routeCode));
+check("all peaks are tallied", /peaks_dating:\s*datingCounts\(/.test(routeCode));
+// Nothing may infer vintage from the version stamp — the mistake this whole
+// group exists to prevent, expressed as a branch instead of as prose.
+const vGate = routeCode.match(/\bv\s*(===|!==|<=|>=|<|>)\s*\d/g) ?? [];
+check("route never branches on `v`", vGate.length === 0, vGate.join(" "));
+const libGate = code.match(/\.v\s*(===|!==|<=|>=|<|>)\s*\d/g) ?? [];
+check("lib never branches on `v`", libGate.length === 0, libGate.join(" "));
+
+// The legend is the payload's own documentation, so assert its KEYS rather than
+// its prose — rewording a sentence must not fail a build, but dropping the entry
+// that tells a reader `v` is not vintage must.
+const lStart = routeCode.indexOf("legend: {");
+let legend = "";
+if (lStart >= 0) {
+  let depth = 0;
+  for (let i = routeCode.indexOf("{", lStart); i < routeCode.length; i++) {
+    if (routeCode[i] === "{") depth++;
+    else if (routeCode[i] === "}" && --depth === 0) {
+      legend = routeCode.slice(lStart, i + 1);
+      break;
+    }
+  }
+}
+check("legend block located", legend.length > 0);
+// Guard the guard: a slice that silently came back wrong would make every key
+// check below pass or fail for the wrong reason.
+check("...and it is really the legend", /peaks_observed:/.test(legend));
+
+/** One legend entry's own text — from its key to the next key at the same
+ *  indent. Scoped deliberately: the first draft of the `v` check below tested
+ *  the slice from `v:` to the END of the legend, which the `peak_dating:` KEY
+ *  further down satisfied all by itself. Mutation M13 (reword the `v` entry so
+ *  it no longer redirects) survived that version — the check passed because it
+ *  was reading a neighbour, not because the entry said anything. */
+function legendEntry(name: string): string {
+  const m = new RegExp(`\\n\\s{8}${name}:`).exec(legend);
+  if (!m) return "";
+  const rest = legend.slice(m.index + m[0].length);
+  const next = /\n\s{8}[A-Za-z_][A-Za-z0-9_]*:/.exec(rest);
+  return next ? rest.slice(0, next.index) : rest;
+}
+// Guard the guard, again: an extractor that returned "" for everything would
+// make the redirect check below fail loudly, but one that returned the WHOLE
+// legend for everything would make it pass vacuously. Pin both ends.
+check("entry extractor finds a real entry", legendEntry("peaks_observed").includes("denominator"));
+check("entry extractor is scoped, not the whole legend", !legendEntry("v").includes("peaks_observed"));
+check("entry extractor returns empty for a missing key", legendEntry("no_such_key_xyz") === "");
+
+for (const k of ["v", "oracle_dating", "peak_dating", "point_dating", "peaks_dating", "crossed_dating"]) {
+  check(`legend documents \`${k}\``, legendEntry(k).length > 0);
+}
+// `v` is shipped in every day object, so its legend entry must not merely exist
+// — it must point at the field that DOES answer vintage. Semantic, not wording:
+// this survives a rewrite of the sentence, and fails its removal.
+check("legend `v` redirects to the field that answers vintage",
+  /peak_dating|point_dating/.test(legendEntry("v")));
+// Likewise the three states must be named, not just alluded to. A two-state
+// gloss here is how the distinction gets lost downstream by a reader who never
+// opens the source.
+const od = legendEntry("oracle_dating");
+check("legend `oracle_dating` names all three states",
+  ["dated", "undatable", "predates_field"].every((s) => od.includes(s)), od.slice(0, 80));
 
 console.log(
   failures === 0

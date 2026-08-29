@@ -58,6 +58,8 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   readBaseSeriesDays,
   baseSeriesCoverage,
+  datingCounts,
+  oracleDating,
   type BaseSeriesCoverage,
 } from "@/lib/base-stocks/base-series";
 import { BASE_SERIES_ARCHIVE_START, yyyymmdd } from "@/lib/blue-hood/kv-keys";
@@ -167,6 +169,13 @@ export async function GET(req: NextRequest) {
           // Cycles that CONTRIBUTED a write, not total polls — see legend.
           cycles: r.value.cycles,
           coverage: coverage.get(r.day)!,
+          // Vintage is per ITEM, and `v` above does not report it — on this
+          // archive's first day the record is stamped `v: 2` while ten of its
+          // fourteen items predate the field. Shipped next to `v` on purpose,
+          // so the contradiction is visible in one object rather than needing a
+          // reader who already knows to distrust `v`.
+          peak_dating: datingCounts(r.value.peaks),
+          point_dating: datingCounts(r.value.points.flatMap((p) => p.rows)),
           peaks: r.value.peaks,
           points: r.value.points,
         }
@@ -243,8 +252,22 @@ export async function GET(req: NextRequest) {
       },
       // Null, not 0, when nothing is on record — absence is not a measurement.
       max_abs_drift_pct: maxPeak?.abs_drift_pct ?? null,
-      max_drift_peak: maxPeak,
+      // The headline does not travel without its own dating state. This is the
+      // single figure most likely to be quoted as "the strongest case for the
+      // Base desk", and a high-water mark set while the Chainlink feed was
+      // frozen is an artefact of the freeze, not evidence about Base — the two
+      // are the same number and opposite findings. Attached to the peak object
+      // rather than offered as a sibling field so it cannot be dropped by a
+      // caller destructuring the peak.
+      max_drift_peak:
+        maxPeak === null ? null : { ...maxPeak, oracle_dating: oracleDating(maxPeak) },
       peaks_at_or_above_threshold: crossed.length,
+      // The dating breakdown OF THE CROSSERS, not of all peaks: when this count
+      // stops being zero it becomes the archive's answer, and "how many of the
+      // peaks that cleared the bar could we even date" is then the first
+      // question a reader should be able to ask without a second request.
+      crossed_dating: datingCounts(crossed),
+      peaks_dating: datingCounts(allPeaks),
       // Never ship the numerator alone. `0` out of 0 observations ("we have no
       // record") and `0` out of 4,000 ("the desk was calm all month") are the
       // same digit and opposite findings — and this archive exists to answer
@@ -273,6 +296,15 @@ export async function GET(req: NextRequest) {
           "Base (8453) only. RH Chain (4663) history lives at /api/hood/series and the two must never be pooled — a ticker exists on both chains, so ticker alone does not identify a token",
         contiguous:
           "false when a readable day still has holes — distinct from `complete`, which is only about whether the days could be read at all",
+        v: "the writer that last TOUCHED the day, NOT the vintage of the items inside it. Every write re-stamps the whole day while carrying already-written peaks and points forward unchanged, so `v: 2` does NOT mean every item in that day has `oracle_updated_at`. On 20260828 it does not: the day is stamped 2 and ten of its fourteen items predate the field. Read `peak_dating`/`point_dating` for vintage; `v` cannot answer it",
+        oracle_dating:
+          "THREE states, never two. `dated` = holds the Chainlink round the price was measured against. `undatable` = the feed was read this cycle and could not be dated (stored null). `predates_field` = written before the field existed, so nobody ever looked (key absent). Folding the third into the second turns 'we never looked' into 'we looked and found nothing' — a claim the archive never made",
+        peak_dating:
+          "`oracle_dating` tallied over this day's peaks. A day whose peaks are all `predates_field` cannot support any statement about oracle freshness, no matter how large its drift",
+        point_dating: "`oracle_dating` tallied over every row of this day's hourly points",
+        peaks_dating: "`oracle_dating` tallied over every peak in the window",
+        crossed_dating:
+          "`oracle_dating` tallied over the peaks counted by `peaks_at_or_above_threshold`. When that count stops being zero, this says how many of the crossers could be dated at all — a crosser set that is mostly `undatable` is a finding about the feed, not about Base",
       },
     },
     { headers: { "Cache-Control": cache } },
