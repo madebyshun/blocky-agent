@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/blue-hood/alert-drain",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/blue-hood/archive-watch",
+      "schedule": "7 * * * *"
     }
   ]
 }
