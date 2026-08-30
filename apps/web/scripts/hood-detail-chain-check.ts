@@ -17,6 +17,22 @@
  * 17× over, AAPL 1.4× over, META 0.6× UNDER. The error is not directionally
  * consistent, so a reader could not mentally correct for it.
  *
+ * AND THE OVERCORRECTION, WHICH WAS ITS OWN BUG
+ * ---------------------------------------------
+ * The first fix skipped BOTH blocks on every non-RH chain, so a Base row read
+ * "Liquidity is not wired for this desk" an inch under its own TVL $1.90M /
+ * VOL 24H $10.43M. What is Robinhood-only is the M3 TOOL, not the data: the Base
+ * desk measures depth every cycle (`base-poller.ts` → `total_tvl_usd`,
+ * `volume_24h_usd`), `registry.ts` will not admit a Base token until its
+ * Aerodrome pool prints both, and `rule-engine.ts` gates every arrow on that
+ * same figure. So the panel was denying a number the product elsewhere trades on.
+ *
+ * That is why the plan has three SOURCES (`tool` | `row` | `none`) and not a
+ * boolean, and why group 1 now asserts a FLOOR as well as a ceiling — base must
+ * render fewer blocks than RH AND more than none. Suppressing a true number is a
+ * smaller error than printing a false one, but an unearned "not wired" makes
+ * every honest "skipped" note on this board cheaper, which is the actual cost.
+ *
  * WHAT THIS CHECKS, AND WHY IT IS SHAPED THIS WAY
  * ----------------------------------------------
  * Groups 1-4 are DIFFERENTIAL. They do not ask "is there a gate in the code" —
@@ -38,6 +54,11 @@
  * Group 6 is SOURCE assertions, for the wiring no return value can show, plus
  * the grep that proves no bare-ticker key survives anywhere in the detail path.
  *
+ * Group 7 covers the correction's own risk surface: once the panel may draw a
+ * number it did not fetch, every way that number can be ABSENT has to stay
+ * distinguishable — "we weren't handed it" vs "the poll came back empty" vs a
+ * real reading of $0 — or all three collapse into one em-dash.
+ *
  * Run: npx tsx scripts/hood-detail-chain-check.ts
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -46,8 +67,10 @@ import type { HoodChain } from "../src/lib/blue-hood/types";
 import {
   detailCacheKey,
   detailPanelPlan,
+  detailUnavailableReason,
   explorerAddressUrl,
   explorerTokenUrl,
+  rowLiquidityView,
 } from "../src/lib/blue-hood/detail-support";
 import { fetchAndCacheDetail } from "../src/lib/blue-hood/ticker-detail";
 
@@ -95,26 +118,46 @@ check(
   `rh.fetch=${rh.fetch} base.fetch=${base.fetch}`,
 );
 check(
-  "liquidity: rendered on RH, SKIPPED on base",
-  rh.liquidity === "render" && base.liquidity === "skip",
-  "the $109.52M-vs-$1.71M block",
+  "liquidity: TOOL-sourced on RH, ROW-sourced on base",
+  rh.liquidity === "tool" && base.liquidity === "row",
+  "the $109.52M-vs-$1.71M block — RH's number must not reach a Base panel, but "
+    + "Base's own $1.71M must still be shown",
 );
 check(
-  "holders: rendered on RH, SKIPPED on base",
-  rh.holders === "render" && base.holders === "skip",
+  "holders: TOOL-sourced on RH, absent on base",
+  rh.holders === "tool" && base.holders === "none",
+  "D1 reads the RH explorer only and no other desk has a holder index",
 );
 check(
   "no field of the two plans is accidentally identical where it matters",
   rh.fetch !== base.fetch && rh.liquidity !== base.liquidity && rh.holders !== base.holders,
   "a gate that is present but inert would pass a source grep and fail here",
 );
-// The rendered-block SET, which is what a reader actually sees. Base's set must
-// be a strict subset — and must still contain the open arrow, which IS
-// chain-correct (the parent matches on chainOf, not on ticker).
+// ── THE OVERCORRECTION, checked as its own property ───────────────────────
+// The first fix for this bug set BOTH base blocks to nothing, which put
+// "Liquidity is not wired for this desk" an inch under the same row's
+// TVL $1.90M / VOL 24H $10.43M. Suppressing a true number is a smaller error
+// than printing a false one, but it is still an error, and an unearned
+// "not wired" devalues every honest note beside it. Assert the FLOOR as well
+// as the ceiling: base must show fewer blocks than RH AND more than none.
+check(
+  "base does NOT render an empty liquidity block — the desk measures its own depth",
+  base.liquidity !== "none",
+  "base-poller.ts sets total_tvl_usd + volume_24h_usd every cycle; registry.ts "
+    + "will not even ADMIT a Base token until its Aerodrome pool prints both",
+);
+check(
+  "…and base still does not FETCH — the numbers come off the row, not off M3",
+  base.fetch === false && base.liquidity === "row",
+  "a 'row' source that fetched would be the original bug with extra steps",
+);
+// The set of blocks that show NUMBERS (as against a note). Base's must be a
+// strict subset of RH's — and must still contain liquidity and the open arrow,
+// both of which are chain-correct (the parent matches on chainOf, not ticker).
 const blocksOf = (p: ReturnType<typeof detailPanelPlan>) =>
   new Set([
-    ...(p.liquidity === "render" ? ["liquidity"] : []),
-    ...(p.holders === "render" ? ["holders"] : []),
+    ...(p.liquidity !== "none" ? ["liquidity"] : []),
+    ...(p.holders !== "none" ? ["holders"] : []),
     "open_arrow", // rendered on every chain, by design
   ]);
 const rhBlocks = blocksOf(rh);
@@ -125,8 +168,9 @@ check(
   `base={${[...baseBlocks].join(",")}} rh={${[...rhBlocks].join(",")}}`,
 );
 check(
-  "…and the two blocks missing are exactly liquidity + holders",
-  [...rhBlocks].filter((b) => !baseBlocks.has(b)).sort().join(",") === "holders,liquidity",
+  "…and the ONE block missing is holders, not liquidity",
+  [...rhBlocks].filter((b) => !baseBlocks.has(b)).sort().join(",") === "holders",
+  "if liquidity appears in this list again, the overcorrection is back",
 );
 check(
   "the open arrow survives on base — it is measured, not inherited",
@@ -135,14 +179,14 @@ check(
 );
 
 // ── 2. the notes name the real cause ──────────────────────────────────────
-console.log("\n2. the skip notes state WHY, and do not invent a failure");
+console.log("\n2. the notes state WHY, and do not invent a failure OR deny a fact");
 for (const c of ALL_CHAINS) {
   const p = detailPanelPlan(c);
   check(
-    `chain "${c}": a note exists iff the block is skipped`,
-    (p.liquidity === "skip") === (p.liquidityNote !== null)
-      && (p.holders === "skip") === (p.holdersNote !== null),
-    "a skipped block with no note is a blank the reader must guess at",
+    `chain "${c}": a note exists iff the block is NOT tool-backed`,
+    (p.liquidity !== "tool") === (p.liquidityNote !== null)
+      && (p.holders !== "tool") === (p.holdersNote !== null),
+    "a full render needs no caveat; anything less than one has to say so",
   );
 }
 const notes = [base.liquidityNote ?? "", base.holdersNote ?? ""];
@@ -167,13 +211,39 @@ check(
     && /M3/.test(base.liquidityNote ?? "")
     && /D1/.test(base.holdersNote ?? ""),
 );
+// ── the retracted sentence, pinned so it cannot come back ─────────────────
 check(
-  "an unknown future chain skips rather than inheriting RH",
+  'base\'s LIQUIDITY note no longer says "not wired"',
+  !/not wired/i.test(base.liquidityNote ?? ""),
+  "it was wired all along — this exact sentence sat under TVL $1.90M on production",
+);
+check(
+  "…and it makes the POSITIVE claim instead: this desk measured it",
+  /measured/i.test(base.liquidityNote ?? "") && /base/i.test(base.liquidityNote ?? ""),
+  `→ "${base.liquidityNote}"`,
+);
+check(
+  "…and it says why the block is still NARROWER than RH's (no slippage curve)",
+  /slippage/i.test(base.liquidityNote ?? "") && /reserves/i.test(base.liquidityNote ?? ""),
+  "a shorter block with no explanation reads as a failure",
+);
+check(
+  'base\'s HOLDERS note still DOES say "not wired" — there it is true',
+  /not wired/i.test(base.holdersNote ?? ""),
+  "the correction was to one block, not a blanket softening of both",
+);
+check(
+  "an unknown future chain shows NOTHING rather than inheriting either desk",
   (() => {
     const p = detailPanelPlan("solana" as HoodChain);
-    return p.fetch === false && p.liquidity === "skip" && p.holders === "skip";
+    return p.fetch === false && p.liquidity === "none" && p.holders === "none";
   })(),
-  "the default arm is the safe direction — a new desk shows nothing until wired",
+  '"row" is a property of Base\'s poller populating the fields, not of being non-RH',
+);
+check(
+  'the unknown chain KEEPS the "not wired" wording — it has earned it',
+  /not wired/i.test(detailPanelPlan("solana" as HoodChain).liquidityNote ?? ""),
+  "the default arm must not inherit Base's positive claim about its own poll",
 );
 
 // ── 3. explorer links land on the chain that indexes the contract ─────────
@@ -336,6 +406,39 @@ check(
   /plan\.liquidityNote/.test(panel) && /plan\.holdersNote/.test(panel),
   "a second copy would drift out from under this guard",
 );
+// ── the row-sourced block is actually WIRED, not merely typed ─────────────
+// `detailPanelPlan("base").liquidity === "row"` is a decision; these are the
+// three places it has to land or the decision changes nothing on screen.
+check(
+  "the no-fetch branch branches on the SOURCE, not just on fetch",
+  /plan\.liquidity === "row"/.test(panel),
+  "without this the plan says 'row' and the panel still prints the note alone",
+);
+check(
+  "…and it renders the row block through the shared view function",
+  /<RowLiquidityBlock/.test(panel) && /rowLiquidityView\(chain, row\)/.test(panel),
+  "the three-nothings decision must not be re-derived in JSX",
+);
+check(
+  "the panel's rowLiquidity prop is REQUIRED (no `?`)",
+  /\browLiquidity: RowLiquidity \| null;/.test(panel) && !/rowLiquidity\?:/.test(panel),
+  "optional would let a call site omit it and silently claim 'no reading this cycle'",
+);
+check(
+  "the call site passes rowLiquidity off the ROW",
+  /rowLiquidity=\{\{/.test(panelEl) && /r\.total_tvl_usd/.test(panelEl),
+  "a fetch here would be the original bug with extra steps",
+);
+check(
+  "…using the SAME fallback the dust gate uses (total ?? tvl), and `??` not `||`",
+  /totalTvlUsd: r\.total_tvl_usd \?\? r\.tvl_usd \?\? null/.test(panelEl),
+  "`||` would turn a real $0 reading into 'no reading' — rule-engine.ts:53 is the twin",
+);
+check(
+  "the panel does not hardcode a DEX name for the pool link",
+  !/Aerodrome/.test(panel),
+  "a fact about today's Base registry, in a file with no way to notice it changed",
+);
 check(
   "the open-arrow block is ONE component, shared by both branches",
   (panel.match(/<OpenArrowSection openArrow=\{openArrow\} \/>/g) ?? []).length === 2
@@ -355,6 +458,20 @@ check(
   "the route consults the same shared plan the panel does",
   /detailPanelPlan\(chain\)/.test(route),
   "two independent policies would be two policies",
+);
+check(
+  "the 501 body no longer hardcodes the retired blanket claim",
+  !/No liquidity\/holders source is wired/.test(route),
+  "the same false sentence, on the surface where the reader has no TVL figure to doubt it with",
+);
+check(
+  "…it composes the reason from the plan instead",
+  /error: detailUnavailableReason\(chain\)/.test(route),
+);
+check(
+  "…and ships the per-block SOURCE as an enum, not only as prose",
+  /liquidity_source: plan\.liquidity/.test(route) && /holders_source: plan\.holders/.test(route),
+  "a machine caller must be able to branch on `row` without parsing English",
 );
 check(
   "fetchAndCacheDetail takes chain FIRST and required",
@@ -427,6 +544,137 @@ check(
 );
 }
 
+// ── 7. the row-sourced block: three nothings, told apart ──────────────────
+// This group exists because the CORRECTION had its own failure mode. Once the
+// panel is allowed to draw a number it did not fetch, every way that number can
+// be absent has to stay distinguishable — otherwise "we weren't handed it",
+// "the poll came back empty" and "$0 of depth" all collapse into one em-dash and
+// the reader picks whichever they find most comforting.
+function group7(): void {
+console.log("\n7. rowLiquidityView — an absent number must say WHICH absence it is");
+
+const measured = rowLiquidityView("base", {
+  totalTvlUsd: 1_900_000,
+  volume24hUsd: 10_430_000,
+  poolRef: "0xaaaabbbbccccddddeeeeffff0000111122223333",
+});
+check(
+  "a measured row is reported measured, with its figures untouched",
+  measured.measured === true
+    && measured.tvlUsd === 1_900_000
+    && measured.volume24hUsd === 10_430_000,
+  "these are the real production figures the old note was denying",
+);
+check(
+  "a measured row carries NO empty note",
+  measured.emptyNote === null,
+  "a caveat beside a real number teaches the reader to ignore caveats",
+);
+check(
+  "the pool link is routed by chain, not hardcoded",
+  measured.poolUrl?.startsWith("https://basescan.org/address/") === true
+    && rowLiquidityView("robinhood", {
+      totalTvlUsd: 1, volume24hUsd: 1, poolRef: "0xdead",
+    }).poolUrl?.startsWith("https://robinhoodchain.blockscout.com/") === true,
+  `→ ${measured.poolUrl}`,
+);
+check(
+  "a missing pool_ref yields a null link rather than a broken href",
+  rowLiquidityView("base", { totalTvlUsd: 1, volume24hUsd: 1, poolRef: null }).poolUrl === null,
+);
+
+// The three nothings.
+const notHanded = rowLiquidityView("base", null);
+const notMeasured = rowLiquidityView("base", {
+  totalTvlUsd: null, volume24hUsd: null, poolRef: "0xabc",
+});
+const zero = rowLiquidityView("base", { totalTvlUsd: 0, volume24hUsd: null, poolRef: "0xabc" });
+check(
+  "nothing #1 — a null row is NOT measured",
+  notHanded.measured === false && notHanded.emptyNote !== null,
+);
+check(
+  "…and its note blames OUR wiring, not the pool",
+  /wiring/i.test(notHanded.emptyNote ?? "") && !/dust|\$0/.test(notHanded.emptyNote ?? ""),
+  `→ "${notHanded.emptyNote}"`,
+);
+check(
+  "nothing #2 — an empty poll is NOT measured",
+  notMeasured.measured === false && notMeasured.emptyNote !== null,
+);
+check(
+  "…and its note blames the POLL, and explicitly denies being $0",
+  /poll/i.test(notMeasured.emptyNote ?? "")
+    && /not \$0/i.test(notMeasured.emptyNote ?? ""),
+  `→ "${notMeasured.emptyNote}"`,
+);
+check(
+  "nothing #3 — a reading of ZERO is a MEASUREMENT, not an absence",
+  zero.measured === true && zero.emptyNote === null && zero.tvlUsd === 0,
+  "`??`-not-`||` at the call site is the other half of this; both are needed",
+);
+check(
+  "the three cases do not share a sentence",
+  notHanded.emptyNote !== notMeasured.emptyNote,
+  "one string for two causes is the collapse this group exists to prevent",
+);
+check(
+  "an empty note exists iff the reading is absent",
+  [measured, notHanded, notMeasured, zero].every(
+    (v) => v.measured === (v.emptyNote === null),
+  ),
+);
+check(
+  "neither empty note claims a failure or an outage",
+  ![notHanded, notMeasured].some((v) => /unavailable|failed|error|down/i.test(v.emptyNote ?? "")),
+  "nothing broke — same lesson as the plan notes in group 2",
+);
+check(
+  "rowLiquidityView takes (chain, row) and NO ticker",
+  rowLiquidityView.length === 2,
+  "the defect this module exists to prevent is resolving a token by ticker string; "
+    + "a function never handed one cannot commit it",
+);
+
+console.log("\n   detailUnavailableReason — the 501 body, composed from the plan");
+check(
+  "robinhood returns null — this endpoint CAN serve it",
+  detailUnavailableReason("robinhood") === null,
+  "null, not \"\" — an empty error message reads like success",
+);
+const baseReason = detailUnavailableReason("base") ?? "";
+check("base returns a reason", baseReason !== "");
+check(
+  "the base reason names the real constraint (Robinhood-only tools)",
+  /robinhood/i.test(baseReason) && /M3/.test(baseReason) && /D1/.test(baseReason),
+);
+check(
+  "the base reason does NOT tell a machine that liquidity has no source",
+  !/no liquidity/i.test(baseReason) && !/not wired/i.test(baseReason),
+  "a human had the row's TVL an inch above to doubt this with; a machine has only the string",
+);
+check(
+  "…it points at where the number actually lives",
+  /snapshot/i.test(baseReason) && /total_tvl_usd/.test(baseReason),
+  `→ "${baseReason}"`,
+);
+check(
+  "…and still says holders have none",
+  /holders has no source/i.test(baseReason),
+  "the correction was to one block, not to both",
+);
+const unknownReason = detailUnavailableReason("solana" as HoodChain) ?? "";
+check(
+  "an unknown chain reports BOTH blocks sourceless",
+  /Liquidity has no source/i.test(unknownReason) && /holders has no source/i.test(unknownReason),
+);
+check(
+  "the reason DIFFERS by chain — it is composed, not a constant",
+  baseReason !== unknownReason,
+  "a fixed string would pass every check above and still be the old bug",
+);
+}
+
 function finish(): void {
   console.log(
     failures === 0
@@ -436,6 +684,6 @@ function finish(): void {
   process.exit(failures === 0 ? 0 : 1);
 }
 
-// Sequenced so the console output stays in group order — group 6 is sync and
+// Sequenced so the console output stays in group order — groups 6-7 are sync and
 // would otherwise print before group 5's await resolves.
-void group5().then(group6).then(finish);
+void group5().then(group6).then(group7).then(finish);

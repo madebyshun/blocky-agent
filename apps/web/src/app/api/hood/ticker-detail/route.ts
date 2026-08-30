@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findByTicker } from "@/lib/robinhood/rwa-registry";
 import { fetchAndCacheDetail, readCachedDetail } from "@/lib/blue-hood/ticker-detail";
-import { detailPanelPlan } from "@/lib/blue-hood/detail-support";
+import { detailPanelPlan, detailUnavailableReason } from "@/lib/blue-hood/detail-support";
 import type { HoodChain } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -47,14 +47,23 @@ export async function GET(req: NextRequest) {
   const plan = detailPanelPlan(chain);
   if (!plan.fetch) {
     // Not a 404 (the ticker may well exist on that desk) and not a 500
-    // (nothing broke). The capability does not exist yet, and the response says
-    // which blocks are missing and why rather than substituting another chain's.
+    // (nothing broke). THIS endpoint has nothing to serve — which is not the
+    // same as the data not existing, and the body must not conflate them. The
+    // previous wording ("No liquidity/holders source is wired for chain X")
+    // did: on Base, liquidity IS measured every cycle and sits on the snapshot
+    // row. A machine caller has no TVL figure an inch above the sentence to
+    // contradict it with, so it would simply have stopped looking.
+    //
+    // `*_source` is the branchable form — `"row"` tells a caller exactly where
+    // to go next. The prose is for logs; the enum is the contract.
     return NextResponse.json(
       {
         ok: false,
         chain,
         ticker,
-        error: `No liquidity/holders source is wired for chain "${chain}".`,
+        error: detailUnavailableReason(chain),
+        liquidity_source: plan.liquidity,
+        holders_source: plan.holders,
         liquidity_note: plan.liquidityNote,
         holders_note: plan.holdersNote,
       },
