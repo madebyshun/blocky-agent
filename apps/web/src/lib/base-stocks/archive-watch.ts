@@ -55,7 +55,7 @@
  * second is permanent while the first may resolve on its own. They stay apart
  * all the way to the Telegram message.
  */
-import { baseSeriesCoverage, readBaseSeriesDays } from "./base-series";
+import { archiveHoles, readBaseSeriesDays } from "./base-series";
 // `BASE_SERIES_ARCHIVE_START` comes from kv-keys, NOT from base-series —
 // base-series imports it without re-exporting, so `from "./base-series"`
 // resolves to `undefined` at runtime. `day < undefined` is always false, which
@@ -99,14 +99,15 @@ export interface ArchiveWatchReport {
   /** Days whose read THREW. Contents unknown — never counted as empty. */
   unreadable: string[];
   /**
-   * Days holding no record that sit BETWEEN two days that do. Leading and
-   * trailing misses are excluded deliberately: a 14-day window over a 2-day-old
-   * archive would otherwise report twelve days of "gap" for days nothing was
-   * alive to record, and an alarm on the expected is how a real one gets
-   * ignored.
+   * Days holding no record that sit BETWEEN two days that do — interior only,
+   * for the reason given on `ArchiveHoles.missing_days`, which is where this is
+   * computed. Same array `/api/hood/base-series` publishes as `gaps.days`, from
+   * the same call: what the operator is paged about and what the endpoint
+   * reports cannot disagree.
    */
   missing_days: string[];
-  /** Finished hours inside a readable day that hold no point, `YYYYMMDDHH`. */
+  /** Finished hours inside a readable day that hold no point, `YYYYMMDDHH`.
+   *  Shared with `gaps.hours` on the endpoint — see `missing_days` above. */
   absent_hours: string[];
   days_with_data: number;
   points: number;
@@ -147,24 +148,11 @@ export function classifyArchive(
   const considered = reads.filter((r) => r.status !== "before_archive");
   const unreadable = considered.filter((r) => r.status === "error").map((r) => r.day);
   const hits = considered.flatMap((r) => (r.status === "hit" ? [r] : []));
-  const hitDays = hits.map((r) => r.day).sort();
 
-  const absent_hours = hits
-    .flatMap((r) => baseSeriesCoverage(r.day, r.value.points, now).hours_absent)
-    .sort();
-
-  // Interior misses only — see `missing_days`.
-  const missing_days =
-    hitDays.length > 0
-      ? considered
-          .filter(
-            (r) =>
-              r.status === "miss" &&
-              r.day > hitDays[0] &&
-              r.day < hitDays[hitDays.length - 1],
-          )
-          .map((r) => r.day)
-      : [];
+  // Shared with `/api/hood/base-series`, which publishes the same two arrays as
+  // `gaps`. One definition on purpose: a watchdog that disagrees with the
+  // endpoint it watches is worse than no watchdog, because both look right.
+  const { missing_days, absent_hours } = archiveHoles(considered, now);
 
   const allHours = hits.flatMap((r) => r.value.points.map((p) => p.hour)).sort();
   const last_hour = allHours.length ? allHours[allHours.length - 1] : null;

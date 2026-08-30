@@ -57,6 +57,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   readBaseSeriesDays,
+  archiveHoles,
   baseSeriesCoverage,
   datingCounts,
   oracleDating,
@@ -207,21 +208,15 @@ export async function GET(req: NextRequest) {
   // triggered.
   const crossed = allPeaks.filter((p) => p.abs_drift_pct >= thresholdFor(p.is_open));
 
-  const absentHours = [...coverage.values()].flatMap((c) => c.hours_absent);
-  // A `miss` is only a gap when it sits BETWEEN two days holding data. Asking
-  // for 31 days of a days-old archive would otherwise report weeks of "gap" for
-  // days nothing was ever alive to record — an alarm on the expected, which is
-  // how a real signal gets tuned out.
-  const hitDays = reads.filter((r) => r.status === "hit").map((r) => r.day);
-  const missedDays =
-    hitDays.length > 0
-      ? reads
-          .filter(
-            (r) =>
-              r.status === "miss" && r.day > hitDays[0] && r.day < hitDays[hitDays.length - 1],
-          )
-          .map((r) => r.day)
-      : [];
+  // ONE definition of "hole", shared with the archive watchdog that pages the
+  // operator about this same window (`classifyArchive` in `archive-watch.ts`).
+  // This route used to derive both arrays inline. Two copies of a rule is two
+  // places to get it wrong, and here it would be worse than that: the watchdog
+  // would go quiet while the endpoint still reported gaps, or the reverse, and
+  // whichever one was consulted would look authoritative. See `archiveHoles` for
+  // why an interior miss is the only kind that counts — and for the unstated
+  // ordering assumption the inline copy was relying on.
+  const holes = archiveHoles(reads, now);
 
   const yesterday = yyyymmdd(new Date(todayMs - DAY_MS));
   const mutable = requested.some((d) => d >= yesterday);
@@ -240,8 +235,8 @@ export async function GET(req: NextRequest) {
       thresholds_abs_pct: { closed_drift: DRIFT_MIN_ABS_PCT, open_arb: ARB_MIN_ABS_PCT },
       complete: unreadable.length === 0,
       unreadable,
-      contiguous: absentHours.length === 0 && missedDays.length === 0,
-      gaps: { days: missedDays, hours: absentHours },
+      contiguous: holes.absent_hours.length === 0 && holes.missing_days.length === 0,
+      gaps: { days: holes.missing_days, hours: holes.absent_hours },
       requested,
       totals: {
         days_requested: requested.length,
