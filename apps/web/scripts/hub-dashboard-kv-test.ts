@@ -402,6 +402,42 @@ async function main() {
     cRead.status === "ok" && cRead.tool.revenueTotal === null && cRead.tool.callCount === EXT_CALLS["nft-floor"],
     cRead.status === "ok" ? `revenue=${cRead.tool.revenueTotal} calls=${cRead.tool.callCount}` : cRead.status);
 
+  // F-C. The MIDDLE RUNG — `readBuilderTools` must degrade on a null counter,
+  // not just on an unreadable record.
+  //
+  // This exists because mutation testing found it missing. Deleting
+  // `countersIncomplete` from readBuilderTools (making a counter failure report
+  // `complete`) survived the whole suite: the route still caught it, because the
+  // route re-derives the fact from the items themselves. But the route is not
+  // the only consumer — `statsFromRead` feeds the two builder PROFILE pages,
+  // which have no such second opinion and would have rendered a floor as a
+  // headline total under a `complete` flag. A guarantee only one caller happens
+  // to re-check is not a guarantee.
+  //
+  // Both halves of the condition are pinned separately: the revenue counter
+  // below, the CALL counter after it. A test that only exercises one half lets
+  // the other be deleted.
+  const revPartial = await withReadFailureOn(k => k === REVENUE("nft-floor"), () => readBuilderTools(OWNER));
+  check("readBuilderTools: an unreadable REVENUE counter alone → partial",
+    revPartial.coverage === "partial", revPartial.coverage);
+  check("...with nothing in unreadableIds — the tool is here, only its money is not",
+    revPartial.unreadableIds.length === 0 && revPartial.tools.length === 3,
+    `unreadable=${JSON.stringify(revPartial.unreadableIds)} tools=${revPartial.tools.length}`);
+  const revStats = statsFromRead(revPartial);
+  check("statsFromRead: the profile page inherits partial, not complete",
+    revStats.coverage === "partial", revStats.coverage);
+  check("...and its revenue is the FLOOR, which is why the flag has to travel with it",
+    revStats.totalRevenue === EXT_TOTAL - EXT_REVENUE["nft-floor"],
+    `${usd(revStats.totalRevenue)} of ${usd(EXT_TOTAL)}`);
+
+  const callPartial = await withReadFailureOn(k => k === CALLS("gas-oracle"), () => readBuilderTools(OWNER));
+  check("readBuilderTools: an unreadable CALL counter alone → partial too",
+    callPartial.coverage === "partial", callPartial.coverage);
+  check("...and the call total is a floor while revenue stays whole",
+    statsFromRead(callPartial).totalCalls === EXT_CALLS["weather-on-base"] + EXT_CALLS["nft-floor"]
+      && statsFromRead(callPartial).totalRevenue === EXT_TOTAL,
+    `calls=${statsFromRead(callPartial).totalCalls} revenue=${usd(statsFromRead(callPartial).totalRevenue)}`);
+
   const counterBody = await withReadFailureOn(k => k === REVENUE("nft-floor"), dashboard);
   check("route: all 4 items still listed",
     counterBody.counts.total === 4, JSON.stringify(counterBody.counts));
