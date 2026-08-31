@@ -44,6 +44,7 @@ import {
 } from "../src/lib/blue-hood/kv-keys";
 import {
   readArrowFeed,
+  rebuildArrowFeed,
   onArrowFired,
   onArrowUpdated,
   invalidateArrowCache,
@@ -51,7 +52,10 @@ import {
   type HydratedFeed,
 } from "../src/lib/blue-hood/arrow-cache";
 import { readPublicArrowsProbe, readPublicArrows } from "../src/lib/blue-hood/public-feed";
+import { ARROW_INDEX_WARN_AT, arrowIndexWarning } from "../src/lib/blue-hood/arrow-index";
 import type { Arrow } from "../src/lib/blue-hood/types";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 let failures = 0;
 function check(label: string, pass: boolean, detail: string) {
@@ -96,6 +100,35 @@ async function seedSource(arrows: Arrow[] = SEED) {
 
 async function readBlob(): Promise<HydratedFeed | null> {
   return kvGet<HydratedFeed>(KV_ARROW_HYDRATED);
+}
+
+// ── #154 source-reading (Group O) ───────────────────────────────────────────
+const ROOT = process.cwd();
+/**
+ * Strip comments before any "this token must NOT appear" check. The #154 code
+ * TALKS about trimming at length — the whole point of the module is to forbid
+ * it — so a negative check for `slice`/`kvSet` run against raw source would be
+ * reading that prose and calling it evidence. Same lesson as `archive-watch-check`.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+const read = (p: string) => stripComments(readFileSync(join(ROOT, p), "utf8"));
+const ruleCode = read("src/lib/blue-hood/rule-engine.ts");
+const cacheCode = read("src/lib/blue-hood/arrow-cache.ts");
+const indexCode = read("src/lib/blue-hood/arrow-index.ts");
+
+/** Capture `console.warn` so the threshold can be asserted from the outside. */
+async function captureWarns<T>(fn: () => Promise<T>): Promise<{ result: T; warns: string[] }> {
+  const realWarn = console.warn;
+  const warns: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  console.warn = ((...args: unknown[]) => { warns.push(args.map(String).join(" ")); }) as any;
+  try {
+    return { result: await fn(), warns };
+  } finally {
+    console.warn = realWarn;
+  }
 }
 
 // ── instrumentation ─────────────────────────────────────────────────────────
@@ -312,6 +345,107 @@ async function main() {
   const n2 = await instrument(() => readPublicArrows(50), () => true);
   check("readPublicArrows → [] (KNOWN Group-B gap, still open, see #150)",
     Array.isArray(n2.result) && n2.result.length === 0, `${n2.result.length} arrows`);
+
+  // ── O. #154 — INDEX SIZE WARNING: warn only, NEVER trim ───────────────────
+  // The task this group defends is one sentence long and half of it is a
+  // prohibition: warn past ~5,000 ids, and do NOT trim, truncate, cap or
+  // rotate. So the checks come in two halves. O.1–O.7 and O.8–O.11 prove the
+  // warning actually fires (a warning that never warns is the default failure
+  // of this kind of ticket). O.12–O.19 prove nothing shortens the index — the
+  // half that has no runtime symptom until the record is already gone.
+  console.log("\nO. #154 — arrow index size warning (warn only, never trim):");
+
+  check("O.1 quiet below the threshold", arrowIndexWarning(ARROW_INDEX_WARN_AT - 1, "t") === null,
+    `${ARROW_INDEX_WARN_AT - 1} → null`);
+  check("O.2 quiet AT the threshold (must EXCEED, not reach)",
+    arrowIndexWarning(ARROW_INDEX_WARN_AT, "t") === null, `${ARROW_INDEX_WARN_AT} → null`);
+  const msg = arrowIndexWarning(ARROW_INDEX_WARN_AT + 1, "t");
+  check("O.3 warns one past the threshold", msg !== null, msg ? "message returned" : "null — SILENT");
+  check("O.4 the message carries the real count and the threshold",
+    !!msg && msg.includes(String(ARROW_INDEX_WARN_AT + 1)) && msg.includes(String(ARROW_INDEX_WARN_AT)),
+    msg ? `${ARROW_INDEX_WARN_AT + 1} + ${ARROW_INDEX_WARN_AT} present` : "n/a");
+  check("O.5 the message names the site it was observed at", !!msg && msg.includes("t"),
+    msg ? "where= interpolated" : "n/a");
+  // The operator-facing half of the rule. A number alone invites the reader to
+  // "fix" it the obvious way; the message has to say which fix is forbidden.
+  check("O.6 the message tells the reader NOT to trim", !!msg && /trim/i.test(msg),
+    msg ? "mentions trimming" : "n/a");
+  check("O.7 a non-finite count is silent, not a warn", arrowIndexWarning(NaN, "t") === null,
+    "NaN → null");
+  // Not taste-policing the constant — pinning that it stays USEFUL. An id is a
+  // 36-char uuid ≈ 39 B in the array, so the ~1 MB value ceiling (where the
+  // write starts failing silently) is ≈ 26,800 ids. A threshold at or above
+  // that would fire only after the damage, i.e. never in time.
+  check("O.8 threshold is below the silent-write-failure ceiling (~26,800 ids)",
+    ARROW_INDEX_WARN_AT > 0 && ARROW_INDEX_WARN_AT <= 20_000, `${ARROW_INDEX_WARN_AT}`);
+
+  // ── the warning fires from REAL code, on a REAL oversized index ───────────
+  // The index gets 5,001 ids but only the 60 seeded records exist. That is
+  // deliberate: it keeps the fan-out at ARROW_HYDRATED_MAX and simultaneously
+  // exercises the documented "an individual miss is fine" path.
+  await seedSource();
+  const GHOSTS = ARROW_INDEX_WARN_AT + 1 - SEED_N;
+  const bigIndex = [...SEED.map((a) => a.id), ...Array.from({ length: GHOSTS }, (_, i) => `ghost-${i}`)];
+  await kvSet(KV_ARROW_FEED, bigIndex);
+  await kvDel(KV_ARROW_HYDRATED);
+  const big = await captureWarns(() => rebuildArrowFeed());
+  check("O.9 an oversized index warns exactly once on rebuild", big.warns.length === 1,
+    `${big.warns.length} warn(s)`);
+  check("O.10 the warning states the real length",
+    big.warns.length === 1 && big.warns[0].includes(String(ARROW_INDEX_WARN_AT + 1)),
+    big.warns[0] ?? "none");
+  // THE anti-trim assertion, at runtime rather than by reading source: the
+  // rebuild both measured and sliced the index, and the stored index is still
+  // whole. The slice is the cache's depth; the record is untouched.
+  const afterIdx = (await kvGet<string[]>(KV_ARROW_FEED)) ?? [];
+  check("O.11 the index is NOT shortened by the rebuild that warned about it",
+    afterIdx.length === ARROW_INDEX_WARN_AT + 1, `${afterIdx.length} ids (want ${ARROW_INDEX_WARN_AT + 1})`);
+  check("O.12 the rebuild still returned the feed (warning is not a failure path)",
+    big.result.status === "ok" && big.result.arrows.length === SEED_N,
+    big.result.status === "ok" ? `${big.result.arrows.length} arrows` : `got "${big.result.status}"`);
+
+  // CONTROL for O.9. Without it, a `warnIfArrowIndexLarge` that warned on every
+  // rebuild regardless of length would pass everything above.
+  await seedSource();
+  const small = await captureWarns(() => rebuildArrowFeed());
+  check("O.13 CONTROL — a normal-sized index warns not at all", small.warns.length === 0,
+    `${small.warns.length} warn(s) at n=${SEED_N}`);
+
+  // ── nothing shortens the index (source, comments stripped) ────────────────
+  check("O.14 the append site measures the POST-append length",
+    /feedLen\s*=\s*feed\.length\s*\+\s*1/.test(ruleCode), "feed.length + 1");
+  check("O.15 the append site passes that length to the warning",
+    /warnIfArrowIndexLarge\(\s*feedLen\s*,/.test(ruleCode), "warnIfArrowIndexLarge(feedLen, …)");
+  // Guard-the-guard: a negative check on a window that was never located is
+  // vacuously green, which is the failure mode of this entire technique.
+  const appendAt = ruleCode.indexOf("kvMutate<string[]>(KV_ARROW_FEED");
+  check("O.16 the append site was actually found (anchor for O.17)", appendAt >= 0, `idx=${appendAt}`);
+  const appendRegion = appendAt >= 0 ? ruleCode.slice(appendAt, appendAt + 300) : "";
+  check("O.17 the append callback contains no length-reducing operator",
+    appendAt >= 0 && !/\.(slice|splice|pop|shift)\(|\.length\s*=/.test(appendRegion),
+    appendAt >= 0 ? "no slice/splice/pop/shift/length=" : "ANCHOR MISSING");
+  // The cache reads the index and must never write it — its own header rule 1.
+  // This is what makes the `.slice(0, ARROW_HYDRATED_MAX)` below provably a
+  // cache depth rather than a trim: a local copy that is never written back.
+  check("O.18 the cache never WRITES the arrow index",
+    !/kv(Set|Mutate|Del)[^\n]*KV_ARROW_FEED/.test(cacheCode), "no write to KV_ARROW_FEED");
+  check("O.19 the cache measures the FULL index, not the sliced copy",
+    /warnIfArrowIndexLarge\(\s*all\.length\s*,/.test(cacheCode), "warnIfArrowIndexLarge(all.length, …)");
+  check("O.20 …and measures it BEFORE slicing",
+    cacheCode.indexOf("warnIfArrowIndexLarge(") < cacheCode.indexOf("all.slice("),
+    `warn@${cacheCode.indexOf("warnIfArrowIndexLarge(")} < slice@${cacheCode.indexOf("all.slice(")}`);
+  // The module is a logger. If it ever grows a KV call or an array cut, the
+  // thing forbidding the trim has become the thing doing it.
+  check("O.21 the warning module itself touches no KV and cuts no array",
+    !/kv[A-Z]/.test(indexCode) && !/\.(slice|splice|pop|shift)\(/.test(indexCode),
+    "pure: console only");
+
+  // Guard-the-guard for the stripper O.17/O.18/O.21 depend on.
+  check("O.22 stripComments removes comments but not code",
+    stripComments("/* .slice( */ const a=1;") === " const a=1;" &&
+    stripComments("// .slice(\nconst a=1;").trim() === "const a=1;" &&
+    stripComments("const b = x.slice(0);") === "const b = x.slice(0);",
+    "block + line stripped, code intact");
 
   console.log(
     failures === 0

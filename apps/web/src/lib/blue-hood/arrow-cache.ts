@@ -43,6 +43,7 @@ import {
   TTL_ARROW_HYDRATED,
   kvArrow,
 } from "./kv-keys";
+import { warnIfArrowIndexLarge } from "./arrow-index";
 import type { Arrow } from "./types";
 
 /** Bump when the blob's shape changes — a version mismatch reads as a miss and rebuilds. */
@@ -134,7 +135,22 @@ export async function rebuildArrowFeed(): Promise<ArrowFeedRead> {
   // `miss` here is the one honest empty: the index key is genuinely absent, so
   // no arrow has ever fired. Distinct from the `error` above — collapsing those
   // two is the whole bug family.
-  const ids = (index.status === "hit" ? index.value ?? [] : []).slice(0, ARROW_HYDRATED_MAX);
+  const all = index.status === "hit" ? index.value ?? [] : [];
+
+  // #154 — second observation point for the index size, measured on `all`
+  // BEFORE the slice below. Two reasons it is here and not only at the append
+  // site in `rule-engine.ts`:
+  //   • different code path — the append is what the budget outage starves
+  //     first, so if firing stalls, this read is the one still reporting;
+  //   • no extra cost — the full index is already in hand, and a rebuild is
+  //     rare (write-time patching keeps the blob warm; the 6h TTL is only a
+  //     corruption backstop), so this cannot become log spam.
+  // The hot readers are deliberately NOT instrumented — see `arrow-index.ts`.
+  warnIfArrowIndexLarge(all.length, "cache rebuild");
+
+  // The slice is the CACHE's depth, not a trim of the index: `all` is a local
+  // copy of a value this file never writes. `bh:arrow:feed` keeps every id.
+  const ids = all.slice(0, ARROW_HYDRATED_MAX);
 
   const probes = await Promise.all(ids.map((id) => kvGetProbe<Arrow>(kvArrow(id))));
 
