@@ -6,7 +6,8 @@
  * Fetches `/api/hood/ticker-detail?ticker=X&chain=C` lazily on first mount for
  * that row (accordion pattern above collapses the previous panel, so
  * we only ever have one instance mounted). Renders:
- *   • LIQUIDITY block — deepest pool, all pools, slippage strip
+ *   • LIQUIDITY block — deepest pool, all pools, slippage strip (M3-backed), OR
+ *     the narrower row-sourced block on a desk that measures its own depth
  *   • HOLDERS block — top 5, concentration + HHI, amber when top1 > 30%
  *   • ARROW BRIEF — inline if this row has an open arrow
  *   • LINKS strip — chain's own explorer, deepest pool
@@ -18,6 +19,14 @@
  * panel may show per chain is decided in `blue-hood/detail-support.ts`, which is
  * dependency-free precisely so a script can test it; this file is a `"use
  * client"` tree nothing can import. Do not re-derive the decision here.
+ *
+ * ⚠️ THE OVERCORRECTION IS ALSO A BUG. The first fix for the above skipped BOTH
+ * blocks on every non-RH chain, so a Base row said "Liquidity is not wired for
+ * this desk" directly beneath its own TVL $1.90M / VOL 24H $10.43M. What is
+ * RH-only is the M3 TOOL, not the data — hence three sources, not a boolean:
+ * `"tool"` fetches, `"row"` reads the snapshot the board already has, `"none"`
+ * draws the note. A block that shows nothing must be a block with nothing to
+ * show, or every honest "skipped" note on this board gets cheaper.
  */
 
 import { useEffect, useState } from "react";
@@ -26,6 +35,8 @@ import {
   detailPanelPlan,
   explorerAddressUrl,
   explorerTokenUrl,
+  rowLiquidityView,
+  type RowLiquidity,
 } from "@/lib/blue-hood/detail-support";
 
 const BORDER = "#1A1A2E";
@@ -78,11 +89,20 @@ export default function TickerDetailPanel({
   chain,
   contract,
   openArrow,
+  rowLiquidity,
 }: {
   ticker: string;
   chain: HoodChain;
   contract: string;
   openArrow: Arrow | null;
+  /**
+   * The row's OWN depth figures, for desks whose poll measures them (Base).
+   * Required, not optional: a call site that omits it would silently fall back
+   * to "no reading this cycle" on a token the desk measures every cycle, which
+   * is the understating twin of the bug this panel already carries a header
+   * about. Pass `null` only for a desk that genuinely has none.
+   */
+  rowLiquidity: RowLiquidity | null;
 }) {
   const plan = detailPanelPlan(chain);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -119,9 +139,16 @@ export default function TickerDetailPanel({
     return () => { cancelled = true; };
   }, [ticker, chain]);
 
-  // Skipped chain: render the frame, the honest notes, and the open arrow —
-  // which IS chain-correct, being matched on `chainOf` by the parent. Returning
-  // null instead would drop a real, measured block along with the missing ones.
+  // NO TOOL FETCH ON THIS CHAIN — which is not the same as no data, and the
+  // difference is the whole point of `DetailSource`. On Base the desk's own poll
+  // has already measured depth, so `plan.liquidity === "row"` says to draw it
+  // from the snapshot row instead of from M3. The previous version of this
+  // branch rendered the note alone for every non-RH chain, which put "Liquidity
+  // is not wired for this desk" an inch below a row printing TVL $1.90M.
+  //
+  // The provenance line deliberately does NOT say "fresh · updated Ns ago" here:
+  // nothing was fetched by this panel. It names the desk, and the row block
+  // carries its own age implicitly by being this cycle's snapshot.
   if (!plan.fetch) {
     return (
       <div className="flex flex-col gap-4 text-[12px]">
@@ -137,9 +164,13 @@ export default function TickerDetailPanel({
           </a>
         </div>
         <Section label="// LIQUIDITY">
-          <p className="font-mono text-[11px] leading-relaxed" style={{ color: MUTED }}>
-            {plan.liquidityNote}
-          </p>
+          {plan.liquidity === "row" ? (
+            <RowLiquidityBlock chain={chain} row={rowLiquidity} note={plan.liquidityNote} />
+          ) : (
+            <p className="font-mono text-[11px] leading-relaxed" style={{ color: MUTED }}>
+              {plan.liquidityNote}
+            </p>
+          )}
         </Section>
         <Section label="// HOLDERS">
           <p className="font-mono text-[11px] leading-relaxed" style={{ color: MUTED }}>
@@ -339,6 +370,67 @@ function OpenArrowSection({ openArrow }: { openArrow: Arrow | null }) {
   );
 }
 
+/**
+ * LIQUIDITY drawn from the SNAPSHOT ROW, for a desk whose own poll measures depth.
+ *
+ * Deliberately narrower than the M3-backed block above: two figures and one pool
+ * link — no pool count, no slippage strip. Both omissions are properties of the
+ * source rather than oversights. `registry.ts` admits exactly one Aerodrome pool
+ * per Base token, so a count of "1" would be a tautology dressed as a
+ * measurement; and the poll records that pool's liquidity in USD but not its
+ * reserves, which is what the xy=k bound needs. The caveat printed under the
+ * numbers says which, so a reader comparing this against an RH panel is told why
+ * it is shorter instead of being left to guess that something failed.
+ *
+ * The pool link is labelled with the TRUNCATED ADDRESS, not the DEX's name. A
+ * hardcoded "Aerodrome" in a chain-generic component is a fact about today's
+ * Base registry sitting in a file that has no way to notice when it changes;
+ * the address is carried by the row and cannot go stale against it.
+ */
+function RowLiquidityBlock({
+  chain,
+  row,
+  note,
+}: {
+  chain: HoodChain;
+  row: RowLiquidity | null;
+  note: string | null;
+}) {
+  const view = rowLiquidityView(chain, row);
+  const poolLabel = row?.poolRef ? shortAddr(row.poolRef) : null;
+  return (
+    <>
+      {view.measured ? (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[12px]">
+          <div><span style={{ color: MUTED }}>pool tvl</span> {fmtUsd(view.tvlUsd)}</div>
+          <div><span style={{ color: MUTED }}>vol 24h</span> {fmtUsd(view.volume24hUsd)}</div>
+          <div className="col-span-2">
+            <span style={{ color: MUTED }}>pool</span>{" "}
+            {view.poolUrl && poolLabel ? (
+              <a href={view.poolUrl} target="_blank" rel="noreferrer" className="text-white hover:underline">
+                {poolLabel} ↗
+              </a>
+            ) : (
+              <span style={{ color: MUTED }}>—</span>
+            )}
+          </div>
+        </div>
+      ) : (
+        // Amber, not muted grey: an absent reading changes what the number below
+        // the row means, so it is a warning rather than a footnote.
+        <p className="font-mono text-[11px] leading-relaxed" style={{ color: AMBER }}>
+          ⚠ {view.emptyNote}
+        </p>
+      )}
+      {note && (
+        <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: MUTED }}>
+          {note}
+        </p>
+      )}
+    </>
+  );
+}
+
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -375,6 +467,11 @@ function fmtUsd(n: number | null | undefined): string {
   if (n >= 1) return `$${n.toFixed(2)}`;
   if (n > 0) return `$${n.toFixed(4)}`;
   return "$0";
+}
+/** `0x1234…abcd`. Left short enough to read, long enough to check against the
+ *  explorer page the link opens. */
+function shortAddr(a: string): string {
+  return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
 }
 function fmtPct(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "—";

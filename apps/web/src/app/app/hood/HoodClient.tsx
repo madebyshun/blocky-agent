@@ -1118,11 +1118,25 @@ function DriftRow({
               pools/holders under a BASE badge. Same defect family as the
               open-arrow lookup above, which is why both now key off chainOf(r)
               rather than r.ticker. */}
+          {/* `rowLiquidity` is what stops the panel from DENYING a number this
+              same row prints. It is not a second lookup: these three fields are
+              already on the row the board rendered above, so there is no fetch,
+              no tool call and no chance of reading another chain's pool.
+              `total_tvl_usd ?? tvl_usd` mirrors `rowTotalTvl` in rule-engine.ts
+              exactly — the panel must show the figure the DUST GATE judged, not
+              a differently-derived one, or the two would disagree on the same
+              screen. Kept as `??` and not `||` so a real 0 survives: "$0 of
+              depth" and "no reading" are separate states downstream. */}
           <TickerDetailPanel
             ticker={r.ticker}
             chain={chainOf(r)}
             contract={r.contract}
             openArrow={openArrow}
+            rowLiquidity={{
+              totalTvlUsd: r.total_tvl_usd ?? r.tvl_usd ?? null,
+              volume24hUsd: r.volume_24h_usd ?? null,
+              poolRef: r.pool_ref ?? null,
+            }}
           />
           </td>
         </tr>
