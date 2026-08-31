@@ -24,10 +24,13 @@ import { join } from "node:path";
 import {
   mergeBaseSeriesPoint,
   BASE_SERIES_VERSION,
+  archiveHoles,
+  baseSeriesCoverage,
   oracleDating,
   datingCounts,
   oracleAgeAtAnchor,
   oracleAgeSpread,
+  type BaseSeriesDayRead,
 } from "@/lib/base-stocks/base-series";
 import type { BaseSeriesDay, TickerSnapshot } from "@/lib/blue-hood/types";
 
@@ -349,6 +352,178 @@ check("peak scoring is session-aware", /abs_drift_pct >= thresholdFor\(/.test(ro
 const bareCmp = routeCode.match(/abs_drift_pct\s*>=\s*DRIFT_MIN_ABS_PCT/g) ?? [];
 check("no bare single-threshold comparison", bareCmp.length === 0, `${bareCmp.length} hit(s)`);
 check("both thresholds are imported", /\bARB_MIN_ABS_PCT\b/.test(routeCode));
+
+// ── 13b. `archiveHoles` — one definition of "hole", not two ─────────────────
+//
+// The route published `contiguous`/`gaps` from an inline copy of a rule the
+// archive watchdog also held. The copies were not equivalent, and the check
+// that proves it is `13b.2`: the route's version indexed `hitDays[0]` and
+// `hitDays[len-1]` on an UNSORTED array, so handed its days out of order it
+// reported a holed archive as contiguous. It never was handed them out of
+// order — `Promise.all` resolves in input order and `requested` is built
+// ascending — which is exactly the problem. Nothing at the call site said so,
+// nothing tested it, and three unrelated files each had a free hand to break it.
+//
+// A false `contiguous: true` is the worst failure this dataset has: #152 reads
+// these fields as evidence, and "no gaps" plus "no drift" reads as "Base is
+// quiet" when the truth is "we stopped looking".
+console.log("\n13b. gaps are derived once, and the derivation is order-proof");
+
+/** A real day record, built by the shipping writer — no casts. A fixture that
+ *  needs a cast is no longer proof that the real function accepts it. */
+const dayAt = (iso: string) => mergeBaseSeriesPoint(null, [row("NVDAc", { drift: 1 })], iso)!;
+const hitOn = (iso: string): BaseSeriesDayRead => {
+  const value = dayAt(iso);
+  return { day: value.day, status: "hit", value };
+};
+const missOn = (d: string): BaseSeriesDayRead => ({ day: d, status: "miss" });
+const preOn = (d: string): BaseSeriesDayRead => ({ day: d, status: "before_archive" });
+
+const ascending = (a: string[]) => a.every((v, i) => i === 0 || a[i - 1] <= v);
+
+/** 2026-09-01T05:30Z — 0829/0830/0831 are all finished days owed all 24 hours. */
+const NOW_A = new Date("2026-09-01T05:30:00.000Z");
+const H29 = hitOn("2026-08-29T09:00:00.000Z");
+const H31 = hitOn("2026-08-31T09:00:00.000Z");
+const M30 = missOn("20260830");
+
+check("13b.0 fixture is a real hit carrying points", H29.day === "20260829" &&
+  H29.status === "hit" && H29.value.points.length === 1);
+
+const inOrder = archiveHoles([H29, M30, H31], NOW_A);
+check("13b.1 an interior miss is a gap",
+  JSON.stringify(inOrder.missing_days) === '["20260830"]',
+  JSON.stringify(inOrder.missing_days));
+
+// THE regression. Same three days, shuffled. The old inline copy computed
+// `day > "20260831" && day < "20260829"` — a window nothing can satisfy — and
+// returned no gaps at all.
+const shuffled = archiveHoles([H31, M30, H29], NOW_A);
+check("13b.2 the same gap is found when the days arrive out of order",
+  JSON.stringify(shuffled.missing_days) === '["20260830"]',
+  JSON.stringify(shuffled.missing_days));
+check("13b.3 order does not change the verdict at all",
+  JSON.stringify(shuffled) === JSON.stringify(inOrder));
+check("13b.4 absent hours come back ascending regardless of read order",
+  ascending(shuffled.absent_hours) && shuffled.absent_hours.length > 0);
+check("13b.5 missing days come back ascending",
+  ascending(archiveHoles([H31, missOn("20260830"), missOn("20260829"),
+    hitOn("2026-08-28T09:00:00.000Z")], NOW_A).missing_days));
+
+check("13b.6 a leading miss is NOT a gap",
+  archiveHoles([missOn("20260828"), H29, H31], NOW_A).missing_days.length === 0);
+check("13b.7 a trailing miss is NOT a gap",
+  archiveHoles([H29, H31, missOn("20260901")], NOW_A).missing_days.length === 0);
+
+// The shape that once scored a dead archive as healthy: every day a miss, so
+// interior-only finds nothing and no hits means no hours to be absent. Correct
+// here — and the reason `contiguous` alone can never evidence a live archive.
+// `days_with_data` is what separates the two, which is why the watchdog reports
+// `empty` as its own level rather than as a quiet `intact`.
+const dead = archiveHoles([missOn("20260829"), missOn("20260830")], NOW_A);
+check("13b.8 an all-miss window reports no holes (absence is not a gap)",
+  dead.missing_days.length === 0 && dead.absent_hours.length === 0);
+
+check("13b.9 a before_archive day is neither a gap nor a hole",
+  JSON.stringify(archiveHoles([preOn("20260101"), H29, M30, H31], NOW_A).missing_days) ===
+    '["20260830"]');
+
+// Absent hours: the day in progress is owed only its FINISHED hours. Alarming
+// on the current hour is how a real alarm gets tuned out.
+const today = archiveHoles([hitOn("2026-09-01T02:00:00.000Z")], NOW_A);
+check("13b.10 finished empty hours are absent",
+  JSON.stringify(today.absent_hours) ===
+    '["2026090100","2026090101","2026090103","2026090104"]',
+  JSON.stringify(today.absent_hours));
+check("13b.11 the hour in progress is never called absent",
+  !today.absent_hours.includes("2026090105"));
+check("13b.12 future hours are never called absent",
+  !today.absent_hours.some((h) => h > "2026090105"));
+
+// Source: the route must not have kept a second copy. The positive check is
+// what stops the two negatives from passing vacuously after a rename.
+check("13b.13 the route calls the shared derivation", /\barchiveHoles\(/.test(routeCode));
+// …on the window it ACTUALLY read, and its own clock. Passing anything else —
+// an empty array, a fresh `new Date()` unrelated to the read — compiles, builds,
+// and publishes `contiguous: true` about a window it never looked at. Nothing
+// downstream could tell. Pinned by name because there is no way to catch it by
+// running the handler here (it needs KV).
+check("13b.18 …on the reads it took, with the request's clock",
+  /\barchiveHoles\(\s*reads\s*,\s*now\s*\)/.test(routeCode));
+const inlineMiss = routeCode.match(/status\s*===\s*"miss"/g) ?? [];
+check("13b.14 the route no longer re-derives the interior-miss filter",
+  inlineMiss.length === 0, `${inlineMiss.length} hit(s)`);
+check("13b.15 the route no longer holds its own hit-day bounds",
+  !/hitDays/.test(routeCode));
+
+// The response contract is unchanged by the refactor. A consolidation that
+// quietly renames a published field is a breaking API change wearing a
+// refactor's clothes.
+// `contiguous` occurs TWICE in this route — as the published field and as a
+// key in the payload legend. The first version of this check was a bare
+// `/\bcontiguous:/`, which the legend satisfied on its own: renaming the actual
+// field to `is_contiguous` left the check green. Mutation B4 caught it. A
+// positive source check answered by documentation instead of code is the same
+// failure as a negative one answered by a comment (see `stripComments` in
+// archive-watch-check.ts) — it tests the prose.
+//
+// Both halves are now pinned, and the pairing is the point: the count catches a
+// rename of EITHER copy, so the field and the sentence describing it cannot
+// drift apart either.
+const contiguousUses = routeCode.match(/\bcontiguous:/g) ?? [];
+check("13b.16a `contiguous` appears exactly twice — the field and its legend",
+  contiguousUses.length === 2, `${contiguousUses.length} hit(s)`);
+check("13b.16b the published `contiguous` is derived from the shared holes",
+  /\bcontiguous:\s*holes\./.test(routeCode));
+check("13b.17 the response still publishes `gaps.days` and `gaps.hours`, both from holes",
+  /gaps:\s*\{\s*days:\s*holes\.[^}]*\bhours:\s*holes\.[^}]*\}/.test(routeCode));
+
+// The refactor's actual promise, tested rather than argued. For the ordering
+// production supplies — ascending, because `Promise.all` preserves input order
+// and `requested` is built ascending — the shared derivation returns EXACTLY
+// what the deleted inline copy returned. Byte-identical response.
+//
+// The deleted copy is reproduced here once, on purpose. It is the only way to
+// state "this changed nothing for real traffic" as a check instead of a claim
+// in a commit message. Note it stays green under mutation A1 (unsorted bounds):
+// that is correct and is the whole point — on ascending input the two agree,
+// and they diverge only where the old one was WRONG, which is what 13b.2 tests.
+// Non-regression and bug-detection are different questions and get different
+// checks.
+function legacyHoles(reads: BaseSeriesDayRead[], now: Date) {
+  const coverage = new Map<string, string[]>();
+  for (const r of reads) {
+    if (r.status === "hit") {
+      coverage.set(r.day, baseSeriesCoverage(r.day, r.value.points, now).hours_absent);
+    }
+  }
+  const absentHours = [...coverage.values()].flat();
+  const hitDays = reads.filter((r) => r.status === "hit").map((r) => r.day);
+  const missedDays =
+    hitDays.length > 0
+      ? reads
+          .filter(
+            (r) => r.status === "miss" && r.day > hitDays[0] && r.day < hitDays[hitDays.length - 1],
+          )
+          .map((r) => r.day)
+      : [];
+  return { missing_days: missedDays, absent_hours: absentHours };
+}
+
+const realOrder: BaseSeriesDayRead[] = [
+  hitOn("2026-08-28T09:00:00.000Z"),
+  H29,
+  M30,
+  H31,
+  missOn("20260901"),
+];
+check("13b.19 byte-identical to the deleted inline copy on ascending input",
+  JSON.stringify(archiveHoles(realOrder, NOW_A)) ===
+    JSON.stringify(legacyHoles(realOrder, NOW_A)),
+  JSON.stringify(archiveHoles(realOrder, NOW_A)).slice(0, 90));
+check("13b.20 …and that fixture is not trivially empty",
+  archiveHoles(realOrder, NOW_A).missing_days.length === 1 &&
+    archiveHoles(realOrder, NOW_A).absent_hours.length > 0);
 
 // ── 14. `v` dates the WRITER, not the items ────────────────────────────────
 // The defect this group exists for, reproduced through the shipping merge.

@@ -476,6 +476,38 @@ const all = (h: number[]) => h;
   check("8.7 fixture days carry the base chain discriminator", d.chain === "base");
 }
 
+// ── Group 11: the watchdog and the endpoint share ONE definition of "hole" ───
+//
+// `/api/hood/base-series` publishes the same two arrays as `gaps`. They used to
+// be derived twice — once here, once inline in the route. Two texts for one rule
+// is bad enough; here it is worse, because a watchdog that disagrees with the
+// endpoint it watches is WORSE than no watchdog. Either the operator is paged
+// about a window the endpoint calls contiguous, or the endpoint reports gaps
+// nobody is paged about — and whichever one is consulted first looks
+// authoritative. Groups 2 and 3 above still test the behaviour end-to-end
+// through `classifyArchive`; these pin that it is not a second implementation
+// quietly agreeing for now.
+
+{
+  check(
+    "11.1 the classifier delegates to the shared derivation",
+    /archiveHoles\(/.test(libCode),
+  );
+  check(
+    "11.2 the classifier does not re-derive the interior-miss filter",
+    !/status\s*===\s*"miss"/.test(libCode),
+  );
+  check(
+    "11.3 the classifier does not re-derive absent hours",
+    !/baseSeriesCoverage\(/.test(libCode),
+  );
+  // Guard-the-guard: 11.2/11.3 would pass for free against an empty string.
+  check(
+    "11.4 the lib code really was loaded and is non-trivial",
+    libCode.length > 1500 && /classifyArchive/.test(libCode),
+  );
+}
+
 // ── Group 9: conservation ────────────────────────────────────────────────────
 
 {

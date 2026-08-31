@@ -655,3 +655,74 @@ export function baseSeriesCoverage(
     expected_to: `${day}${String(to).padStart(2, "0")}`,
   };
 }
+
+/** The two kinds of hole a window of days can hold. Both ascending. */
+export interface ArchiveHoles {
+  /**
+   * Days holding no record that sit BETWEEN two days that do.
+   *
+   * Leading and trailing misses are excluded DELIBERATELY. A 14-day window over
+   * a 2-day-old archive would otherwise report twelve days of "gap" for days
+   * nothing was alive to record, and an alarm on the expected is how a real one
+   * gets ignored.
+   */
+  missing_days: string[];
+  /** Finished hours inside a readable day that hold no point, `YYYYMMDDHH`. */
+  absent_hours: string[];
+}
+
+/**
+ * Where a window of archive reads has holes.
+ *
+ * ## Why this is one function and not two copies
+ *
+ * It WAS two. `/api/hood/base-series` derived `contiguous` and
+ * `gaps:{days,hours}` inline; `classifyArchive` in `archive-watch.ts` decided
+ * whether to page the operator from its own copy. Same rule, two texts — and
+ * they had already drifted in the way that is invisible until it is not:
+ *
+ *   the route's copy indexed `hitDays[0]` and `hitDays[len-1]` on an UNSORTED
+ *   array. That was correct only because `readBaseSeriesDays` is
+ *   `Promise.all(days.map(…))`, `Promise.all` resolves IN INPUT ORDER, and the
+ *   route happens to build `requested` ascending. Three facts, three files, none
+ *   of them stated where the indexing happened.
+ *
+ * Break any one of the three — resolve in completion order, accept a `from`
+ * later than `to`, feed it a `Set` — and the interior window becomes the wrong
+ * window: `hitDays[0]` is then whichever day answered first, interior misses
+ * fall outside the bounds, and the route publishes a holed archive as
+ * `contiguous: true`. On THIS dataset that is the worst available failure and
+ * the one the route refuses everywhere else — #152 reads these fields as
+ * evidence for the chain question, and a false "complete" biases its answer
+ * toward "Base is quiet" when the truth is "we stopped looking".
+ *
+ * Sorting inside removes the dependency on all three: the bounds are ascending
+ * BY CONSTRUCTION rather than by luck, in the one place the rule is written.
+ *
+ * `before_archive` days need no filtering here — that status is never `hit` and
+ * never `miss`, so it cannot reach either branch.
+ */
+export function archiveHoles(reads: BaseSeriesDayRead[], now: Date): ArchiveHoles {
+  const hits = reads.flatMap((r) => (r.status === "hit" ? [r] : []));
+  const hitDays = hits.map((r) => r.day).sort();
+
+  const absent_hours = hits
+    .flatMap((r) => baseSeriesCoverage(r.day, r.value.points, now).hours_absent)
+    .sort();
+
+  // No hit anywhere means no interior to be inside of. Not "no gaps" as a
+  // finding — there is simply no pair of dated ends to bracket anything, and
+  // inventing one from the requested range would report every unrecorded day of
+  // a dead archive as a gap.
+  const missing_days =
+    hitDays.length === 0
+      ? []
+      : reads
+          .filter(
+            (r) => r.status === "miss" && r.day > hitDays[0] && r.day < hitDays[hitDays.length - 1],
+          )
+          .map((r) => r.day)
+          .sort();
+
+  return { missing_days, absent_hours };
+}
