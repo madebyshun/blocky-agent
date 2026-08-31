@@ -7,11 +7,13 @@
  * the React `WatchlistProvider` is just a client-side cache over these same
  * routes, never a second copy of the rules.
  *
- * WHY NOT the Sentinel shape: Sentinel keeps ALL watches in one global array
- * (`sentinel:watches`), read+written whole on every edit — race-prone and
- * unbounded. Per-user alerting can't scale on that. Here each wallet owns its
- * own key, and the alert engine's hot lookup ("who watches COIN?") is a single
- * Redis SET read, not a scan of every watcher.
+ * WHY NOT ONE GLOBAL ARRAY: the shape this deliberately rejects keeps ALL
+ * watches in a single key, read+written whole on every edit — two concurrent
+ * edits lose one, and the blob grows without bound. Per-user alerting cannot
+ * scale on that. Here each wallet owns its own key, and the alert engine's hot
+ * lookup ("who watches COIN?") is a single Redis SET read, not a scan of every
+ * watcher. (The concrete example was Sentinel's `sentinel:watches`; Sentinel
+ * was retired 2026-08-31 — the reasoning is what matters, not the corpse.)
  *
  * TWO KEYS, KEPT SYMMETRIC:
  *   • bh:watch:{address}       — forward, the user's list (UI edits this)

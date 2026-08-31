@@ -318,8 +318,12 @@ export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): 
  * Set helpers — thin, fault-tolerant wrappers over Redis SADD/SREM/SMEMBERS.
  * A KV set is the right primitive for a "who's subscribed to X" list: adds are
  * idempotent, removes never leave orphans, and membership reads are one call —
- * no whole-array read-modify-write (the race-prone shape Sentinel's global
- * `sentinel:watches` array has). Never throw: a failed set op logs and no-ops,
+ * no whole-array read-modify-write. That last part is the point: the shape this
+ * replaces kept EVERY subscription in one global JSON array, read and rewritten
+ * whole on every edit, so two concurrent edits lost one of them and the blob
+ * grew unbounded. (It was Sentinel's `sentinel:watches`; Sentinel was retired
+ * 2026-08-31, but the anti-pattern outlives it — don't rebuild it.)
+ * Never throw: a failed set op logs and no-ops,
  * so a KV blip degrades one alert route, it doesn't 500 the caller.
  */
 export async function kvSAdd(key: string, ...members: string[]): Promise<void> {
