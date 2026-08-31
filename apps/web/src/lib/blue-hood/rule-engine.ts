@@ -18,6 +18,7 @@
  */
 import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import { onArrowFired } from "./arrow-cache";
+import { warnIfArrowIndexLarge } from "./arrow-index";
 import {
   KV_ARROW_SERIAL_COUNTER,
   kvArrow,
@@ -374,8 +375,11 @@ export async function fireArrow(
   // a different type on the same ticker within the same cycle sees it.
   await kvSet(tickerIdxKey, { arrow_id: id, fired_at: now } satisfies OpenIndex, TTL_ARROW_INDEX);
 
-  // Push id onto the feed list (newest-first). We keep the feed unbounded
-  // for now; when it grows past ~500 we can trim in a follow-up.
+  // Push id onto the feed list (newest-first). The feed is unbounded BY DESIGN
+  // and stays that way — see `arrow-index.ts` for why trimming it is not an
+  // optimisation but the loss of the track record. #154 adds a size WARNING
+  // here instead, because this is the one line in the codebase that makes the
+  // index longer.
   //
   // `kvMutate`, not `kvGet ?? []` — this key is the ONLY index of the public
   // arrow feed, it carries no TTL and has no backup. Under the old shape a
@@ -384,9 +388,21 @@ export async function fireArrow(
   // but nothing points at them, so /hood and the track record both go blank
   // and only a `kvScan` sweep gets them back. Skipping one append costs one
   // arrow its feed slot. See `kvMutate` in lib/kv.ts.
-  const feedRes = await kvMutate<string[]>(KV_ARROW_FEED, [], (feed) => [id, ...feed]);
+  //
+  // `feedLen` is read out of the callback (same pattern as `queueLen` below)
+  // because `kvMutate` returns an outcome, not the new value.
+  let feedLen = 0;
+  const feedRes = await kvMutate<string[]>(KV_ARROW_FEED, [], (feed) => {
+    feedLen = feed.length + 1;
+    return [id, ...feed];
+  });
   if (feedRes === "skipped") {
     console.error(`[fire] ${serial} ${ticker} persisted but NOT indexed — KV read failed; arrow is orphaned until re-indexed`);
+  } else {
+    // Only meaningful when the read landed: on "skipped" the callback never
+    // ran and `feedLen` is still 0, which would read as an empty index rather
+    // than as "we did not find out". Silence is the honest answer there.
+    warnIfArrowIndexLarge(feedLen, "fire");
   }
 
   // #148 ② — keep the hydrated read-cache in step with the index we just wrote.
