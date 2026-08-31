@@ -12,8 +12,26 @@
  *      run the push fan-out — both wait so the notification body includes
  *      the final headline.
  *   4. Log a one-line `[brief-worker]` summary. Never throws — a bad row
- *      goes back into `errored[]` but the cron always returns 200 so
- *      Vercel doesn't flag the schedule.
+ *      goes back into `errored[]` but the cron returns 200 so Vercel
+ *      doesn't flag the schedule.
+ *
+ * ═══ WHAT "COULD NOT READ" MEANS HERE (#150) ═══
+ *
+ * A pop is destructive: once an id leaves `bh:brief:queue` this worker is the
+ * only thing that can still attach that arrow's brief. So every read on this
+ * path has to answer three questions, not two — present, absent, or unknown —
+ * because the two ways of "not getting a value" have opposite correct actions:
+ *
+ *   • the arrow record read (`processOne`) — a genuine `miss` drops the id (an
+ *     arrow really can outlive its 30d TTL); a KV `error` returns
+ *     `deferred_kv_unavailable` and the id is put BACK on the queue.
+ *   • the queue read itself (`handle`)     — a genuine empty returns the usual
+ *     200 with `processed: 0`; a KV `error` returns **503 `kv_unavailable`**
+ *     and processes nothing. This is the one deliberate exception to the 200
+ *     rule above: that rule protects the schedule from ONE bad row, and this
+ *     is the worker unable to see the queue at all.
+ *
+ * The rule in one line: never let a failed read be reported as an empty one.
  *
  * Cadence: every 1 min. The poller runs every 2 min and can fire 0-3
  * arrows/cycle in practice; 8-batch × 1-min gives 4-8× headroom.
@@ -22,7 +40,7 @@
  * other Blue Hood crons.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGetProbe, kvSet, kvMutate } from "@/lib/kv";
 import { KV_BRIEF_QUEUE, kvArrow } from "@/lib/blue-hood/kv-keys";
 import { fetchArrowBrief, hasBriefPath } from "@/lib/blue-hood/brief";
 import { pushArrowToAll } from "@/lib/blue-hood/push";
@@ -58,7 +76,21 @@ interface WorkerRowResult {
    * arrow would put a false cause in the ops log — the same bug this PR fixes
    * one layer down, where "failed" was a false cause in the UI.
    */
-  status: "attached" | "failed" | "skipped_missing" | "skipped_already_done" | "skipped_no_brief_path";
+  status:
+    | "attached"
+    | "failed"
+    | "skipped_missing"
+    | "skipped_already_done"
+    | "skipped_no_brief_path"
+    /**
+     * #150 — the arrow could not be READ, so nothing at all is known about it.
+     * Deliberately NOT a `skipped_*` value: every other skip means "we looked
+     * and decided not to", and the `startsWith("skipped")` aggregate below
+     * counts them as handled. This one means the opposite — we never looked,
+     * and the id goes BACK on the queue. Naming it `skipped_*` would file a
+     * retry under "done" in the same log line that exists to spot the outage.
+     */
+    | "deferred_kv_unavailable";
   llm_chain?: string;
   push_delivered?: number;
   push_gone?: number;
@@ -69,11 +101,32 @@ interface WorkerRowResult {
 }
 
 async function processOne(id: string, health: AlertHealthGate): Promise<WorkerRowResult> {
-  const arrow = await kvGet<Arrow>(kvArrow(id));
-  if (!arrow) {
+  // #150 A-part2 — THE destructive read in this file, and it is not the one the
+  // triage flagged. `kvGet` collapses "key absent" and "the KV command threw"
+  // into the same `null`, and the branch below turned that null into the
+  // sentence `arrow ${id} vanished from KV — dropping`. By the time we get here
+  // `handle()` has ALREADY popped this id off `bh:brief:queue`, so "dropping"
+  // was literal and permanent: one throttled read cost a live arrow its A4
+  // brief forever, and the log asserted a falsehood about the record to explain
+  // it. Note the asymmetry that makes this obviously wrong — `rule-engine.ts`
+  // already guards the APPEND to this same queue with `kvMutate`; only the
+  // drain was unprotected, so the queue was safe to fill and unsafe to empty.
+  //
+  // `kvGetProbe` is what lets the two answers be different answers. A genuine
+  // `miss` still drops (an arrow really can outlive its 30d TTL); an `error`
+  // defers and `handle()` puts the id back.
+  const probe = await kvGetProbe<Arrow>(kvArrow(id));
+  if (probe.status === "error") {
+    console.error(
+      `[brief-worker] arrow ${id} NOT read — KV error: ${probe.message}; re-queueing, no brief attempted`,
+    );
+    return { arrow_id: id, status: "deferred_kv_unavailable" };
+  }
+  if (probe.status === "miss") {
     console.warn(`[brief-worker] arrow ${id} vanished from KV — dropping`);
     return { arrow_id: id, status: "skipped_missing" };
   }
+  const arrow = probe.value;
   // Idempotency: if a previous invocation already attached, skip.
   if (arrow.brief_status === "attached" || arrow.brief_status === "skipped") {
     return {
@@ -252,23 +305,58 @@ async function handle(req: NextRequest) {
   }
   const started = Date.now();
 
-  // 2.1 health-gate — computed ONCE per invocation (2 KV reads), shared by every
-  // arrow in the batch so we never re-probe per arrow. This is the same
-  // computation behind /api/hood/health (1.3); calling the lib avoids a self-HTTP
-  // hop. `health.ok` is false when the engine is blind (KV throttle) or stale —
-  // `emitAlertsForArrow` then logs a traceable skip instead of alerting off bad
-  // data. Never gates the brief attach or push; only the new alert fan-out.
-  const health = await computeEngineHealth();
-  if (!health.ok) {
-    console.warn(`[alert] gate closed for this batch: health=${health.status} observable=${health.observable} — alerts will be skipped + logged per arrow`);
-  }
-
-  // Atomically pop the head of the queue: read → slice → write remainder.
+  // Pop the head of the queue: read → slice → write remainder.
   // Under Vercel serverless we don't have true CAS, but with 1-min
   // cadence + 1 cron instance this races only under manual concurrent
   // POSTs; a re-processed id short-circuits at the idempotency check.
-  const queue = (await kvGet<string[]>(KV_BRIEF_QUEUE)) ?? [];
-  if (queue.length === 0) {
+  //
+  // #150 A-part2 — this was `kvGet ?? []` → early-return-if-empty → `kvSet`.
+  // It is NOT the destructive member of the family: the `length === 0` return
+  // fired before the write, so a throttled read never wiped the queue. It was
+  // the HONESTY half, and that is not a lesser bug. A KV error answered
+  // `{ok:true, queue_len_before:0, processed:0}` — a worker that never managed
+  // to look, publishing "there was nothing to do" as fact, in the exact
+  // sentence shape #148 spent an outage on. `kvMutate` gives the read three
+  // answers instead of one, and `unchanged` below is the only honest empty.
+  let batchIds: string[] = [];
+  let queueLenBefore = 0;
+  let remainderLen = 0;
+  const popRes = await kvMutate<string[]>(KV_BRIEF_QUEUE, [], (queue) => {
+    queueLenBefore = queue.length;
+    if (queue.length === 0) return null; // genuinely empty — write nothing
+    batchIds = queue.slice(0, BATCH);
+    const remainder = queue.slice(BATCH);
+    remainderLen = remainder.length;
+    return remainder;
+  });
+
+  if (popRes === "skipped" || popRes === "failed") {
+    // Two different failures, one correct response: do not process anything.
+    //   • "skipped" — the READ failed. We do not know what is in the queue, and
+    //     the ids we would invent are `[]`.
+    //   • "failed"  — the read landed but the remainder never persisted, so
+    //     every id is STILL queued. Processing them now would attach briefs the
+    //     next tick re-attaches, against a KV that just proved it cannot write.
+    // Bailing costs one minute of latency. The alternative costs the briefs.
+    console.error(`[brief-worker] queue NOT drained (${popRes}) — KV unavailable; nothing processed`);
+    // 503, not the module header's usual 200. That rule is about a bad ROW —
+    // one arrow must not flag the schedule. This is the worker unable to read
+    // its own queue, which is precisely the condition a cron failure surface
+    // exists to show, and #148 is what a silent version of it costs.
+    // `hood-kick-crons.ts` already treats a non-200 here as a warning, not a
+    // fatal, so nothing downstream breaks on it.
+    return NextResponse.json({
+      ok: false,
+      code: "kv_unavailable",
+      reason: popRes === "skipped" ? "queue read failed" : "queue write failed",
+      duration_ms: Date.now() - started,
+      processed: 0,
+      per_arrow: [],
+    }, { status: 503 });
+  }
+
+  if (popRes === "unchanged") {
+    // The one honest empty: the read LANDED and the queue really is empty.
     return NextResponse.json({
       ok: true,
       duration_ms: Date.now() - started,
@@ -278,11 +366,25 @@ async function handle(req: NextRequest) {
       per_arrow: [],
     });
   }
-  const batchIds = queue.slice(0, BATCH);
-  const remainder = queue.slice(BATCH);
-  await kvSet(KV_BRIEF_QUEUE, remainder);
 
-  console.log(`[brief-worker] pop batch=${batchIds.length} queue_after=${remainder.length}`);
+  console.log(`[brief-worker] pop batch=${batchIds.length} queue_after=${remainderLen}`);
+
+  // 2.1 health-gate — computed ONCE per invocation (2 KV reads), shared by every
+  // arrow in the batch so we never re-probe per arrow. This is the same
+  // computation behind /api/hood/health (1.3); calling the lib avoids a self-HTTP
+  // hop. `health.ok` is false when the engine is blind (KV throttle) or stale —
+  // `emitAlertsForArrow` then logs a traceable skip instead of alerting off bad
+  // data. Never gates the brief attach or push; only the new alert fan-out.
+  //
+  // Moved BELOW the pop (#150): this cron ticks every 60s and the queue is empty
+  // on most of them, so probing health first spent 3 KV commands on a tick that
+  // needs 1 — ~2,880 wasted commands/day against the budget that has suspended
+  // this engine three times. It also logged "alerts will be skipped per arrow"
+  // for batches with no arrows. Nothing below reads `health` before this line.
+  const health = await computeEngineHealth();
+  if (!health.ok) {
+    console.warn(`[alert] gate closed for this batch: health=${health.status} observable=${health.observable} — alerts will be skipped + logged per arrow`);
+  }
 
   // Sequential — A4 upstreams (Virtuals/Venice/Bankr) are rate-limited
   // per-key; parallel would just serialize on their side and cost more
@@ -297,27 +399,65 @@ async function handle(req: NextRequest) {
     }
   }
 
+  // #150 — a deferred row was never read, so it was never processed. It was
+  // already popped, so unless it goes back it is gone. Re-append here rather
+  // than inside `processOne` for two reasons:
+  //   • ONE kvMutate for the whole batch. The condition that produces deferrals
+  //     IS a KV budget failure; answering it with N more commands per batch is
+  //     the wrong direction.
+  //   • TAIL, not head. A permanently unreadable id parked at the head would
+  //     starve every arrow behind it on every tick, which converts one bad row
+  //     into a stalled queue — the FIFO note in `kv-keys.ts` is about fairness
+  //     among healthy ids, and this is what keeps it true when one is not.
+  const deferred = per_arrow.filter((r) => r.status === "deferred_kv_unavailable").map((r) => r.arrow_id);
+  let requeued = 0;
+  if (deferred.length > 0) {
+    const reRes = await kvMutate<string[]>(KV_BRIEF_QUEUE, [], (queue) => {
+      // A concurrent fire may already have re-added one; `rule-engine.ts`
+      // guards its own append the same way. Nothing to add ⇒ nothing to write.
+      const missing = deferred.filter((did) => !queue.includes(did));
+      if (missing.length === 0) return null;
+      requeued = missing.length;
+      return [...queue, ...missing];
+    });
+    if (reRes === "skipped" || reRes === "failed") {
+      requeued = 0;
+      console.error(
+        `[brief-worker] ${deferred.length} deferred arrow(s) NOT re-queued (${reRes}) — ` +
+          `their briefs are lost unless re-enqueued by hand: ${deferred.join(",")}`,
+      );
+    }
+  }
+
   const attached = per_arrow.filter((r) => r.status === "attached").length;
   const failed = per_arrow.filter((r) => r.status === "failed").length;
   const skipped = per_arrow.filter((r) => r.status.startsWith("skipped")).length;
   const alerts_emitted = per_arrow.reduce((n, r) => n + (r.alert_emitted ?? 0), 0);
   const alerts_gated = per_arrow.filter((r) => r.alert_skipped).length;
+  const queueLenAfter = remainderLen + requeued;
   console.log(
     `[brief-worker] done duration_ms=${Date.now() - started}` +
       ` attached=${attached} failed=${failed} skipped=${skipped}` +
+      ` deferred=${deferred.length} requeued=${requeued}` +
       ` alerts_emitted=${alerts_emitted} alerts_gated=${alerts_gated}` +
-      ` health=${health.status} queue_after=${remainder.length}`,
+      ` health=${health.status} queue_after=${queueLenAfter}`,
   );
 
   return NextResponse.json({
-    ok: true,
+    // A batch where every row deferred processed nothing — say so in the field
+    // callers actually branch on, rather than letting `processed: N` imply work.
+    ok: deferred.length < per_arrow.length || per_arrow.length === 0,
+    ...(deferred.length > 0 ? { code: "kv_unavailable" } : {}),
     duration_ms: Date.now() - started,
-    queue_len_before: queue.length,
-    queue_len_after: remainder.length,
+    queue_len_before: queueLenBefore,
+    queue_len_after: queueLenAfter,
     processed: per_arrow.length,
     attached,
     failed,
     skipped,
+    /** #150 — popped but never read. Re-queued; NOT counted as skipped/failed. */
+    deferred: deferred.length,
+    requeued,
     alerts_emitted,
     alerts_gated,
     engine_health: { status: health.status, ok: health.ok, observable: health.observable },
