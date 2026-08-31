@@ -28,6 +28,8 @@ import {
   baseSeriesCoverage,
   oracleDating,
   datingCounts,
+  oracleAgeAtAnchor,
+  oracleAgeSpread,
   type BaseSeriesDayRead,
 } from "@/lib/base-stocks/base-series";
 import type { BaseSeriesDay, TickerSnapshot } from "@/lib/blue-hood/types";
@@ -723,6 +725,178 @@ check("legend `v` redirects to the field that answers vintage",
 const od = legendEntry("oracle_dating");
 check("legend `oracle_dating` names all three states",
   ["dated", "undatable", "predates_field"].every((s) => od.includes(s)), od.slice(0, 80));
+
+// ── 17. The oracle-age clamp, and what it must not throw away (#160) ───────
+// A round here can be dated AFTER the cycle that recorded it — measured on prod,
+// two samples, systematic. `at - oracle_updated_at` therefore goes negative, and
+// any distribution built from it grows a left tail that is pure bookkeeping.
+//
+// The clamp is the easy half. The half worth guarding is that clamping must not
+// erase the fact that it happened: `Math.max(0, …)` alone turns "234s in the
+// FUTURE" into "0s old", which reads as a freshness claim and silently deletes
+// the only signal that says whether the anchor artifact is growing.
+console.log("\n17. oracleAgeAtAnchor / oracleAgeSpread");
+
+const ANCHOR = "2026-08-28T15:55:27.454Z";
+/** unix seconds for an instant on the measured day. */
+const secs = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+const readingAt = (roundIso: string, anchor = ANCHOR) =>
+  oracleAgeAtAnchor({ oracle_updated_at: secs(roundIso) }, anchor);
+
+const past = readingAt("2026-08-28T15:51:43.000Z");
+check("a past round measures", past.state === "measured");
+check(
+  "...as a positive age, not future-dated",
+  past.state === "measured" && past.age_s === 224 && !past.future_dated && past.ahead_s === 0,
+  JSON.stringify(past),
+);
+
+const ahead = readingAt("2026-08-28T15:59:21.000Z");
+check(
+  "a FUTURE-dated round is clamped to 0",
+  ahead.state === "measured" && ahead.age_s === 0,
+  JSON.stringify(ahead),
+);
+check(
+  "...and says so, with the distance it swallowed",
+  ahead.state === "measured" && ahead.future_dated && ahead.ahead_s === 234,
+  JSON.stringify(ahead),
+);
+// THE check of this group. `age_s` alone cannot separate "the round printed at
+// the anchor instant" from "the round printed four minutes after it". A clamp
+// that reports only the clamped number is the collapse, not the fix.
+const exactlyZero = oracleAgeAtAnchor(
+  { oracle_updated_at: secs(ANCHOR) },
+  ANCHOR,
+);
+check(
+  "a genuine 0 and a clamped 0 are DISTINGUISHED",
+  exactlyZero.state === "measured" && ahead.state === "measured" &&
+    exactlyZero.age_s === ahead.age_s && exactlyZero.future_dated !== ahead.future_dated,
+);
+check(
+  "an exactly-anchored round is not called future-dated",
+  exactlyZero.state === "measured" && !exactlyZero.future_dated && exactlyZero.ahead_s === 0,
+  JSON.stringify(exactlyZero),
+);
+
+// Reproduce the field measurement. All four live-snapshot rows from the #160
+// note, against that sample's own anchor — this pins the rounding convention to
+// the one the observation was taken with, so the function and the note cannot
+// quietly disagree about the same data.
+const FIELD: Array<[string, string, number]> = [
+  ["NVDA  future-dated by 128s", "2026-08-28T15:57:35.000Z", -128],
+  ["GOOGL future-dated by 234s", "2026-08-28T15:59:21.000Z", -234],
+  ["META  224s past",            "2026-08-28T15:51:43.000Z",  224],
+  ["AAPL  1476s past",           "2026-08-28T15:30:51.000Z", 1476],
+];
+for (const [label, roundIso, expected] of FIELD) {
+  const r = readingAt(roundIso);
+  const signed = r.state === "measured" ? (r.future_dated ? -r.ahead_s : r.age_s) : NaN;
+  check(`reproduces the 2026-08-28 sample — ${label}`, signed === expected, `got ${signed}`);
+}
+// The archive sample from the same note reads 215s; this function says 214. The
+// true gap is 214.313s (15:00:44.687 → 15:04:19), so 215 comes from EITHER
+// truncating the anchor's milliseconds to 15:00:44 OR rounding away from zero
+// where we round to nearest — the note does not record which, and both land on
+// 215, so this is not a distinction to guess at. What matters is that a 1s
+// difference changes no finding, and that the convention is pinned: the four
+// live-snapshot rows above agree exactly under round-to-nearest, so that is the
+// convention the observation was taken with. Asserted so the 1s stays a recorded
+// decision rather than a discrepancy someone rediscovers later and "fixes".
+const archiveSample = oracleAgeAtAnchor(
+  { oracle_updated_at: secs("2026-08-28T15:04:19.000Z") },
+  "2026-08-28T15:00:44.687Z",
+);
+check(
+  "archive sample: 214s ahead, milliseconds kept",
+  archiveSample.state === "measured" && archiveSample.future_dated && archiveSample.ahead_s === 214,
+  JSON.stringify(archiveSample),
+);
+
+// An absent age has three causes here too, and they are not interchangeable.
+const undat = oracleAgeAtAnchor({ oracle_updated_at: null }, ANCHOR);
+const predates = oracleAgeAtAnchor({}, ANCHOR);
+check("a null round is not_dated", undat.state === "not_dated");
+check("...carrying `undatable`", undat.state === "not_dated" && undat.dating === "undatable");
+check("an absent round is not_dated", predates.state === "not_dated");
+check(
+  "...carrying `predates_field` — the two are still distinguished here",
+  predates.state === "not_dated" && predates.dating === "predates_field" &&
+    undat.state === "not_dated" && undat.dating !== predates.dating,
+);
+// Our bookkeeping failing is not the feed failing. Folding a corrupt archive
+// record into `not_dated` would file our own bug under the oracle's name.
+const noAnchor = oracleAgeAtAnchor({ oracle_updated_at: ORACLE_AT }, "not-a-date");
+check("an unparseable anchor is its own state", noAnchor.state === "no_anchor");
+check("...and echoes the offending value", noAnchor.state === "no_anchor" && noAnchor.anchor === "not-a-date");
+check(
+  "...and is NOT collapsed into not_dated",
+  noAnchor.state !== undat.state,
+);
+// Order is a decision, so pin it: no round means no age whatever the anchor says.
+check(
+  "no round + bad anchor reports the missing round",
+  oracleAgeAtAnchor({}, "not-a-date").state === "not_dated",
+);
+// 0 is a real unix instant, not "missing". A `||` anywhere in this path collapses it.
+check(
+  "a round stamped 0 is measured, not dropped",
+  oracleAgeAtAnchor({ oracle_updated_at: 0 }, ANCHOR).state === "measured",
+);
+
+const spread = oracleAgeSpread([
+  readingAt("2026-08-28T15:51:43.000Z"),   // 224 past
+  readingAt("2026-08-28T15:30:51.000Z"),   // 1476 past
+  readingAt("2026-08-28T15:57:35.000Z"),   // 128 ahead → 0
+  readingAt("2026-08-28T15:59:21.000Z"),   // 234 ahead → 0
+  undat,
+  predates,
+  noAnchor,
+]);
+check("spread counts the measured", spread.measured === 4, JSON.stringify(spread));
+check("spread counts the clamped", spread.future_dated === 2, JSON.stringify(spread));
+check("spread reports the WORST future-dating", spread.max_ahead_s === 234, JSON.stringify(spread));
+check("spread counts both not_dated states together", spread.not_dated === 2);
+check("spread counts the broken anchor separately", spread.no_anchor === 1);
+// Future-dated rows stay in the distribution as zeros. Dropping them would bias
+// it toward stale exactly as hard as leaving them negative biased it toward
+// fresh — so they are counted twice, once in `ages_s` and once in `future_dated`.
+check(
+  "every measured reading reaches the distribution",
+  spread.ages_s.length === spread.measured,
+  JSON.stringify(spread.ages_s),
+);
+check(
+  "the distribution is sorted ascending",
+  JSON.stringify(spread.ages_s) === JSON.stringify([0, 0, 224, 1476]),
+  JSON.stringify(spread.ages_s),
+);
+check("nothing is dropped", spread.measured + spread.not_dated + spread.no_anchor === 7);
+// A spread with no clamping must report 0, not -Infinity from a bare Math.max
+// over an empty set — which would poison any threshold a caller applies to it.
+const clean = oracleAgeSpread([readingAt("2026-08-28T15:51:43.000Z")]);
+check("max_ahead_s is 0 when nothing was clamped", clean.max_ahead_s === 0, JSON.stringify(clean));
+check(
+  "empty input is all zeros, not empty",
+  JSON.stringify(oracleAgeSpread([])) ===
+    JSON.stringify({ measured: 0, future_dated: 0, max_ahead_s: 0, not_dated: 0, no_anchor: 0, ages_s: [] }),
+);
+
+// Source-level: the anchor is an ISO STRING on purpose. `oracle_updated_at` is
+// unix seconds and `at` is an ISO instant, so a numeric parameter invites a
+// seconds/milliseconds mixup that scales every age by 1000 and still looks like
+// a plausible histogram. The type is the defence; assert it stays.
+check(
+  "the anchor parameter is an ISO string, not a number",
+  /export function oracleAgeAtAnchor\([\s\S]*?anchorIso:\s*string/.test(code),
+);
+// The clamp must reuse the classifier rather than re-deriving the three states.
+// A second copy of that rule is a second place to get it wrong.
+const ageBody = /export function oracleAgeAtAnchor\([\s\S]*?\n}/.exec(code)?.[0] ?? "";
+check("clamp body located", ageBody.length > 0);
+check("clamp delegates to oracleDating", /oracleDating\(/.test(ageBody));
+check("clamp does not re-test undefined itself", !/===\s*undefined/.test(ageBody), ageBody.slice(0, 120));
 
 console.log(
   failures === 0

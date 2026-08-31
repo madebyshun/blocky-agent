@@ -387,6 +387,160 @@ export function datingCounts(
   return counts;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ORACLE AGE — and why subtracting two timestamps is not safe here (#160)
+//
+// A round in this archive can be dated AFTER the cycle that recorded it.
+// Measured on production 2026-08-28, two independent samples:
+//
+//   archive, hour-15 point (at=15:00:44.687Z)
+//     GOOGL round 15:04:19Z  →  215s AFTER the point that recorded it
+//   live snapshot (base_desk.started_at=15:55:27.454Z)
+//     NVDA  round 15:57:35Z  →  -128s   FUTURE-DATED
+//     GOOGL round 15:59:21Z  →  -234s   FUTURE-DATED
+//     META  round 15:51:43Z  →   224s   past
+//     AAPL  round 15:30:51Z  →  1476s   past
+//
+// Two of four rows at one instant, and GOOGL ahead on both samples. Systematic.
+//
+// The likely cause is benign and is NOT a bad feed: `cron/blue-hood/poll` anchors
+// the Base `polled_at_ms` to the same cycle start the RH poller used, so that
+// "freshness maths line up across both desks". Base is polled at step 1b, after
+// the entire RH desk. A round printed while the cycle was still working through
+// RH is legitimately newer than the anchor. It is an artifact of WHICH instant we
+// chose to call "now", not evidence about Chainlink.
+//
+// That makes it harmless to the board — `oracleRoundAgeText` measures against
+// `Date.now()` at RENDER time, always later than the cycle start — and dangerous
+// to the archive, where `at` IS the cycle start. A naive `at - oracle_updated_at`
+// gives NEGATIVE ages on a meaningful fraction of rows, and any distribution
+// built from them grows a left tail that is pure bookkeeping.
+//
+// So: clamp. But a bare `Math.max(0, …)` is its own small lie — it turns "this
+// round is 234s in the FUTURE" into "this round is 0s old", which reads as a
+// freshness claim, and it destroys the count that says whether the anchor
+// artifact is getting worse. The clamp therefore reports that it clamped.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One item's oracle age relative to the cycle anchor that recorded it.
+ *
+ * Three outcomes, kept apart for the usual reason: an absent number has more
+ * than one cause and they are not interchangeable.
+ *   • `measured`   — we have both an anchor and a round.
+ *   • `not_dated`  — no round to age. Carries {@link OracleDating} so the caller
+ *                    still knows whether we looked and failed (`undatable`) or
+ *                    never looked (`predates_field`).
+ *   • `no_anchor`  — the ARCHIVE record is unparseable. Our bookkeeping is
+ *                    broken; this says nothing about the feed, and folding it in
+ *                    with `not_dated` would blame the oracle for our own bug.
+ */
+export type OracleAgeReading =
+  | {
+      state: "measured";
+      /**
+       * Seconds from the round to the anchor, clamped to `>= 0`. Safe to
+       * histogram. When `future_dated`, this is a FLOOR, not a measurement.
+       */
+      age_s: number;
+      /** The round was dated after the anchor — the clamp did work here. */
+      future_dated: boolean;
+      /** How far past the anchor the round was. `0` unless `future_dated`. */
+      ahead_s: number;
+    }
+  | { state: "not_dated"; dating: Exclude<OracleDating, "dated"> }
+  | { state: "no_anchor"; anchor: string };
+
+/**
+ * Age one archived item against its own cycle anchor.
+ *
+ * `anchorIso` is the archive's own `at` — pass `point.at` for a point row and
+ * `peak.at` for a peak. Taking the ISO string rather than a number is deliberate:
+ * `oracle_updated_at` is unix SECONDS and `at` is an ISO instant, so any numeric
+ * parameter here invites a seconds/milliseconds mixup that would scale every age
+ * by 1000 and still look plausible in a histogram. Passing the field verbatim
+ * removes the conversion from the call site entirely.
+ *
+ * ⚠️ Never build an "older than N ⟹ the feed is frozen" rule on this number. The
+ * B20 feeds sit behind a 0.5% deviation deadband, so a live-but-quiet feed looks
+ * arbitrarily stale: on 2026-08-28 AAPL's round was 1476s old — and 1942s on a
+ * later sample — during an OPEN regular session, with nothing wrong. See the
+ * note in `blue-hood/oracle-age.ts` for the same argument stated before there
+ * was production data to back it; this is that data.
+ */
+export function oracleAgeAtAnchor(
+  item: { oracle_updated_at?: number | null },
+  anchorIso: string,
+): OracleAgeReading {
+  const dating = oracleDating(item);
+  if (dating !== "dated") return { state: "not_dated", dating };
+
+  const anchorMs = Date.parse(anchorIso);
+  if (!Number.isFinite(anchorMs)) return { state: "no_anchor", anchor: anchorIso };
+
+  // `as number` is safe: "dated" is exactly the case where the field is a
+  // number, and `oracleDating` is the single place that decides that.
+  const round = item.oracle_updated_at as number;
+  const delta = Math.round(anchorMs / 1000 - round);
+  return delta >= 0
+    ? { state: "measured", age_s: delta, future_dated: false, ahead_s: 0 }
+    : { state: "measured", age_s: 0, future_dated: true, ahead_s: -delta };
+}
+
+/**
+ * Tally of {@link oracleAgeAtAnchor} over a set of readings.
+ *
+ * Ships with any age distribution the way {@link datingCounts} ships with any
+ * drift figure: the histogram alone cannot tell you how much of itself is real.
+ */
+export interface OracleAgeSpread {
+  /** Readings that produced a number. The denominator for `ages_s`. */
+  measured: number;
+  /** How many of those needed the clamp — i.e. how big the artifact is. */
+  future_dated: number;
+  /**
+   * Worst future-dating seen, in seconds. `0` when none. This is the number to
+   * watch: ~200s is the polling-order artifact described above, but a value in
+   * the hours would be a different and non-benign finding.
+   */
+  max_ahead_s: number;
+  /** Items with no round to age. */
+  not_dated: number;
+  /** Items whose archive anchor would not parse — our bug, not the feed's. */
+  no_anchor: number;
+  /**
+   * Clamped ages, ascending. Future-dated rows ARE included, as zeros, because
+   * dropping them would bias the distribution toward stale just as surely as
+   * keeping them negative biased it toward fresh. A spike at exactly `0` is
+   * therefore the clamp, not the feed — read it against `future_dated`.
+   */
+  ages_s: number[];
+}
+
+/** Fold readings into an {@link OracleAgeSpread}. */
+export function oracleAgeSpread(readings: OracleAgeReading[]): OracleAgeSpread {
+  const spread: OracleAgeSpread = {
+    measured: 0, future_dated: 0, max_ahead_s: 0,
+    not_dated: 0, no_anchor: 0, ages_s: [],
+  };
+  for (const r of readings) {
+    switch (r.state) {
+      case "not_dated": spread.not_dated++; break;
+      case "no_anchor": spread.no_anchor++; break;
+      case "measured":
+        spread.measured++;
+        spread.ages_s.push(r.age_s);
+        if (r.future_dated) {
+          spread.future_dated++;
+          spread.max_ahead_s = Math.max(spread.max_ahead_s, r.ahead_s);
+        }
+        break;
+    }
+  }
+  spread.ages_s.sort((a, b) => a - b);
+  return spread;
+}
+
 /** One day's read outcome, kept distinct all the way to the caller. Mirrors the
  *  RH `SeriesDayRead` on purpose — same four states, so a reader that already
  *  understands the RH archive needs no new vocabulary for this one. */

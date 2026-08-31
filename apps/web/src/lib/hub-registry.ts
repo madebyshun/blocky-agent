@@ -11,9 +11,22 @@
  *   hub:tools:calls:<id>       → integer (lifetime call count; mirrors usage:<id>)
  *   hub:tools:revenue:<id>     → integer (lifetime USDC units earned by builder, 95% split)
  *   hub:builders:tools:<addr>  → string[] of tool IDs owned by this wallet
+ *
+ * ── KV WRITE DISCIPLINE (#150) ───────────────────────────────────────────────
+ * Every write here that DERIVES its value from a prior read of the SAME key
+ * goes through `kvMutate`, never `kvGet(K) ?? default → kvSet(K, …)`. `kvGet`
+ * swallows a throw into `null`, so under the old shape one throttled read
+ * replaced a whole collection with a one-element array (or a lifetime revenue
+ * counter with a single call's share). See `putTool` and `addRevenue`.
+ *
+ * `removeTool` deliberately keeps the plain read: its writes are gated on
+ * `ids.includes(id)`, which is false for the `[]` a failed read produces, so
+ * the failure mode is a skipped de-index (self-healing — `getRegisteredTool`
+ * returns null for the deleted item and the list readers filter it out), not a
+ * wipe. Same verdict as its twin `hub-hosted.removeHostedTool`.
  */
 
-import { kv, kvGet, kvSet, kvDel } from "@/lib/kv";
+import { kv, kvGet, kvSet, kvDel, kvMutate } from "@/lib/kv";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -118,18 +131,25 @@ export async function getBuilderStats(addr: string): Promise<BuilderStats> {
 export async function putTool(tool: RegisteredTool): Promise<void> {
   await kvSet(K.item(tool.id), tool);
 
-  // Append to master index
-  const ids = await listRegisteredToolIds();
-  if (!ids.includes(tool.id)) {
-    ids.push(tool.id);
-    await kvSet(K.index, ids);
-  }
-
-  // Append to builder index
-  const builderIds = (await kvGet<string[]>(K.builder(tool.builderAddress))) ?? [];
-  if (!builderIds.includes(tool.id)) {
-    builderIds.push(tool.id);
-    await kvSet(K.builder(tool.builderAddress), builderIds);
+  // Both indexes go through `kvMutate` (#150). `listRegisteredToolIds()` reads
+  // through the swallowing `kvGet`, so under the old code a throttled read
+  // returned `[]`, the `includes` guard passed, and `K.index` — the master list
+  // of EVERY external tool in the marketplace — was overwritten with a single
+  // id. Every other builder's tool would vanish from /hub while its record sat
+  // intact under `K.item(...)`, unreferenced and unlistable. `K.builder(...)`
+  // had the same shape, one wallet's inventory at a time.
+  //
+  // Identical fix, identical wording to `hub-hosted.putHostedTool` — that file
+  // was swept in the first #150 pass and this one was missed, so the hosted and
+  // external halves of the same submit flow disagreed until now.
+  const idxRes = await kvMutate<string[]>(K.index, [], (ids) =>
+    ids.includes(tool.id) ? null : [...ids, tool.id],
+  );
+  const bRes = await kvMutate<string[]>(K.builder(tool.builderAddress), [], (bids) =>
+    bids.includes(tool.id) ? null : [...bids, tool.id],
+  );
+  if (idxRes === "skipped" || idxRes === "failed" || bRes === "skipped" || bRes === "failed") {
+    console.error(`[hub-registry] ${tool.id} saved but NOT fully indexed (index=${idxRes} builder=${bRes}) — KV read/write failed; re-submit to index it`);
   }
 }
 
@@ -160,10 +180,30 @@ export async function removeTool(id: string): Promise<void> {
  * Add to the builder's lifetime revenue counter.
  * `usdcUnits` should be the BUILDER'S 95% share (caller already split off
  * the 5% treasury cut before invoking).
+ *
+ * ⚠ MONEY BOOKKEEPING (#150). The old body was
+ *
+ *     const current = (await kvGet<number>(K.revenue(id))) ?? 0;
+ *     await kvSet(K.revenue(id), current + usdcUnits);
+ *
+ * and `kvGet` swallows a KV throw into `null`, so a throttled read became `0`
+ * and the write RESET the tool's lifetime revenue to just this one call's
+ * share. There is no receipt anywhere to reconstruct the balance from — the
+ * counter IS the record — and this runs on every paid external call, so an
+ * Upstash cap window (#123, #148) meant a builder could be silently zeroed
+ * mid-outage. Skipping instead under-credits by ONE call, which is a rounding
+ * error against wiping the balance, and it is logged so the gap is at least
+ * attributable.
+ *
+ * This is the external 95% twin of `hub-hosted.addBuilderEarnings`, which was
+ * fixed in the first #150 pass; this file was never swept, so the twins
+ * disagreed until now.
  */
 export async function addRevenue(id: string, usdcUnits: number): Promise<void> {
-  const current = (await kvGet<number>(K.revenue(id))) ?? 0;
-  await kvSet(K.revenue(id), current + usdcUnits);
+  const res = await kvMutate<number>(K.revenue(id), 0, (cur) => cur + usdcUnits);
+  if (res !== "ok") {
+    console.error(`[hub-registry] revenue NOT accrued tool=${id} units=${usdcUnits} result=${res} — counter left untouched rather than reset`);
+  }
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
