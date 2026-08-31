@@ -173,8 +173,12 @@ export async function putHostedTool(tool: HostedTool): Promise<void> {
   const bRes = await kvMutate<string[]>(K.builder(tool.builderAddress), [], (bslugs) =>
     bslugs.includes(tool.slug) ? null : [...bslugs, tool.slug],
   );
-  if (idxRes === "skipped" || bRes === "skipped") {
-    console.error(`[hub-hosted] ${tool.slug} saved but NOT fully indexed (index=${idxRes} builder=${bRes}) — KV read failed; re-submit to index it`);
+  // `failed` (the WRITE threw) means "not indexed" just as much as `skipped`
+  // (the READ threw) does — both leave the tool unlistable and both want the
+  // same re-submit. The first pass only checked `skipped`, so a throttled
+  // write logged nothing at all.
+  if (idxRes === "skipped" || idxRes === "failed" || bRes === "skipped" || bRes === "failed") {
+    console.error(`[hub-hosted] ${tool.slug} saved but NOT fully indexed (index=${idxRes} builder=${bRes}) — KV read/write failed; re-submit to index it`);
   }
 }
 
