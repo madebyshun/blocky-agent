@@ -97,6 +97,17 @@ const K = {
 
 // ─── Read ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Master index ids, collapsing an unreadable index into `[]`.
+ *
+ * Sole remaining caller is `removeTool`, where that collapse is CORRECT and
+ * load-bearing: on an unreadable index the empty list makes the `includes`
+ * guard false, so we skip the `kvSet` and never overwrite the master list of
+ * every tool in the marketplace with a truncated copy. It fails closed.
+ *
+ * Anything that LISTS or COUNTS tools must use `readRegisteredTools()` instead
+ * — there the same collapse is the #149 bug.
+ */
 export async function listRegisteredToolIds(): Promise<string[]> {
   return (await kvGet<string[]>(K.index)) ?? [];
 }
@@ -165,12 +176,78 @@ export async function getRegisteredTool(id: string): Promise<RegisteredTool | nu
   return r.status === "ok" ? r.tool : null;
 }
 
-/** Get every registered tool. Cached at the caller; pagination Phase 4. */
+/**
+ * The WHOLE marketplace, plus what we could not see of it.
+ *
+ * Twin of `BuilderToolsRead` one scope up: that one is a single wallet's
+ * inventory, this one is every external tool in the registry.
+ */
+export interface RegistryRead {
+  /** The tools we could actually read. Never a claim that this is all of them. */
+  tools:    RegisteredTool[];
+  coverage: Coverage;
+  /** ids the master index listed but whose record read FAILED (≠ genuinely absent). */
+  unreadableIds: string[];
+}
+
+/**
+ * Every registered tool, honestly — the original #149, now the last piece of
+ * #150 group B.
+ *
+ * The old `listRegisteredTools` collapsed at TWO independent points:
+ *   1. `listRegisteredToolIds()` is `(await kvGet(K.index)) ?? []`, so a
+ *      throttled index read (routine in the Upstash cap windows #123/#148)
+ *      became "the marketplace is empty".
+ *   2. it then mapped `getRegisteredTool` — which folds `unavailable` into
+ *      `null` — through `.filter(Boolean)`, so individually unreadable tools
+ *      were dropped without a trace.
+ * Both produced a SHORTER list that looked exactly like a complete one, and
+ * `/api/hub/tools` published it as `count`. Unlike the builder dashboard this
+ * is not one person's page — it is the public census of the whole Hub, served
+ * over the wire to any consumer that cares to cache and re-publish it.
+ *
+ * Kept identical in shape to `readBuilderTools` on purpose. These two are the
+ * same query at two scopes; the moment they are written differently they start
+ * to disagree, which is how the hosted/external twins drifted in the first place.
+ */
+export async function readRegisteredTools(): Promise<RegistryRead> {
+  const idx = await kvGetProbe<string[]>(K.index);
+  if (idx.status === "error") {
+    return { tools: [], coverage: "unavailable", unreadableIds: [] };
+  }
+
+  // A genuine miss IS an empty registry — nobody has ever submitted a tool.
+  // That is the one case allowed to render as "no community tools yet".
+  const ids = idx.status === "hit" ? idx.value ?? [] : [];
+  if (ids.length === 0) return { tools: [], coverage: "complete", unreadableIds: [] };
+
+  const reads = await Promise.all(ids.map(readRegisteredTool));
+
+  const tools: RegisteredTool[] = [];
+  const unreadableIds: string[] = [];
+  let countersIncomplete = false;
+  reads.forEach((r, i) => {
+    if (r.status === "unavailable") { unreadableIds.push(ids[i]); return; }
+    if (r.status === "missing") return;            // stale index entry — genuinely gone
+    tools.push(r.tool);
+    if (r.tool.callCount === null || r.tool.revenueTotal === null) countersIncomplete = true;
+  });
+
+  return {
+    tools,
+    coverage: unreadableIds.length > 0 || countersIncomplete ? "partial" : "complete",
+    unreadableIds,
+  };
+}
+
+/**
+ * Legacy projection — the tools we could read, with the signal about the rest
+ * thrown away. Defined in terms of `readRegisteredTools` so the two can never
+ * drift. Prefer `readRegisteredTools` anywhere the result is COUNTED or
+ * published; this is only safe where a short list is harmless.
+ */
 export async function listRegisteredTools(): Promise<RegisteredTool[]> {
-  const ids = await listRegisteredToolIds();
-  if (ids.length === 0) return [];
-  const items = await Promise.all(ids.map(getRegisteredTool));
-  return items.filter((t): t is RegisteredTool => !!t);
+  return (await readRegisteredTools()).tools;
 }
 
 /** A wallet's external inventory, plus what we could NOT see of it. */

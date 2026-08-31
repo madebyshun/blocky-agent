@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyMessage } from "viem";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
 import {
-  listRegisteredTools,
+  readRegisteredTools,
   getRegisteredTool,
   putTool,
   isValidSlug,
@@ -23,14 +23,25 @@ export const runtime = "nodejs";
 // ─── GET — list ───────────────────────────────────────────────────────────────
 
 export async function GET() {
-  const tools = await listRegisteredTools();
+  const read = await readRegisteredTools();
   // no-store: the registry is mutable (submit auto-lists, delete de-indexes). A
   // CDN-cached list would keep serving a tool the creator just removed for up to
   // the stale window — the reported "deleted tool still shows in Hub" bug. The
   // list is tiny and KV-backed, so skipping the edge cache is cheap.
-  return NextResponse.json({ tools, count: tools.length }, {
-    headers: { "Cache-Control": "no-store" },
-  });
+  //
+  // The same header now does a second job: it stops a KV outage from being
+  // cached. `coverage` is the point of #149 — this endpoint is the public census
+  // of the Hub, and it used to answer a throttled Upstash read with
+  // `{tools: [], count: 0}`, indistinguishable from "nobody has built anything".
+  return NextResponse.json(
+    {
+      tools:    read.tools,
+      count:    read.tools.length,   // ⚠ a FLOOR unless coverage === "complete"
+      coverage: read.coverage,
+      unreadableIds: read.unreadableIds,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 // ─── POST — submit ────────────────────────────────────────────────────────────

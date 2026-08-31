@@ -168,12 +168,60 @@ export async function getPublicHostedTool(slug: string): Promise<PublicHostedToo
   return t ? toPublicHostedTool(t) : null;
 }
 
-/** Every hosted tool, secrets stripped. */
+/** The whole hosted registry, plus what we could not see of it. */
+export interface HostedRegistryRead {
+  /** The tools we could actually read, secrets stripped. Not a census. */
+  tools:    PublicHostedTool[];
+  coverage: Coverage;
+  /** slugs the index listed but whose record read FAILED (≠ genuinely absent). */
+  unreadableSlugs: string[];
+}
+
+/**
+ * Every hosted tool, honestly — exact twin of `hub-registry.readRegisteredTools`.
+ *
+ * Same two collapse points as the external half: `listHostedSlugs()` swallowed
+ * an index throw into `[]`, and `getHostedTool` folds `unavailable` into `null`
+ * ahead of a `.filter(Boolean)`. This half currently has no marketplace-grid
+ * consumer (HubView deliberately does not load hosted tools yet), but
+ * `/api/hub/hosted` is a public endpoint that publishes a `count`, and the two
+ * registries drifting apart is precisely how #150 part 3 happened. Fix both or
+ * neither.
+ */
+export async function readPublicHostedTools(): Promise<HostedRegistryRead> {
+  const idx = await kvGetProbe<string[]>(K.index);
+  if (idx.status === "error") {
+    return { tools: [], coverage: "unavailable", unreadableSlugs: [] };
+  }
+
+  const slugs = idx.status === "hit" ? idx.value ?? [] : [];
+  if (slugs.length === 0) return { tools: [], coverage: "complete", unreadableSlugs: [] };
+
+  const reads = await Promise.all(slugs.map(readHostedTool));
+
+  const tools: PublicHostedTool[] = [];
+  const unreadableSlugs: string[] = [];
+  let countersIncomplete = false;
+  reads.forEach((r, i) => {
+    if (r.status === "unavailable") { unreadableSlugs.push(slugs[i]); return; }
+    if (r.status === "missing") return;            // stale index entry — genuinely gone
+    tools.push(toPublicHostedTool(r.tool));
+    if (r.tool.callCount === null || r.tool.earnedTotal === null) countersIncomplete = true;
+  });
+
+  return {
+    tools,
+    coverage: unreadableSlugs.length > 0 || countersIncomplete ? "partial" : "complete",
+    unreadableSlugs,
+  };
+}
+
+/**
+ * Legacy projection — see the note on `hub-registry.listRegisteredTools`.
+ * Defined in terms of the honest read so the two cannot drift.
+ */
 export async function listPublicHostedTools(): Promise<PublicHostedTool[]> {
-  const slugs = await listHostedSlugs();
-  if (slugs.length === 0) return [];
-  const items = await Promise.all(slugs.map(getHostedTool));
-  return items.filter((t): t is HostedTool => !!t).map(toPublicHostedTool);
+  return (await readPublicHostedTools()).tools;
 }
 
 /** A wallet's hosted inventory, plus what we could NOT see of it. */

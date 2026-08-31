@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { AGENT_TOOLS } from "@/lib/agent-tools";
+import type { Coverage } from "@/lib/hub-registry";
 import { useAccount, useSignTypedData, useReadContract, useChainId, useSwitchChain } from "wagmi";
 import { ConnectButton } from "@/components/ConnectModal";
 import AppPageHeader from "@/components/app/AppPageHeader";
@@ -1386,12 +1387,28 @@ export default function HubPage({ inShell = false, initialToolId, initialView = 
   const [preload, setPreload] = useState<{ toolId: string; data: ToolResult } | null>(null);
   const [usage, setUsage]     = useState<Record<string, number>>({});
   const [communityTools, setCommunityTools] = useState<Tool[]>([]);
+  /**
+   * How much of the community registry we could read. `complete` until proven
+   * otherwise — but note that "otherwise" is now actually reachable: before
+   * #149 an unreadable registry and an empty one produced the identical UI.
+   * Only the community half can degrade; TOOLS is compiled in.
+   */
+  const [communityCoverage, setCommunityCoverage] = useState<Coverage>("complete");
   const [source, setSource] = useState<SourceFilter>("all"); // v2 sidebar: provenance filter
   const [price, setPrice]   = useState<PriceFilter>("all");  // v2 sidebar: price bucket
   const searchRef             = useRef<HTMLInputElement>(null);
 
   // ── Merge first-party (TOOLS) + community-submitted (registered) ──────────
   const allTools = useMemo<Tool[]>(() => [...TOOLS, ...communityTools], [communityTools]);
+
+  /** null when the registry read was complete — i.e. nothing to disclose. */
+  const communityCoverageNote = useMemo<string | null>(() => {
+    if (communityCoverage === "unavailable")
+      return "Community tools could not be loaded — this is not an empty marketplace. Built-in tools are unaffected.";
+    if (communityCoverage === "partial")
+      return "Some community tools could not be loaded and are missing from this list.";
+    return null;
+  }, [communityCoverage]);
 
   // ── App-shell deep routing ────────────────────────────────────────────────
   // Selecting a tool updates the URL to /app/hub/[id] without a reload (the view
@@ -1500,9 +1517,16 @@ export default function HubPage({ inShell = false, initialToolId, initialView = 
     // External tools (builder hosts the endpoint; Hub proxies + forwards payment).
     // no-store: the registry is mutable (submit/delete) — a stale list would keep
     // showing a tool the creator just removed, so never serve a cached copy here.
+    // Two more places a KV outage used to become "nobody has built anything":
+    // a non-ok response fell back to `{tools: []}` and the trailing `.catch`
+    // returned `[]`. Both are now recorded as coverage "unavailable" instead of
+    // being rendered as an empty marketplace (#149 / #150 group B). The headline
+    // "N tools" is a census claim, and a census must not silently shrink.
     const external = fetch("/api/hub/tools", { cache: "no-store" })
-      .then(r => r.ok ? r.json() : { tools: [] })
-      .then((d: { tools: Registered[] }): Tool[] => (d.tools ?? []).map(r => ({
+      .then(r => r.ok ? r.json() : { tools: [], coverage: "unavailable" as const })
+      .then((d: { tools: Registered[]; coverage?: Coverage }): Tool[] => {
+        setCommunityCoverage(d.coverage ?? "complete");
+        return (d.tools ?? []).map(r => ({
         id:             r.id,
         name:           r.name,
         cat:            asCat(r.category),
@@ -1524,8 +1548,9 @@ export default function HubPage({ inShell = false, initialToolId, initialView = 
         x402Body:       r.priceUSDC > 0
                           ? (vals: Record<string, string>) => vals as Record<string, unknown>
                           : undefined,
-      })))
-      .catch((): Tool[] => []);
+        }));
+      })
+      .catch((): Tool[] => { setCommunityCoverage("unavailable"); return []; });
 
     // NOTE: Hosted tools (AI-tool / API-wrapper) are intentionally NOT loaded into
     // the marketplace grid right now — the backend (/api/hub/hosted + community
@@ -1688,7 +1713,15 @@ export default function HubPage({ inShell = false, initialToolId, initialView = 
             label="HUB"
             subtitle="AI tools · multi-agent · x402 · Base"
             accent="#4FC3F7"
-            right={<span style={{ color: "#4FC3F7" }}>{allTools.length} tools</span>}
+            right={
+              // The trailing "+" is load-bearing: on a degraded registry read
+              // this number is a FLOOR, and an unqualified count here is the
+              // whole #149 bug wearing a headline.
+              <span style={{ color: "#4FC3F7" }} title={communityCoverageNote ?? undefined}>
+                {allTools.length}{communityCoverage !== "complete" ? "+" : ""} tools
+                {communityCoverage !== "complete" && <span className="text-amber-500 ml-1">⚠</span>}
+              </span>
+            }
           />
         )}
 
@@ -1700,8 +1733,19 @@ export default function HubPage({ inShell = false, initialToolId, initialView = 
           {/* Header */}
           <div className="px-5 h-14 flex items-center gap-3 border-b border-[#1A1A2E] shrink-0">
             <p className="font-mono text-xs text-[#4FC3F7] tracking-widest">// MARKETPLACE</p>
-            <span className="font-mono text-[10px] text-slate-700">{filtered.length} of {allTools.length}</span>
+            <span className="font-mono text-[10px] text-slate-700">
+              {filtered.length} of {allTools.length}{communityCoverage !== "complete" ? "+" : ""}
+            </span>
           </div>
+
+          {/* A registry we could not read is NOT an empty registry. Said plainly,
+              because the alternative is a silently short marketplace that looks
+              exactly like a quiet one. */}
+          {communityCoverageNote && (
+            <div className="mx-4 mt-3 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/5">
+              <p className="font-mono text-[10px] leading-relaxed text-amber-500/90">⚠ {communityCoverageNote}</p>
+            </div>
+          )}
 
           {/* Filters — scrollable so the List / Creator actions stay pinned below */}
           <div className="flex-1 overflow-y-auto">

@@ -6,7 +6,7 @@
 // Price: $0.05
 
 import { AGENT_TOOLS } from "@/lib/agent-tools";
-import { listRegisteredTools } from "@/lib/hub-registry";
+import { readRegisteredTools } from "@/lib/hub-registry";
 
 type CatalogEntry = {
   id:          string;
@@ -53,14 +53,29 @@ export default async function handler(req: Request): Promise<Response> {
       .filter((t) => !!t.price) // only callable/paid tools
       .map((t) => toEntry(t, "first-party"));
 
-    // Community registry (KV-backed; degrade gracefully if unavailable).
-    let community: CatalogEntry[] = [];
-    try {
-      const registered = await listRegisteredTools();
-      community = registered.map((t) => toEntry(t, "community", t.callCount ?? 0));
-    } catch { community = []; }
+    // Community registry (KV-backed).
+    //
+    // The `try/catch → community = []` this replaces was dead code twice over:
+    // `listRegisteredTools` swallowed its own KV errors internally, so nothing
+    // ever reached the catch, and the "graceful degradation" it promised was in
+    // fact a SILENT one — this is a PAID tool whose whole product is a census
+    // ("totals.community", "totals.all"), and a throttled Upstash read published
+    // a smaller catalog under an unqualified `data_source` claim. The buyer had
+    // no way to tell a quiet marketplace from an unreadable one.
+    const registry = await readRegisteredTools();
+    const community: CatalogEntry[] = registry.tools.map(
+      (t) => toEntry(t, "community", t.callCount ?? 0),
+    );
 
-    const all = [...firstParty, ...community];
+    // Community FIRST. The `slice(0, 60)` below is a hard payload cap and
+    // AGENT_TOOLS is 112 priced tools, so with first-party leading, every
+    // community tool fell off the end of an unfiltered response — permanently.
+    // The old comment on that slice already claimed "community tools surface
+    // first (discovery boost)"; the order never implemented it. That made this
+    // paid tool answer "totals.community: N" with N of them in `tools`, and
+    // close with "Builders: register your own x402 tool" pointing at a shelf
+    // nothing reached. Ordering is the whole fix — no total changes.
+    const all = [...community, ...firstParty];
 
     // Category breakdown (over the full catalog, pre-filter).
     const categories = all.reduce<Record<string, number>>((acc, t) => {
@@ -80,7 +95,9 @@ export default async function handler(req: Request): Promise<Response> {
       );
     }
 
-    // Cap payload; community tools surface first when no filter (discovery boost).
+    // Cap payload. `all` is ordered community-first (see above), so this cap can
+    // no longer amputate the community half — but it DOES mean `tools.length` is
+    // not a count of anything. Read `totals`, which is uncapped.
     const limited = matches.slice(0, 60);
 
     return Response.json({
@@ -91,12 +108,29 @@ export default async function handler(req: Request): Promise<Response> {
       category: category || null,
       totals: {
         all:          all.length,
-        first_party:  firstParty.length,
-        community:    community.length,
+        first_party:  firstParty.length,   // AGENT_TOOLS — always exact
+        community:    community.length,    // ⚠ a FLOOR unless registry_coverage === "complete"
         matched:      matches.length,
       },
+      /**
+       * How much of the COMMUNITY half we could actually read. The first-party
+       * catalog is compiled in and never degrades, so only this half can be short.
+       *   complete    — the community totals are exact.
+       *   partial     — the index read but ≥1 tool behind it did not; totals are floors.
+       *   unavailable — the index itself failed; `community: 0` means NOTHING was read.
+       */
+      registry_coverage: registry.coverage,
+      ...(registry.coverage !== "complete" && {
+        registry_note:
+          registry.coverage === "unavailable"
+            ? "The community registry could not be read. This is not an empty registry — community tools are missing from these totals and from `tools`."
+            : `${registry.unreadableIds.length} community tool(s) could not be read and are missing from these totals and from \`tools\`.`,
+      }),
       categories,
+      /** ⚠ CAPPED at 60. `tools.length < totals.matched` means truncated, not
+       *  filtered out — narrow with `query`/`category` to see the rest. */
       tools: limited,
+      tools_truncated: matches.length > limited.length,
       how_to_call: {
         x402: "GET /api/x402/{id} for payment requirements, sign EIP-3009 USDC on Base (chain 8453), POST with X-Payment header.",
         mcp:  "Connect the Blue Agent MCP server (https://blueagent.dev/api/mcp) in Claude Desktop / Cursor and call the tool by name.",

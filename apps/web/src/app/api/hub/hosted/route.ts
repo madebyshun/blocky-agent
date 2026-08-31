@@ -27,7 +27,7 @@ import { AGENT_TOOLS } from "@/lib/agent-tools";
 import {
   getHostedTool,
   putHostedTool,
-  listPublicHostedTools,
+  readPublicHostedTools,
   hostedSiweMessage,
   toPublicHostedTool,
   type HostedTool,
@@ -44,10 +44,24 @@ const NATIVE_IDS = new Set(AGENT_TOOLS.map(t => t.id));
 // ─── GET — list hosted tools (secrets stripped) ───────────────────────────────
 
 export async function GET() {
-  const tools = await listPublicHostedTools();
-  return NextResponse.json({ tools, count: tools.length }, {
-    headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" },
-  });
+  const read = await readPublicHostedTools();
+  // Edge cache ONLY a complete read. This endpoint used to hand a KV outage to
+  // the CDN as `{tools: [], count: 0}` with s-maxage=60 + SWR=300 — so a single
+  // throttled read during an Upstash cap window (#123/#148) was re-served as a
+  // confident empty registry for up to 6 minutes, long after KV recovered. A
+  // partial or unavailable read is exactly the thing that must not be pinned.
+  const cache = read.coverage === "complete"
+    ? "public, s-maxage=60, stale-while-revalidate=300"
+    : "no-store";
+  return NextResponse.json(
+    {
+      tools:    read.tools,
+      count:    read.tools.length,   // ⚠ a FLOOR unless coverage === "complete"
+      coverage: read.coverage,
+      unreadableSlugs: read.unreadableSlugs,
+    },
+    { headers: { "Cache-Control": cache } },
+  );
 }
 
 // ─── POST — register a hosted tool ────────────────────────────────────────────

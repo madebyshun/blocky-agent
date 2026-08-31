@@ -1,7 +1,12 @@
 /**
- * #150 group B — the BUILDER DASHBOARD'S ANSWER under a throttled KV.
+ * #150 group B — WHAT BLUE HUB SAYS ABOUT ITSELF under a throttled KV.
  *
  * Run: `npx tsx scripts/hub-dashboard-kv-test.ts` from `apps/web/`.
+ *
+ * Two scopes, one bug, and they are tested together on purpose:
+ *   groups D–L  ONE BUILDER'S inventory and money  (/hub/builders/[addr]/dashboard)
+ *   groups M–O  THE WHOLE MARKETPLACE'S census     (/api/hub/tools, /api/hub/hosted,
+ *                                                   and the PAID `blue-registry` tool)
  *
  * ═══ WHY THIS FILE EXISTS SEPARATELY ═══
  *
@@ -25,6 +30,18 @@
  * says I have earned nothing" — not as "Blue Hub could not check". So the
  * assertion throughout this file is narrow and specific: WE COULD NOT READ IT
  * and YOU HAVE NONE must not share a rendering.
+ *
+ * Groups M–O are the same sentence at marketplace scope, which is where the
+ * family started (#149). `readRegisteredTools` / `readPublicHostedTools` are
+ * `readBuilderTools` with the owner filter removed, so they are asserted with
+ * the identical five shapes — outage, genuine-empty, unreadable record,
+ * unreadable revenue counter, unreadable call counter. Three things make that
+ * scope worse rather than merely bigger, and each has its own check:
+ *   · the count is PUBLIC and is the headline on /hub, not one person's page;
+ *   · `/api/hub/hosted` handed its answer to the CDN with s-maxage=60 +
+ *     stale-while-revalidate=300, so a single throttled read was re-served as a
+ *     confident empty registry for ~6 minutes AFTER KV recovered (group N-B);
+ *   · `blue-registry` SELLS the census for $0.05 (group O).
  *
  * ═══ HOW TO READ A CASE ═══
  *
@@ -54,6 +71,8 @@ import { kv, kvGet, kvSet, kvDel, kvGetCounter } from "../src/lib/kv";
 import {
   readBuilderTools,
   readRegisteredTool,
+  readRegisteredTools,
+  listRegisteredTools,
   getRegisteredTool,
   statsFromRead,
   worstCoverage,
@@ -63,11 +82,18 @@ import {
 } from "../src/lib/hub-registry";
 import {
   readBuilderHostedTools,
+  readPublicHostedTools,
+  listPublicHostedTools,
   getBuilderEarnings,
   putHostedTool,
   type HostedTool,
+  type PublicHostedTool,
 } from "../src/lib/hub-hosted";
 import { GET as dashboardGET } from "../src/app/api/hub/builders/[address]/dashboard/route";
+import { GET as toolsGET }     from "../src/app/api/hub/tools/route";
+import { GET as hostedGET }    from "../src/app/api/hub/hosted/route";
+import blueRegistryHandler     from "../src/app/api/x402/_handlers/blue-registry";
+import { AGENT_TOOLS } from "../src/lib/agent-tools";
 
 let failures = 0;
 function check(label: string, pass: boolean, detail: string) {
@@ -110,6 +136,17 @@ const EARNED         = (a: string) => `builder:earned:${a.toLowerCase()}`;
 const OWNER = "0x02950AD38ada1d599375Bd447e080Cd404809205" as `0x${string}`;
 const EXT_IDS     = ["weather-on-base", "gas-oracle", "nft-floor"];
 const HOSTED_SLUG = "hosted-summarizer";
+
+/**
+ * A SECOND hosted tool, used only by the census groups (M–O).
+ *
+ * They need two because with one tool `partial` and `unavailable` produce the
+ * same empty list, and the test could not tell a NAMED gap from a blackout.
+ * Deliberately kept out of `seedHealthy`: the dashboard groups above assert
+ * `counts.hosted === 1`, and quietly changing their arithmetic would make an
+ * unrelated regression surface as a census failure.
+ */
+const HOSTED_SLUG_2 = "hosted-classifier";
 
 /** Per-tool 95% accruals, in USDC micro-units. Distinct values so a sum that
  *  drops one component is arithmetically visible, not just "smaller". */
@@ -176,7 +213,8 @@ async function dashboard(): Promise<DashboardBody> {
 async function reset() {
   await kvDel(
     INDEX, BUILDER(OWNER), HOSTED_INDEX, HOSTED_BUILDER(OWNER), EARNED(OWNER),
-    HOSTED_ITEM(HOSTED_SLUG), HOSTED_USAGE(HOSTED_SLUG),
+    HOSTED_ITEM(HOSTED_SLUG),   HOSTED_USAGE(HOSTED_SLUG),
+    HOSTED_ITEM(HOSTED_SLUG_2), HOSTED_USAGE(HOSTED_SLUG_2),
     ...EXT_IDS.map(ITEM), ...EXT_IDS.map(CALLS), ...EXT_IDS.map(REVENUE),
   );
 }
@@ -197,6 +235,63 @@ async function seedHealthy() {
   await kvSet(HOSTED_USAGE(HOSTED_SLUG), 7);
   await kvSet(EARNED(OWNER), HOSTED_POOLED);
 }
+
+/** `seedHealthy` + the second hosted tool. See the note on HOSTED_SLUG_2. */
+async function seedMarketplace() {
+  await seedHealthy();
+  await putHostedTool(hosted(HOSTED_SLUG_2));
+  await kvSet(HOSTED_USAGE(HOSTED_SLUG_2), 4);
+}
+
+// ─── Census response shapes (declared, not inferred — see DashboardBody) ──────
+
+interface CensusBody {
+  tools:    RegisteredTool[];
+  count:    number;
+  coverage: Coverage;
+  unreadableIds: string[];
+}
+interface HostedCensusBody {
+  tools:    PublicHostedTool[];
+  count:    number;
+  coverage: Coverage;
+  unreadableSlugs: string[];
+}
+
+/**
+ * Drive the REAL route and KEEP THE HEADERS.
+ *
+ * A helper that returned only the body would hide half the hosted fix: the
+ * `Cache-Control` value IS the bug there, because a `no-store` body and an
+ * `s-maxage=60` body are byte-identical to the caller and only the header
+ * decides whether the CDN pins an outage for six minutes.
+ */
+async function census(): Promise<{ body: CensusBody; cache: string | null }> {
+  const res = await toolsGET();
+  return { body: (await res.json()) as CensusBody, cache: res.headers.get("Cache-Control") };
+}
+async function hostedCensus(): Promise<{ body: HostedCensusBody; cache: string | null }> {
+  const res = await hostedGET();
+  return { body: (await res.json()) as HostedCensusBody, cache: res.headers.get("Cache-Control") };
+}
+
+/** The PAID `blue-registry` tool's own answer ($0.05 — group O). */
+interface PaidRegistryBody {
+  totals: { all: number; first_party: number; community: number; matched: number };
+  registry_coverage: Coverage;
+  registry_note?:    string;
+  tools:             Array<{ id: string; source: "first-party" | "community" }>;
+  tools_truncated:   boolean;
+}
+async function paidRegistry(): Promise<PaidRegistryBody> {
+  const res = await blueRegistryHandler(
+    new Request("https://blueagent.dev/api/x402/blue-registry"),
+  );
+  return (await res.json()) as PaidRegistryBody;
+}
+
+/** The compiled-in half of the paid catalog. Never degrades — that is the point. */
+const FIRST_PARTY_COUNT = AGENT_TOOLS.filter(t => !!t.price).length;
 
 async function main() {
   console.log("\n#150 group B — does the dashboard say \"we couldn't read it\" or \"you have nothing\"?\n");
@@ -552,6 +647,249 @@ async function main() {
   check("readBuilderHostedTools agrees (the twins must not drift again)",
     hostedRead.coverage === "unavailable" && hostedRead.tools.length === 0,
     `${hostedRead.tools.length} tools, coverage=${hostedRead.coverage}`);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  M–O. THE CENSUS — the same bug at MARKETPLACE scope (#149)
+  //
+  //  Everything above is scoped to one wallet. Everything below answers "how
+  //  many tools does Blue Hub have?", which is a public claim, is the headline
+  //  on /hub, is served over the wire to anything that caches it, and in group
+  //  O is literally sold for $0.05.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ══ M. THE EXTERNAL CENSUS — readRegisteredTools + /api/hub/tools ═════════
+  console.log("\nM-A. CONTROL — the OLD /api/hub/tools shape under a read outage:");
+  await seedMarketplace();
+  const oldCensus = await withReadFailure(async () => {
+    // Both collapse points, verbatim, in the order they used to run.
+    const ids   = (await kvGet<string[]>(INDEX)) ?? [];                       // #1: index → []
+    const items = (await Promise.all(ids.map(id => kvGet<RegisteredTool>(ITEM(id)))))
+                    .filter((t): t is RegisteredTool => !!t);                 // #2: record → dropped
+    return items.length;
+  });
+  check(
+    "old shape publishes count:0 — indistinguishable from \"nobody has built anything\"",
+    oldCensus === 0,
+    `count=${oldCensus} while ${EXT_IDS.length} tools sat intact in KV`,
+  );
+
+  console.log("\nM-B. FIX — readRegisteredTools + the REAL route, identical outage:");
+  const censusOut = await withReadFailure(() => readRegisteredTools());
+  check("coverage is unavailable", censusOut.coverage === "unavailable", censusOut.coverage);
+  check("...and unreadableIds is EMPTY — the index never read, so there is no id to name",
+    censusOut.unreadableIds.length === 0 && censusOut.tools.length === 0,
+    `tools=${censusOut.tools.length} unreadable=${JSON.stringify(censusOut.unreadableIds)}`);
+  const outCensus = await withReadFailure(census);
+  check("route: coverage rides on the wire next to count, so count:0 is qualified",
+    outCensus.body.count === 0 && outCensus.body.coverage === "unavailable",
+    `count=${outCensus.body.count} coverage=${outCensus.body.coverage}`);
+  check("route: Cache-Control no-store — the CDN cannot re-serve the outage",
+    outCensus.cache === "no-store", String(outCensus.cache));
+
+  console.log("\nM-C. HAPPY — healthy KV must produce the REAL registry:");
+  const censusOk = await census();
+  check("coverage complete, all 3 tools, nothing unreadable",
+    censusOk.body.coverage === "complete" && censusOk.body.count === EXT_IDS.length
+      && censusOk.body.unreadableIds.length === 0,
+    `count=${censusOk.body.count} coverage=${censusOk.body.coverage}`);
+  check("counters are real values, not null",
+    censusOk.body.tools.every(t => t.revenueTotal === EXT_REVENUE[t.id] && t.callCount === EXT_CALLS[t.id]),
+    JSON.stringify(censusOk.body.tools.map(t => `${t.id}=${usd(t.revenueTotal ?? null)}/${t.callCount}`)));
+  check("route: still no-store even when healthy — the registry is mutable (a removed tool must vanish)",
+    censusOk.cache === "no-store", String(censusOk.cache));
+
+  console.log("\nM-D. DISCRIMINATION — a genuinely empty registry is still a FACT:");
+  // Without this, "always answer unavailable" passes M-A/M-B forever and a
+  // brand-new Hub would claim it could not read itself. `miss` ≠ `error`.
+  await reset();
+  await kvSet(INDEX, []);
+  const emptyCensus = await readRegisteredTools();
+  check("empty index → complete, not unavailable",
+    emptyCensus.coverage === "complete" && emptyCensus.tools.length === 0,
+    `${emptyCensus.tools.length} tools, coverage=${emptyCensus.coverage}`);
+  await kvDel(INDEX);
+  const absentCensus = await readRegisteredTools();
+  check("an ABSENT index is also complete — never incremented IS zero",
+    absentCensus.coverage === "complete" && absentCensus.tools.length === 0,
+    `${absentCensus.tools.length} tools, coverage=${absentCensus.coverage}`);
+
+  console.log("\nM-E. PARTIAL — the index reads, ONE tool record does not:");
+  await seedMarketplace();
+  const censusPartial = await withReadFailureOn(k => k === ITEM("gas-oracle"), () => readRegisteredTools());
+  check("coverage partial", censusPartial.coverage === "partial", censusPartial.coverage);
+  check("the other two are still served — a gap is not a blackout",
+    censusPartial.tools.length === 2 && !censusPartial.tools.some(t => t.id === "gas-oracle"),
+    JSON.stringify(censusPartial.tools.map(t => t.id)));
+  check("the unreadable id is named, so count:2 is legible as a FLOOR",
+    censusPartial.unreadableIds.length === 1 && censusPartial.unreadableIds[0] === "gas-oracle",
+    JSON.stringify(censusPartial.unreadableIds));
+  const partialCensusBody = await withReadFailureOn(k => k === ITEM("gas-oracle"), census);
+  check("route: publishes the floor AND the id behind it",
+    partialCensusBody.body.count === 2 && partialCensusBody.body.coverage === "partial"
+      && partialCensusBody.body.unreadableIds[0] === "gas-oracle",
+    JSON.stringify({ count: partialCensusBody.body.count, coverage: partialCensusBody.body.coverage,
+                     unreadable: partialCensusBody.body.unreadableIds }));
+
+  console.log("\nM-F. COUNTER-ONLY — both halves of the `||` pinned separately:");
+  // Same M5 lesson as F-C: a condition whose halves are not tested independently
+  // lets one of them be deleted. Here `countersIncomplete` is the ONLY thing that
+  // can produce `partial` with an empty `unreadableIds`, and unlike the dashboard
+  // there is no second consumer re-deriving it — /hub renders this flag directly.
+  const censusRev = await withReadFailureOn(k => k === REVENUE("nft-floor"), () => readRegisteredTools());
+  check("an unreadable REVENUE counter alone → partial",
+    censusRev.coverage === "partial", censusRev.coverage);
+  check("...with unreadableIds EMPTY and all 3 tools listed — the tool is here, only its money is not",
+    censusRev.unreadableIds.length === 0 && censusRev.tools.length === 3,
+    `unreadable=${JSON.stringify(censusRev.unreadableIds)} tools=${censusRev.tools.length}`);
+  check("...and that tool's revenueTotal is null, not 0",
+    censusRev.tools.find(t => t.id === "nft-floor")?.revenueTotal === null,
+    String(censusRev.tools.find(t => t.id === "nft-floor")?.revenueTotal));
+  const censusCalls = await withReadFailureOn(k => k === CALLS("gas-oracle"), () => readRegisteredTools());
+  check("an unreadable CALL counter alone → partial too (the other half)",
+    censusCalls.coverage === "partial" && censusCalls.unreadableIds.length === 0
+      && censusCalls.tools.length === 3,
+    `${censusCalls.coverage} unreadable=${censusCalls.unreadableIds.length} tools=${censusCalls.tools.length}`);
+
+  console.log("\nM-G. ONE IMPLEMENTATION, TWO PROJECTIONS — the legacy list cannot drift:");
+  // `listRegisteredTools` is defined AS `(await readRegisteredTools()).tools`.
+  // Pinned because the hosted/external twins already drifted once (#150 part 3)
+  // and the cheapest way to reintroduce that is a "quick" second implementation.
+  const legacyList = await withReadFailureOn(k => k === ITEM("gas-oracle"), () => listRegisteredTools());
+  check("listRegisteredTools returns exactly the honest read's tools",
+    JSON.stringify(legacyList.map(t => t.id)) === JSON.stringify(censusPartial.tools.map(t => t.id)),
+    JSON.stringify(legacyList.map(t => t.id)));
+
+  // ══ N. THE HOSTED CENSUS — the twin, plus the CDN ═════════════════════════
+  console.log("\nN-A. CONTROL — the OLD /api/hub/hosted shape under a read outage:");
+  await seedMarketplace();
+  const oldHosted = await withReadFailure(async () => {
+    const slugs = (await kvGet<string[]>(HOSTED_INDEX)) ?? [];
+    const items = (await Promise.all(slugs.map(s => kvGet<HostedTool>(HOSTED_ITEM(s)))))
+                    .filter((t): t is HostedTool => !!t);
+    return items.length;
+  });
+  check("old shape publishes count:0 for a 2-tool hosted registry",
+    oldHosted === 0, `count=${oldHosted}`);
+
+  console.log("\nN-B. FIX — and the header, which is the half that lasted 6 minutes:");
+  const hostedOut = await withReadFailure(() => readPublicHostedTools());
+  check("coverage unavailable, unreadableSlugs empty (no index → no slug to name)",
+    hostedOut.coverage === "unavailable" && hostedOut.tools.length === 0
+      && hostedOut.unreadableSlugs.length === 0,
+    `tools=${hostedOut.tools.length} coverage=${hostedOut.coverage}`);
+  const hostedOutBody = await withReadFailure(hostedCensus);
+  check("route: count:0 is qualified by coverage",
+    hostedOutBody.body.count === 0 && hostedOutBody.body.coverage === "unavailable",
+    `count=${hostedOutBody.body.count} coverage=${hostedOutBody.body.coverage}`);
+  check("⚠ route: a DEGRADED read is never handed to the CDN",
+    hostedOutBody.cache === "no-store",
+    `${hostedOutBody.cache} — s-maxage would re-serve this outage for ~6 min after KV recovered`);
+
+  console.log("\nN-C. HAPPY — real registry, and the edge cache comes BACK:");
+  const hostedOk = await hostedCensus();
+  check("coverage complete, both hosted tools listed",
+    hostedOk.body.coverage === "complete" && hostedOk.body.count === 2
+      && hostedOk.body.unreadableSlugs.length === 0,
+    `count=${hostedOk.body.count} coverage=${hostedOk.body.coverage}`);
+  check("...and it IS cacheable again — \"always no-store\" would be a silent perf regression",
+    (hostedOk.cache ?? "").includes("s-maxage=60"), String(hostedOk.cache));
+  check("secrets stay stripped on the public census (config + signature)",
+    hostedOk.body.tools.every(t => !("config" in t) && !("signature" in t)),
+    JSON.stringify(hostedOk.body.tools.map(t => Object.keys(t).length)));
+
+  console.log("\nN-D. DISCRIMINATION — an empty hosted registry is a fact:");
+  await reset();
+  await kvSet(HOSTED_INDEX, []);
+  const hostedEmpty = await readPublicHostedTools();
+  check("empty index → complete, not unavailable",
+    hostedEmpty.coverage === "complete" && hostedEmpty.tools.length === 0,
+    `${hostedEmpty.tools.length} tools, coverage=${hostedEmpty.coverage}`);
+
+  console.log("\nN-E. PARTIAL — one hosted record unreadable, the other still served:");
+  await seedMarketplace();
+  const hostedPartial = await withReadFailureOn(
+    k => k === HOSTED_ITEM(HOSTED_SLUG_2), () => readPublicHostedTools());
+  check("coverage partial, the readable tool survives",
+    hostedPartial.coverage === "partial" && hostedPartial.tools.length === 1
+      && hostedPartial.tools[0].slug === HOSTED_SLUG,
+    `${hostedPartial.tools.length} tools: ${JSON.stringify(hostedPartial.tools.map(t => t.slug))}`);
+  check("the unreadable slug is named",
+    hostedPartial.unreadableSlugs.length === 1 && hostedPartial.unreadableSlugs[0] === HOSTED_SLUG_2,
+    JSON.stringify(hostedPartial.unreadableSlugs));
+  const hostedPartialBody = await withReadFailureOn(
+    k => k === HOSTED_ITEM(HOSTED_SLUG_2), hostedCensus);
+  check("route: a PARTIAL read is not cached either — a floor must not be pinned",
+    hostedPartialBody.cache === "no-store" && hostedPartialBody.body.coverage === "partial",
+    `${hostedPartialBody.cache} / ${hostedPartialBody.body.coverage}`);
+
+  console.log("\nN-F. COUNTER-ONLY on the hosted half — both halves again:");
+  const hostedUsage = await withReadFailureOn(
+    k => k === HOSTED_USAGE(HOSTED_SLUG_2), () => readPublicHostedTools());
+  check("an unreadable USAGE counter alone → partial, unreadableSlugs EMPTY, both tools listed",
+    hostedUsage.coverage === "partial" && hostedUsage.unreadableSlugs.length === 0
+      && hostedUsage.tools.length === 2,
+    `${hostedUsage.coverage} unreadable=${hostedUsage.unreadableSlugs.length} tools=${hostedUsage.tools.length}`);
+  // The pooled wallet counter is read PER HOSTED TOOL (readHostedTool asks for
+  // `builder:earned:<owner>` every time), so it is a second, independent way for
+  // the hosted census to go partial — and the only one shared across tools.
+  const hostedEarned = await withReadFailureOn(k => k === EARNED(OWNER), () => readPublicHostedTools());
+  check("an unreadable POOLED earnings counter → partial too, with both tools still listed",
+    hostedEarned.coverage === "partial" && hostedEarned.tools.length === 2
+      && hostedEarned.tools.every(t => t.earnedTotal === null),
+    `${hostedEarned.coverage} earned=${JSON.stringify(hostedEarned.tools.map(t => t.earnedTotal))}`);
+
+  console.log("\nN-G. the hosted legacy projection is the same single implementation:");
+  const legacyHosted = await withReadFailureOn(
+    k => k === HOSTED_ITEM(HOSTED_SLUG_2), () => listPublicHostedTools());
+  check("listPublicHostedTools returns exactly the honest read's tools",
+    JSON.stringify(legacyHosted.map(t => t.slug)) === JSON.stringify(hostedPartial.tools.map(t => t.slug)),
+    JSON.stringify(legacyHosted.map(t => t.slug)));
+
+  // ══ O. THE PAID CENSUS — `blue-registry`, $0.05 a call ════════════════════
+  //
+  // The buyer's whole purchase is `totals`. Before the fix, a throttled Upstash
+  // read shipped a smaller catalog under an unqualified `data_source` claim and
+  // the buyer had no field to tell a QUIET marketplace from an UNREADABLE one.
+  console.log("\nO-A. the paid tool under a read outage:");
+  await seedMarketplace();
+  const paidOut = await withReadFailure(paidRegistry);
+  check("registry_coverage: unavailable",
+    paidOut.registry_coverage === "unavailable", paidOut.registry_coverage);
+  check("...and a note that says community:0 means NOTHING WAS READ",
+    /not an empty registry/i.test(paidOut.registry_note ?? ""),
+    JSON.stringify(paidOut.registry_note));
+  check("the first-party half is still EXACT — AGENT_TOOLS is compiled in and cannot degrade",
+    paidOut.totals.first_party === FIRST_PARTY_COUNT && paidOut.totals.community === 0,
+    `first_party=${paidOut.totals.first_party}/${FIRST_PARTY_COUNT} community=${paidOut.totals.community}`);
+
+  console.log("\nO-B. healthy — real totals, no disclaimer:");
+  const paidOk = await paidRegistry();
+  check("registry_coverage complete and NO registry_note",
+    paidOk.registry_coverage === "complete" && paidOk.registry_note === undefined,
+    `${paidOk.registry_coverage} note=${JSON.stringify(paidOk.registry_note)}`);
+  check(`community = ${EXT_IDS.length}, all = first_party + community`,
+    paidOk.totals.community === EXT_IDS.length
+      && paidOk.totals.all === FIRST_PARTY_COUNT + EXT_IDS.length,
+    JSON.stringify(paidOk.totals));
+  // ⚠ The check that caught the SECOND bug in this handler. `tools` is capped at
+  // 60 and AGENT_TOOLS is 112 priced tools, so with first-party ordered first
+  // every community tool fell off the end — the response claimed "community: 3"
+  // and shipped none of them, while closing with "register your own x402 tool".
+  check("⚠ community tools actually APPEAR in the capped payload, not just in totals",
+    EXT_IDS.every(id => paidOk.tools.some(t => t.id === id && t.source === "community")),
+    `${paidOk.tools.filter(t => t.source === "community").length} community entries in a ${paidOk.tools.length}-row payload`);
+  check("...and truncation is declared, so tools.length is never mistaken for a count",
+    paidOk.tools_truncated === true && paidOk.totals.matched > paidOk.tools.length,
+    `truncated=${paidOk.tools_truncated} matched=${paidOk.totals.matched} rows=${paidOk.tools.length}`);
+
+  console.log("\nO-C. partial — the paid answer says which half it is short on:");
+  const paidPartial = await withReadFailureOn(k => k === ITEM("gas-oracle"), paidRegistry);
+  check("registry_coverage partial, community total is the FLOOR 2",
+    paidPartial.registry_coverage === "partial" && paidPartial.totals.community === EXT_IDS.length - 1,
+    `${paidPartial.registry_coverage} community=${paidPartial.totals.community}`);
+  check("...and the note counts what is missing",
+    /1 community tool\(s\) could not be read/i.test(paidPartial.registry_note ?? ""),
+    JSON.stringify(paidPartial.registry_note));
 
   await reset();
   console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}\n`);
