@@ -11,11 +11,14 @@
  * anything — it moves text and nothing else. Acting on a signal always happens
  * in the user's own wallet in the web app (see the /start safety declaration).
  *
- * COLLISION NOTE: the legacy Sentinel bot at /api/webhook/telegram binds the
- * SAME `TELEGRAM_BOT_TOKEN`. Only ONE webhook URL can be active per token, so
- * whichever URL `setWebhook` last pointed at wins. This module is inert until
- * the operator points the webhook at /api/telegram/webhook — see
- * scripts/tg-set-webhook.ts.
+ * TOKEN OWNERSHIP: `TELEGRAM_BOT_TOKEN` now has exactly one claimant. Until
+ * 2026-08-31 the legacy Sentinel bot at /api/webhook/telegram bound the same
+ * token, and since Telegram permits only ONE webhook URL per token, whichever
+ * URL `setWebhook` last pointed at won — so this module's liveness depended on
+ * a setting stored at Telegram, not in this repo. Sentinel is retired and that
+ * route is deleted; the webhook points at /api/telegram/webhook and nothing
+ * else can take it. To read (never guess) the current binding:
+ * `npm run tg:set-webhook -- --info` — read-only, prints no secret.
  */
 
 const API = "https://api.telegram.org";
