@@ -11,6 +11,12 @@
  * no <Navbar/> (its own minimal header), so `inShell` only swaps the
  * min-h-screen wrapper for h-full overflow-y-auto — otherwise it clips inside
  * the AppShell.
+ *
+ * `stats.coverage` is load-bearing (#150 group B): these three headline numbers
+ * are KV counters that can fail to READ, and rendering an unread counter as
+ * "0 tools · $0.0000" publishes a KV outage as a fact about a builder's
+ * business. On `partial` the numbers are floors (shown with ≥); on
+ * `unavailable` nothing was read and they are shown as "—".
  */
 
 import Link from "next/link";
@@ -18,6 +24,12 @@ import type { RegisteredTool, BuilderStats } from "@/lib/hub-registry";
 
 function shortAddr(a: string) { return a.slice(0, 6) + "…" + a.slice(-4); }
 function usdc(units: number)  { return `$${(units / 1_000_000).toFixed(4)}`; }
+
+/** Same three-case rule as the creator dashboard. Never `?? 0` at a render site. */
+function fig(n: number, coverage: BuilderStats["coverage"], fmt: (v: number) => string): string {
+  if (coverage === "unavailable") return "—";
+  return coverage === "partial" ? `≥ ${fmt(n)}` : fmt(n);
+}
 function relTime(ms: number) {
   const d = Date.now() - ms;
   if (d < 60_000)    return "just now";
@@ -63,7 +75,11 @@ export default function BuilderView({
               <a href={`https://basescan.org/address/${address}`} target="_blank" rel="noopener noreferrer"
                  className="text-[10px] text-slate-700 hover:text-slate-400">Basescan ↗</a>
             </div>
-            <p className="text-[11px] text-slate-600">Blue Hub builder — {stats.toolCount} tool{stats.toolCount !== 1 ? "s" : ""} listed</p>
+            <p className="text-[11px] text-slate-600">
+              {stats.coverage === "unavailable"
+                ? "Blue Hub builder — tool list unavailable"
+                : `Blue Hub builder — ${stats.coverage === "partial" ? "at least " : ""}${stats.toolCount} tool${stats.toolCount !== 1 ? "s" : ""} listed`}
+            </p>
           </div>
         </div>
 
@@ -71,23 +87,40 @@ export default function BuilderView({
         <div className="grid grid-cols-3 gap-3 mb-8">
           <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] px-5 py-4">
             <p className="text-[10px] tracking-widest mb-1 text-[#4FC3F7]">TOOLS</p>
-            <p className="text-2xl font-bold leading-none text-[#4FC3F7]">{stats.toolCount}</p>
+            <p className="text-2xl font-bold leading-none text-[#4FC3F7]">{fig(stats.toolCount, stats.coverage, n => String(n))}</p>
           </div>
           <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] px-5 py-4">
             <p className="text-[10px] tracking-widest mb-1 text-[#A78BFA]">TOTAL CALLS</p>
-            <p className="text-2xl font-bold leading-none text-[#A78BFA]">{stats.totalCalls.toLocaleString()}</p>
+            <p className="text-2xl font-bold leading-none text-[#A78BFA]">{fig(stats.totalCalls, stats.coverage, n => n.toLocaleString())}</p>
           </div>
           <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] px-5 py-4">
             <p className="text-[10px] tracking-widest mb-1 text-[#34D399]">REVENUE</p>
-            <p className="text-2xl font-bold leading-none text-[#34D399]">{usdc(stats.totalRevenue)}</p>
-            <p className="text-[10px] text-slate-700 mt-1">95% builder share</p>
+            <p className="text-2xl font-bold leading-none text-[#34D399]">{fig(stats.totalRevenue, stats.coverage, usdc)}</p>
+            <p className="text-[10px] text-slate-700 mt-1">
+              {stats.coverage === "unavailable" ? "could not read — not $0" : "95% builder share"}
+            </p>
           </div>
         </div>
+
+        {/* Degraded-read notice — see the header note on stats.coverage. */}
+        {stats.coverage !== "complete" && (
+          <div className="mb-8 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3">
+            <p className="text-[10px] text-amber-400/80 leading-relaxed">
+              {stats.coverage === "unavailable"
+                ? "The registry didn't answer, so this profile is showing nothing rather than guessing. It does not mean this builder has no tools or no revenue."
+                : "Part of this builder's registry couldn't be read, so the figures above are minimums (≥) and the tool list may be short."}
+            </p>
+          </div>
+        )}
 
         {/* Tools */}
         {tools.length === 0 ? (
           <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] p-8 text-center">
-            <p className="text-sm text-slate-500">No tools registered yet.</p>
+            <p className="text-sm text-slate-500">
+              {stats.coverage === "unavailable"
+                ? "Couldn't load this builder's tools."
+                : "No tools registered yet."}
+            </p>
           </div>
         ) : (
           <div>

@@ -24,9 +24,28 @@
  * the failure mode is a skipped de-index (self-healing — `getRegisteredTool`
  * returns null for the deleted item and the list readers filter it out), not a
  * wipe. Same verdict as its twin `hub-hosted.removeHostedTool`.
+ *
+ * ── KV READ DISCIPLINE (#150 group B) ────────────────────────────────────────
+ * The reads have the mirror-image problem: `?? 0` / `?? []` publish a KV outage
+ * as a FACT about a builder's money and inventory. There is no data loss, but
+ * the answer is worse to look at — "$0.0000 earned" and "No tools registered
+ * yet" are what a builder sees while their 12 tools and their balance sit
+ * untouched in KV. So every read that feeds a builder-facing surface now comes
+ * in two flavours:
+ *
+ *   `readX()` — the honest one. Distinguishes "absent" from "unreadable" and
+ *               reports coverage. USE THIS on anything that publishes a number.
+ *   `getX()`  — the legacy projection, DEFINED IN TERMS OF `readX()` so the two
+ *               cannot drift. It collapses unreadable→absent, which is fine for
+ *               callers that only ask "does this exist" (route 404s, uniqueness
+ *               checks) and wrong for anything that renders a total.
+ *
+ * One implementation, two projections — deliberately not two implementations.
+ * The hosted/external twins in this codebase disagreed for a whole release
+ * because they were written twice (see the part-3 note on `addRevenue`).
  */
 
-import { kv, kvGet, kvSet, kvDel, kvMutate } from "@/lib/kv";
+import { kv, kvGet, kvGetProbe, kvGetCounter, kvSet, kvDel, kvMutate } from "@/lib/kv";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,9 +77,12 @@ export interface RegisteredTool {
   iconUrl?:       string;
   logoUrl?:       string;                          // creator-supplied logo (PUBLIC — shown on cards/OG)
   tags?:          string[];
-  // Runtime stats (denormalized from KV counters; populated on read)
-  callCount?:     number;
-  revenueTotal?:  number;                          // USDC units earned
+  // Runtime stats (denormalized from KV counters; populated on read).
+  // `null` means THE COUNTER COULD NOT BE READ — it does NOT mean zero. A real
+  // zero (never called, never earned) comes back as `0`. Anything that renders
+  // these must branch on null; `?? 0` at the render site re-creates the bug.
+  callCount?:     number | null;
+  revenueTotal?:  number | null;                   // USDC units earned
 }
 
 // ─── Key helpers ──────────────────────────────────────────────────────────────
@@ -79,16 +101,68 @@ export async function listRegisteredToolIds(): Promise<string[]> {
   return (await kvGet<string[]>(K.index)) ?? [];
 }
 
-/** Get a registered tool with denormalized call/revenue counters. */
-export async function getRegisteredTool(id: string): Promise<RegisteredTool | null> {
-  const tool = await kvGet<RegisteredTool>(K.item(id));
-  if (!tool) return null;
+/**
+ * How much of a multi-key read we could actually see. Ordered worst-last, and
+ * combined with `worstCoverage` so a caller aggregating several reads cannot
+ * accidentally report the optimistic one.
+ *
+ *   complete    — every key resolved.
+ *   partial     — the INDEX read, but ≥1 item or counter behind it did not, so
+ *                 every total derived from it is a FLOOR, never a sum.
+ *   unavailable — the index itself failed. We know NOTHING. A zero here is the
+ *                 absence of an answer, not an answer of zero.
+ */
+export type Coverage = "complete" | "partial" | "unavailable";
+
+const COVERAGE_RANK: Record<Coverage, number> = { complete: 0, partial: 1, unavailable: 2 };
+
+/** Worst (least-known) of the given coverages. `complete` for an empty list. */
+export function worstCoverage(...cs: Coverage[]): Coverage {
+  return cs.reduce<Coverage>((w, c) => (COVERAGE_RANK[c] > COVERAGE_RANK[w] ? c : w), "complete");
+}
+
+/** Outcome of reading ONE tool. `missing` and `unavailable` are NOT the same thing. */
+export type ToolRead =
+  | { status: "ok"; tool: RegisteredTool }
+  | { status: "missing" }                          // the item key is genuinely absent
+  | { status: "unavailable"; reason: string };     // KV failed — existence unknown
+
+/**
+ * Read one tool honestly.
+ *
+ * Note the deliberate asymmetry: a failed ITEM read is `unavailable` (we cannot
+ * say whether the tool exists), but a failed COUNTER read still yields
+ * `status: "ok"` with `callCount`/`revenueTotal` set to `null`. The tool
+ * demonstrably exists — we just don't know its numbers, and refusing to return
+ * the tool at all would hide a live listing over a stats read.
+ */
+export async function readRegisteredTool(id: string): Promise<ToolRead> {
+  const probe = await kvGetProbe<RegisteredTool>(K.item(id));
+  if (probe.status === "error") return { status: "unavailable", reason: probe.message };
+  if (probe.status === "miss")  return { status: "missing" };
+
   const [calls, revenue] = await Promise.all([
-    kvGet<number>(K.calls(id)),
-    kvGet<number>(K.revenue(id)),
+    kvGetCounter(K.calls(id)),
+    kvGetCounter(K.revenue(id)),
   ]);
   // Tools registered before the auto-live gate have no status → treat as live.
-  return { ...tool, status: tool.status ?? "live", callCount: calls ?? 0, revenueTotal: revenue ?? 0 };
+  return {
+    status: "ok",
+    tool: { ...probe.value, status: probe.value.status ?? "live", callCount: calls, revenueTotal: revenue },
+  };
+}
+
+/**
+ * Legacy projection — collapses `missing` and `unavailable` into `null`.
+ *
+ * Correct for the callers that only ask "does this slug exist?" (the submit
+ * uniqueness check, the DELETE owner check, a 404 on a detail page): treating
+ * an unreadable tool as absent fails CLOSED there. WRONG for anything that
+ * renders a total or an inventory — use `readRegisteredTool`.
+ */
+export async function getRegisteredTool(id: string): Promise<RegisteredTool | null> {
+  const r = await readRegisteredTool(id);
+  return r.status === "ok" ? r.tool : null;
 }
 
 /** Get every registered tool. Cached at the caller; pagination Phase 4. */
@@ -99,27 +173,98 @@ export async function listRegisteredTools(): Promise<RegisteredTool[]> {
   return items.filter((t): t is RegisteredTool => !!t);
 }
 
-/** Tools owned by a wallet (for dashboard + public builder profile). */
+/** A wallet's external inventory, plus what we could NOT see of it. */
+export interface BuilderToolsRead {
+  /** The tools we could actually read. Never a claim that this is all of them. */
+  tools:    RegisteredTool[];
+  coverage: Coverage;
+  /**
+   * ids the owner index listed but whose record read FAILED. Distinct from ids
+   * whose record was genuinely absent (a stale index entry after a TTL lapse):
+   * those are dropped silently, exactly as before, because absence is a fact.
+   */
+  unreadableIds: string[];
+}
+
+/**
+ * Tools owned by a wallet, honestly.
+ *
+ * The old body was `(await kvGet(K.builder)) ?? []` feeding a `.filter(Boolean)`
+ * over per-item reads — TWO places where a KV error became an empty inventory,
+ * and the builder dashboard rendered the result as "No tools registered yet".
+ * Both are now visible in `coverage`.
+ */
+export async function readBuilderTools(addr: string): Promise<BuilderToolsRead> {
+  const idx = await kvGetProbe<string[]>(K.builder(addr));
+  if (idx.status === "error") {
+    return { tools: [], coverage: "unavailable", unreadableIds: [] };
+  }
+
+  // A genuine miss IS an empty inventory — this wallet has never registered a
+  // tool. That is the one case allowed to render as "no tools yet".
+  const ids = idx.status === "hit" ? idx.value ?? [] : [];
+  if (ids.length === 0) return { tools: [], coverage: "complete", unreadableIds: [] };
+
+  const reads = await Promise.all(ids.map(readRegisteredTool));
+
+  const tools: RegisteredTool[] = [];
+  const unreadableIds: string[] = [];
+  let countersIncomplete = false;
+  reads.forEach((r, i) => {
+    if (r.status === "unavailable") { unreadableIds.push(ids[i]); return; }
+    if (r.status === "missing") return;            // stale index entry — genuinely gone
+    tools.push(r.tool);
+    if (r.tool.callCount === null || r.tool.revenueTotal === null) countersIncomplete = true;
+  });
+
+  return {
+    tools,
+    coverage: unreadableIds.length > 0 || countersIncomplete ? "partial" : "complete",
+    unreadableIds,
+  };
+}
+
+/**
+ * Legacy projection — the tool list only, coverage discarded. Callers that
+ * render a count or a total MUST use `readBuilderTools` instead; this exists
+ * for the ones that just need the array.
+ */
 export async function getBuilderTools(addr: string): Promise<RegisteredTool[]> {
-  const ids = (await kvGet<string[]>(K.builder(addr))) ?? [];
-  if (ids.length === 0) return [];
-  const items = await Promise.all(ids.map(getRegisteredTool));
-  return items.filter((t): t is RegisteredTool => !!t);
+  return (await readBuilderTools(addr)).tools;
 }
 
 export interface BuilderStats {
   toolCount:    number;
   totalCalls:   number;
   totalRevenue: number;                            // USDC units (6 decimals)
+  /**
+   * ⚠ Read this before rendering any of the three numbers above. On `partial`
+   * they are floors; on `unavailable` they are all 0 because nothing was read,
+   * and displaying that as "0 tools · $0.0000" is the bug this field exists to
+   * prevent.
+   */
+  coverage:     Coverage;
 }
 
-export async function getBuilderStats(addr: string): Promise<BuilderStats> {
-  const tools = await getBuilderTools(addr);
-  return tools.reduce<BuilderStats>((acc, t) => ({
+/**
+ * Fold a read into the profile's three headline numbers. Pure — takes the read
+ * rather than performing one, so a page that already called `readBuilderTools`
+ * does not pay for a second round-trip (and cannot get two answers that
+ * disagree, which is what calling both `getBuilderTools` and `getBuilderStats`
+ * used to risk during a wobble).
+ */
+export function statsFromRead(read: BuilderToolsRead): BuilderStats {
+  return read.tools.reduce<BuilderStats>((acc, t) => ({
     toolCount:    acc.toolCount    + 1,
     totalCalls:   acc.totalCalls   + (t.callCount    ?? 0),
     totalRevenue: acc.totalRevenue + (t.revenueTotal ?? 0),
-  }), { toolCount: 0, totalCalls: 0, totalRevenue: 0 });
+    coverage:     acc.coverage,
+  }), { toolCount: 0, totalCalls: 0, totalRevenue: 0, coverage: read.coverage });
+}
+
+/** Convenience wrapper. Prefer `statsFromRead` when you already hold the read. */
+export async function getBuilderStats(addr: string): Promise<BuilderStats> {
+  return statsFromRead(await readBuilderTools(addr));
 }
 
 // ─── Write ────────────────────────────────────────────────────────────────────

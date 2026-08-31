@@ -7,7 +7,7 @@
  */
 
 import { notFound } from "next/navigation";
-import { getBuilderTools, getBuilderStats } from "@/lib/hub-registry";
+import { readBuilderTools, statsFromRead } from "@/lib/hub-registry";
 import BuilderView from "@/app/hub/_components/BuilderView";
 
 export const runtime = "nodejs";
@@ -21,10 +21,8 @@ export default async function AppBuilderProfile({
   const { address } = await params;
   if (!/^0x[a-fA-F0-9]{40}$/.test(address)) notFound();
 
-  const [tools, stats] = await Promise.all([
-    getBuilderTools(address),
-    getBuilderStats(address),
-  ]);
+  // One read, projected twice — see the note on the marketing twin (#150 group B).
+  const read = await readBuilderTools(address);
 
-  return <BuilderView address={address} tools={tools} stats={stats} inShell />;
+  return <BuilderView address={address} tools={read.tools} stats={statsFromRead(read)} inShell />;
 }

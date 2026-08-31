@@ -167,6 +167,33 @@ export async function kvGetProbe<T>(key: string): Promise<KvProbe<T>> {
   }
 }
 
+/**
+ * Read an integer counter WITHOUT collapsing "unknown" into "zero".
+ *
+ * `kvGet<number>(k) ?? 0` is the read-side half of the #150 bug family. It is
+ * not destructive the way the write-side half is — nothing is lost — but on a
+ * MONEY counter it is arguably worse for the reader, because the answer is
+ * indistinguishable from a fact: a throttled read of `hub:tools:revenue:<id>`
+ * renders as "$0.0000 earned", which a builder reads as "Blue Hub says I have
+ * made nothing", not as "Blue Hub could not check".
+ *
+ * The three-way split maps exactly onto what a counter means:
+ *   • hit   → the value.
+ *   • miss  → 0. A counter that has never been incremented IS zero; this is a
+ *             genuine fact and callers should render it as one.
+ *   • error → null. We learned nothing. Callers MUST NOT render this as 0.
+ *
+ * Non-numeric junk under the key also reads as 0 rather than NaN — a corrupted
+ * value is a different bug and should not masquerade as a KV outage here.
+ */
+export async function kvGetCounter(key: string): Promise<number | null> {
+  const probe = await kvGetProbe<unknown>(key);
+  if (probe.status === "error") return null;
+  if (probe.status === "miss")  return 0;
+  const n = typeof probe.value === "number" ? probe.value : Number(probe.value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export async function kvSet(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
   try { await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined); } catch (e) { console.error(`[kv:set] ${key}: ${(e as Error).message}`); }
 }

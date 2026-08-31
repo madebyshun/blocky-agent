@@ -29,8 +29,13 @@
  * by passing the creator prompt straight through as the system message.
  */
 
-import { kv, kvGet, kvSet, kvDel, kvMutate } from "@/lib/kv";
+import { kv, kvGet, kvGetProbe, kvGetCounter, kvSet, kvDel, kvMutate } from "@/lib/kv";
 import { assertSafeMcpUrl } from "@/lib/mcp-client";
+// `Coverage` is defined ONCE, in the external half, and imported here. The
+// hosted and external registries are twins that have already drifted once (#150
+// part 3); a shared vocabulary is the cheapest way to stop the dashboard from
+// having to reconcile two spellings of "we couldn't read it".
+import type { Coverage } from "@/lib/hub-registry";
 import { callBankrLLM } from "@/app/api/_lib/llm";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,9 +85,11 @@ export interface HostedTool {
   signature:      string;               // SIWE signature of the manifest
   verified:       boolean;              // Blue Agent reviewed (default false)
   config:         HostedConfig;         // ⚠ SECRET — stripped by toPublicHostedTool()
-  // Runtime stats (denormalized on read)
-  callCount?:     number;
-  earnedTotal?:   number;               // creator's accrued USDC units (90% share)
+  // Runtime stats (denormalized on read).
+  // `null` means THE COUNTER COULD NOT BE READ — never "zero". See the twin
+  // note on `RegisteredTool` in hub-registry.ts.
+  callCount?:     number | null;
+  earnedTotal?:   number | null;        // creator's accrued USDC units (90% share)
 }
 
 /** Public projection — safe to serialize to a browser. No config, no signature. */
@@ -118,15 +125,41 @@ export async function listHostedSlugs(): Promise<string[]> {
   return (await kvGet<string[]>(K.index)) ?? [];
 }
 
-/** Full tool INCLUDING secret config. Server-only — never return this to a client. */
-export async function getHostedTool(slug: string): Promise<HostedTool | null> {
-  const tool = await kvGet<HostedTool>(K.item(slug));
-  if (!tool) return null;
+/** Outcome of reading ONE hosted tool. Twin of `hub-registry.ToolRead`. */
+export type HostedToolRead =
+  | { status: "ok"; tool: HostedTool }
+  | { status: "missing" }                         // the item key is genuinely absent
+  | { status: "unavailable"; reason: string };    // KV failed — existence unknown
+
+/**
+ * Read one hosted tool honestly, secrets included. Server-only.
+ *
+ * Same asymmetry as the external twin: a failed ITEM read is `unavailable`, a
+ * failed COUNTER read still returns the tool with `callCount`/`earnedTotal`
+ * set to `null`.
+ */
+export async function readHostedTool(slug: string): Promise<HostedToolRead> {
+  const probe = await kvGetProbe<HostedTool>(K.item(slug));
+  if (probe.status === "error") return { status: "unavailable", reason: probe.message };
+  if (probe.status === "miss")  return { status: "missing" };
+
   const [calls, earned] = await Promise.all([
-    kvGet<number>(K.usage(slug)),
-    kvGet<number>(K.earned(tool.builderAddress)),
+    kvGetCounter(K.usage(slug)),
+    kvGetCounter(K.earned(probe.value.builderAddress)),
   ]);
-  return { ...tool, callCount: calls ?? 0, earnedTotal: earned ?? 0 };
+  return { status: "ok", tool: { ...probe.value, callCount: calls, earnedTotal: earned } };
+}
+
+/**
+ * Legacy projection — collapses `missing` and `unavailable` into `null`.
+ *
+ * Kept deliberately for the callers that ask "does this slug exist?", most
+ * importantly the ⚠ paid invoke route, where an unreadable tool MUST fail
+ * closed (404, no payment taken) rather than be run against a half-read config.
+ */
+export async function getHostedTool(slug: string): Promise<HostedTool | null> {
+  const r = await readHostedTool(slug);
+  return r.status === "ok" ? r.tool : null;
 }
 
 /** Public tool (no secrets) by slug. */
@@ -143,12 +176,51 @@ export async function listPublicHostedTools(): Promise<PublicHostedTool[]> {
   return items.filter((t): t is HostedTool => !!t).map(toPublicHostedTool);
 }
 
-/** Hosted tools owned by a wallet (dashboard / builder profile), secrets stripped. */
+/** A wallet's hosted inventory, plus what we could NOT see of it. */
+export interface BuilderHostedToolsRead {
+  tools:    PublicHostedTool[];
+  coverage: Coverage;
+  /** slugs the owner index listed but whose record read FAILED (≠ absent). */
+  unreadableSlugs: string[];
+}
+
+/**
+ * Hosted tools owned by a wallet, honestly. Secrets stripped. Twin of
+ * `hub-registry.readBuilderTools` — keep the two bodies in step.
+ */
+export async function readBuilderHostedTools(addr: string): Promise<BuilderHostedToolsRead> {
+  const idx = await kvGetProbe<string[]>(K.builder(addr));
+  if (idx.status === "error") {
+    return { tools: [], coverage: "unavailable", unreadableSlugs: [] };
+  }
+
+  // A genuine miss IS an empty inventory — the one case allowed to render as
+  // "no hosted tools yet".
+  const slugs = idx.status === "hit" ? idx.value ?? [] : [];
+  if (slugs.length === 0) return { tools: [], coverage: "complete", unreadableSlugs: [] };
+
+  const reads = await Promise.all(slugs.map(readHostedTool));
+
+  const tools: PublicHostedTool[] = [];
+  const unreadableSlugs: string[] = [];
+  let countersIncomplete = false;
+  reads.forEach((r, i) => {
+    if (r.status === "unavailable") { unreadableSlugs.push(slugs[i]); return; }
+    if (r.status === "missing") return;           // stale index entry — genuinely gone
+    tools.push(toPublicHostedTool(r.tool));
+    if (r.tool.callCount === null || r.tool.earnedTotal === null) countersIncomplete = true;
+  });
+
+  return {
+    tools,
+    coverage: unreadableSlugs.length > 0 || countersIncomplete ? "partial" : "complete",
+    unreadableSlugs,
+  };
+}
+
+/** Legacy projection — the list only. Use `readBuilderHostedTools` to render a count. */
 export async function getBuilderHostedTools(addr: string): Promise<PublicHostedTool[]> {
-  const slugs = (await kvGet<string[]>(K.builder(addr))) ?? [];
-  if (slugs.length === 0) return [];
-  const items = await Promise.all(slugs.map(getHostedTool));
-  return items.filter((t): t is HostedTool => !!t).map(toPublicHostedTool);
+  return (await readBuilderHostedTools(addr)).tools;
 }
 
 // ─── Write ────────────────────────────────────────────────────────────────────
@@ -225,14 +297,23 @@ export async function addBuilderEarnings(addr: string, usdcUnits: number): Promi
 }
 
 /**
- * ⚠ Returns 0 for "KV unreachable" as well as for "genuinely earned nothing" —
- * `kvGet` collapses the two. That is a Group-B honesty bug from the same family
- * as #150 and is deliberately NOT fixed here: this PR is scoped to the writes
- * that DESTROY data, and changing this return type touches every dashboard
- * caller. Tracked as follow-up; do not read a 0 from this as a fact about money.
+ * A wallet's POOLED hosted earnings (their accrued 90% share across all hosted
+ * tools), in USDC micro-units.
+ *
+ * Returns `null` when the counter could not be READ, and `0` only when it is
+ * genuinely absent — i.e. nothing has ever been accrued for this wallet.
+ *
+ * This used to be `(await kvGet(...)) ?? 0`, which answered "we could not reach
+ * the database" with the same value as "you have earned nothing". On the one
+ * figure in the product that is a claim about someone's money, and with no
+ * receipt behind it to check against, that is not a display glitch — it is the
+ * dashboard telling a builder their balance is zero during an Upstash cap
+ * window (#123, #148). The single caller is the dashboard route, so the
+ * signature changed outright rather than growing a second projection nobody
+ * would have used.
  */
-export async function getBuilderEarnings(addr: string): Promise<number> {
-  return (await kvGet<number>(K.earned(addr))) ?? 0;
+export async function getBuilderEarnings(addr: string): Promise<number | null> {
+  return kvGetCounter(K.earned(addr));
 }
 
 // ─── Canonical SIWE manifest ────────────────────────────────────────────────
