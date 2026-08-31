@@ -1,7 +1,29 @@
 /**
  * Blue Agent — Research Loop
  *
- * Cron: every 6 hours (0 0,6,12,18 * * *)
+ * ⚠ UNSCHEDULED 2026-08-31. The route still works and is still reachable with
+ * CRON_SECRET; it simply no longer runs on a timer. Reported unused by ShunTr,
+ * and every daily run cost a burst of Upstash reads+writes against the budget
+ * that has suspended the database three times (#148) — the schedule was the
+ * live cost, not the code.
+ *
+ * The route was NOT deleted, unlike the Sentinel trigger routes removed
+ * alongside it, because this one has live readers:
+ *   • it is the sole writer of `aeon:deep-research`, which PAID x402 handlers
+ *     read via getAeonOutput();
+ *   • /api/signals serves `research:signals:latest` / `:history`, and
+ *     /api/health advertises that endpoint.
+ * Deleting it is a product decision about those paid tools, not a dead-code
+ * cleanup — so it is left one line in vercel.json away from being re-enabled.
+ *
+ * Unscheduling cannot serve stale data silently: setAeonOutput writes a 26h TTL
+ * and getAeonOutput rejects anything older than 25h, so the key expires and
+ * every consumer takes its existing `null` path
+ * (`kv ? formatAeonForLLM(kv) : null`) — the handlers already degrade to "no
+ * Aeon context" rather than fabricating one.
+ *
+ * Cron (historical): every 6 hours (0 0,6,12,18 * * *); last live schedule was
+ * `0 6 * * *` in vercel.json.
  * Autonomous research loop for Base builders.
  *
  * Different from Daily Brief:

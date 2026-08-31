@@ -1,8 +1,23 @@
 /**
  * Blue Sentinel — Scan Loop
  *
- * Cron: every 15 minutes  ("* /15 * * * *" in vercel.json)
- * Auth: Authorization: Bearer <CRON_SECRET>
+ * ⚠ RETIRED / INERT. Reported unused by ShunTr 2026-08-31. There is no cron
+ * entry for it in vercel.json (there has not been one for some time — the
+ * "every 15 minutes" line below is stale) and the CRON_SECRET gate at the
+ * bottom of this file means it cannot be triggered from outside.
+ *
+ * It was NOT inert before this commit. `/api/sentinel/scan` was a PUBLIC route
+ * whose entire body read CRON_SECRET from the server env and called this
+ * endpoint with it — a capability bypass that let anyone run a full 8-category
+ * scan on demand, burning Virtuals credits and a burst of Upstash writes per
+ * hit, against the budget that has suspended the database three times (#148).
+ * That route is deleted, along with `/api/sentinel/test-alert` (an unauthed
+ * Telegram sender whose own header said "DEV ONLY — remove or protect in
+ * production"). Removing the two open doors is what this commit is for; the
+ * engine behind them is left in place because retiring the rest of Sentinel
+ * (13 routes, 16 lib modules, /api/webhook/telegram) is a separate change.
+ *
+ * Auth: Authorization: Bearer <CRON_SECRET>  (or ?secret=)
  *
  * 8 threat categories scanned per cycle:
  *   1. honeypot        — token contracts blocking sells (Bankr LLM)
