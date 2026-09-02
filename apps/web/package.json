@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "tsx scripts/run-tests.ts",
     "hood:smoke": "tsx scripts/blue-hood-smoke.ts",
     "hood:kick-crons": "tsx scripts/hood-kick-crons.ts",
     "hood:decompose": "tsx scripts/gap-closure-dryrun.ts",
