@@ -9,11 +9,18 @@ Registered in `vercel.json` under `crons[]`. Vercel Pro allows sub-daily
 cadence (`* * * * *`); we do not run tighter than every 2 minutes to
 respect GT rate-limits (see `poller.ts`).
 
+**This table is pinned to `vercel.json` by `apps/web/scripts/docs-truth-check.ts`,
+which runs in CI.** It has to be: three of these schedules had drifted from the
+deployed value and two jobs were missing from the table entirely, so the doc was
+describing a cadence nothing ran at.
+
 | Path | Schedule | Cadence | Purpose |
 |---|---|---|---|
-| `/api/cron/blue-hood/poll` | `*/2 * * * *` | every 2 min | one M5 poll cycle over the watchlist (24 tokens, 3s stagger ≈ 72s wall time), runs rule engine + grader, writes `bh:snapshot:latest` + `bh:arrow:*`. Auth: `Authorization: Bearer $CRON_SECRET`. |
-| `/api/cron/blue-hood/sparkline-refresh` | `*/15 * * * *` | every 15 min | refreshes `bh:spark:{TICKER}` (24 tokens, 3s stagger, TTL 20 min). Runs OUTSIDE the poll hot path so the 72s cycle doesn't grow. Auth: `Authorization: Bearer $CRON_SECRET`. |
-| `/api/cron/blue-hood/brief-worker` | `* * * * *` | every 1 min | drains `bh:brief:queue` (async-brief refactor). Pops up to `BH_BRIEF_BATCH` (default 8) arrow ids, fetches A4 brief per arrow, attaches, writes chat card, runs Web Push fan-out. Poll cycle no longer blocks on A4. `BH_BRIEF_BATCH` clamped [1, 20]. Auth: `Authorization: Bearer $CRON_SECRET`. |
+| `/api/cron/blue-hood/poll` | `*/5 * * * *` | every 5 min | one M5 poll cycle over the watchlist (24 tokens, 3s stagger ≈ 72s wall time), runs rule engine + grader, writes `bh:snapshot:latest` + `bh:arrow:*`. Auth: `Authorization: Bearer $CRON_SECRET`. |
+| `/api/cron/blue-hood/sparkline-refresh` | `*/30 * * * *` | every 30 min | refreshes `bh:spark:{TICKER}` (24 tokens, 3s stagger, TTL 20 min). Runs OUTSIDE the poll hot path so the 72s cycle doesn't grow. Auth: `Authorization: Bearer $CRON_SECRET`. |
+| `/api/cron/blue-hood/brief-worker` | `*/3 * * * *` | every 3 min | drains `bh:brief:queue` (async-brief refactor). Pops up to `BH_BRIEF_BATCH` (default 8) arrow ids, fetches A4 brief per arrow, attaches, writes chat card, runs Web Push fan-out. Poll cycle no longer blocks on A4. `BH_BRIEF_BATCH` clamped [1, 20]. Auth: `Authorization: Bearer $CRON_SECRET`. |
+| `/api/cron/blue-hood/alert-drain` | `*/2 * * * *` | every 2 min | drains the pending-alert queue to watchlist subscribers (Telegram DM + Web Push). Auth: `Authorization: Bearer $CRON_SECRET`. |
+| `/api/cron/blue-hood/archive-watch` | `7 * * * *` | hourly, at :07 | watchdog over the arrow archive — detects holes in the series and reports them rather than silently backfilling. Auth: `Authorization: Bearer $CRON_SECRET`. |
 | `/api/cron/research-loop` | `0 6 * * *` | daily 06:00 UTC | Autonomous builder-research loop; writes Aeon KV via `setAeonOutput`. Unrelated to Blue Hood; here for the whole-app view. |
 
 The `/api/cron/feed/daily` row was removed on 2026-09-02 when Blue Feed was
@@ -33,7 +40,7 @@ and is untouched by the retirement.
 |---|---|
 | `POST /api/cron/blue-hood/purge?confirm=1` | Wipe all arrow records + reset serial counter. Used before prod launch so `#0001` is the engine's first real arrow. Auth: CRON_SECRET. |
 | `POST /api/cron/blue-hood/seed-test-arrow` | Dev-only synthetic arrow (always `origin: "seeded"`, hidden from public feed). Local UI smoke path. Endpoint 404s in prod. |
-| `GET /api/hood/llm-health` | Manual poll of the Virtuals→Venice→Bankr chain. Called by `scripts/blue-hood-smoke.ts` (see BH_SMOKE_STRICT). |
+| `GET /api/hood/llm-health` | Manual poll of Virtuals, the only LLM gateway. Called by `scripts/blue-hood-smoke.ts` (see BH_SMOKE_STRICT). |
 
 ## Env dependencies
 

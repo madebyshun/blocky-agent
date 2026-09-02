@@ -1,10 +1,10 @@
 # Blue Hub
 
-> AI agent tools for Base builders — analysis, audits, and signals via 3-agent
-> consensus (Blue · Aeon · MiroShark). Pay per call in USDC over the x402
-> protocol. No API key, no signup, no subscription.
+> AI agent tools for Base builders — analysis, audits, and signals over live
+> on-chain data. Pay per call in USDC over the x402 protocol. No API key, no
+> signup, no subscription.
 
-Blue Hub exposes 34 paid tools. Any x402-capable agent can call a tool's
+Blue Hub exposes 112 paid tools. Any x402-capable agent can call a tool's
 endpoint directly and pay per request in USDC on Base (chain id 8453). When a
 request arrives without payment, the endpoint returns HTTP 402 with payment
 requirements; the agent signs an EIP-3009 authorization and retries with an

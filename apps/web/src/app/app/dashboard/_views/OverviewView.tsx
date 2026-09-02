@@ -572,7 +572,7 @@ export default function OverviewView({ onSwitchTab }: Props) {
                 <div className="text-center py-5">
                   <div className="text-2xl mb-2">💬</div>
                   <p className="text-sm font-bold text-white mb-1">Start your first chat</p>
-                  <p className="text-[11px] text-slate-600 mb-4">5 commands · 69 tools · 3-agent consensus</p>
+                  <p className="text-[11px] text-slate-600 mb-4">5 commands · pay per call in USDC</p>
                   <Link href="/chat"
                     className="inline-flex items-center justify-center gap-1.5 text-[11px] font-bold px-4 py-2 rounded-lg bg-[#4FC3F7] text-[#050508] hover:bg-[#29ABE2] transition-colors">
                     Open Blue Chat →

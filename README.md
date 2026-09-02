@@ -14,16 +14,16 @@ Blue Agent is a full economic actor on Base: it holds a wallet, executes onchain
 
 - Website: [blueagent.dev](https://blueagent.dev)
 - Hub: [blueagent.dev/hub](https://blueagent.dev/hub)
-- Terminal: [blueagent.dev/terminal](https://blueagent.dev/terminal)
+- Chat: [app.blueagent.dev/chat](https://app.blueagent.dev/chat)
 - X: [@blueagent_](https://x.com/blueagent_)
 - Telegram: [t.me/blueagent_hub](https://t.me/blueagent_hub)
 - Bankr: [bankr.bot/agents/blue-agent](https://bankr.bot/agents/blue-agent)
 
 ---
 
-## Blue Hub — 74 AI Tools on Base
+## Blue Hub — 112 AI Tools on Base
 
-Blue Hub is a curated marketplace of 74 pay-per-call AI tools built on Base. Any agent or developer can call tools via x402 micropayments in USDC — no API key, no account, no human in the loop.
+Blue Hub is a curated marketplace of 112 pay-per-call AI tools built on Base. Any agent or developer can call tools via x402 micropayments in USDC — no API key, no account, no human in the loop.
 
 ```bash
 # Discover all tools + prices
@@ -37,7 +37,10 @@ POST https://blueagent.dev/api/x402/{tool-id}
 X-Payment: <EIP-3009 USDC on Base>
 ```
 
-**74 tools across 9 categories** — intelligence · builder · trading · security · agent-economy · base-ecosystem · on-chain · content · earn
+**112 tools across 12 categories** — on-chain · security · data · intelligence · builder · trading · content · agent-economy · base-ecosystem · earn · signal · portfolio
+
+<!-- Both numbers above, and every other tool count in this file, are pinned to
+     `TOOL_COUNT` by apps/web/scripts/docs-truth-check.ts, which runs in CI. -->
 
 Registry: [ERC-8257 ToolRegistry](https://basescan.org/address/0x265BB2DBFC0A8165C9A1941Eb1372F349baD2cf1) · [agentic.market](https://agentic.market) · [CDP Bazaar](https://www.coinbase.com/developer-platform)
 
@@ -122,14 +125,17 @@ blue doctor
 
 ---
 
-## Blue Terminal
+## Blue Chat
 
-Browser-based CLI at [blueagent.dev/terminal](https://blueagent.dev/terminal) — run all 74 Hub tools, 5 core commands, and onchain queries directly in the browser. No install required.
+The browser terminal folded into Blue Chat at
+[app.blueagent.dev/chat](https://app.blueagent.dev/chat) — all 112 Hub tools, the
+5 core commands, and onchain queries, in the browser. No install required.
+(`/terminal` still 301s there, so old links keep working.)
 
 ```
-blue hub ls                    # list all 74 tools
+blue hub ls                    # list all 112 tools
 blue hub info token-pick-signal
-blue idea <prompt>             # $0.05 via Bankr LLM
+blue idea <prompt>             # $0.05, inference via Virtuals
 blue balance 0x...             # ETH + USDC on Base mainnet
 ```
 
@@ -137,22 +143,26 @@ blue balance 0x...             # ETH + USDC on Base mainnet
 
 ## Blue Tasks
 
-Tasks are local micropayment jobs — post work, accept it, submit proof. Data lives at `~/.blue-agent/tasks.json`.
+A local ledger for tracking work — post a job, accept it, submit proof. It records
+who did what and what is owed. **It moves no money and it is not a marketplace:**
+there is no server, no escrow, and no chain call anywhere in these commands.
+Settling up is between the two people.
 
 ```bash
-# In TUI: Tasks → blue post-task
-title:       "Audit smart contract for reentrancy"
-reward:      5          # USDC
-category:    audit
-
-# Doer accepts
-Tasks → blue accept → taskId + handle
-
-# Doer submits proof
-Tasks → blue submit → taskId + proof URL
+# Persists to ~/.blue-agent/microtasks.json
+blue micro post "audit this contract for reentrancy" \
+  --reward 5 --slots 1 --proof url --deadline 2026-12-31
+blue micro list
+blue micro claim <taskId> @handle
+blue micro approve <claimId>       # marks it owed; sends nothing
 ```
 
-Fee = 5% platform cut. Doer receives 95%.
+The `blue post-task` / `tasks` / `accept` / `submit` group is a **separate draft
+tool** backed by an in-memory store (`packages/reputation` → `taskHub.ts`), so its
+state does not survive the process — every run starts empty. It does not read or
+write `~/.blue-agent/tasks.json`; nothing shipped does.
+
+The 5% figure the commands print is arithmetic on the ledger, not a fee anyone collects.
 
 ---
 
@@ -172,12 +182,14 @@ Builder Score dimensions (max 100): activity · social · uniqueness · thesis �
 ```
 blue-agent/
 ├── apps/
-│   └── web/              # Next.js 15 — /hub, /console, /terminal, /skills
-├── packages/
+│   ├── web/              # Next.js 15 — the whole live x402 surface + /hub, /chat, /hood
+│   └── docs/             # Mintlify docs source (not an npm workspace)
+├── packages/             # 18 workspaces; the ones worth knowing:
 │   ├── x402-client/      # @blueagent/x402 — x402 SDK for Blue Hub
 │   ├── cli/              # @blueagent/cli — TUI (Ink + React)
+│   ├── builder/          # the `blue` command implementations
 │   ├── core/             # Shared schemas, pricing, tool-input specs
-│   ├── bankr/            # Bankr LLM client (callBankrLLM)
+│   ├── bankr/            # LEGACY — Bankr 403-banned 2026-07-20, kept so imports compile
 │   ├── payments/         # x402 payment helpers
 │   ├── reputation/       # @blueagent/reputation — Builder Score + Agent Score
 │   ├── skill/            # @blueagent/skill — MCP server
@@ -207,9 +219,9 @@ blue-agent/
 |---|---|
 | Frontend | Next.js 15, App Router, Tailwind |
 | CLI/TUI | Ink (React for terminals) |
-| LLM | Bankr LLM — `https://llm.bankr.bot/v1/messages` |
-| Payments | x402 v2 + USDC on Base |
-| Chain | Base only (chain ID 8453) |
+| LLM | Virtuals — `https://compute.virtuals.io/v1` |
+| Payments | x402 v2 + USDC on Base, settled via the Coinbase CDP facilitator |
+| Chains | Base (8453) — primary · Robinhood Chain (4663) — the `rh-*` tools and RWA registry |
 | Registry | ERC-8257 ToolRegistry on Base |
 
 ---
@@ -222,8 +234,11 @@ blue-agent/
 
 ## Hard rules
 
-1. **Base chain only.** All addresses and transactions target Base (chain ID 8453).
-2. **All AI calls go through Bankr LLM.** `packages/bankr` → `callBankrLLM()`. No direct OpenAI or Anthropic calls.
+1. **Two live chains — say which one, every time.** Base (8453) is primary; Robinhood
+   Chain (4663) carries the `rh-*` tools and the RWA registry. A ticker can exist on
+   both, so a ticker string never identifies a token — chain + address does.
+2. **All AI calls go through Virtuals.** `apps/web/src/app/api/_lib/llm.ts` → `callLLM()`.
+   No direct OpenAI, Anthropic, Bankr, or Venice calls.
 3. **Never invent contract addresses.** If an address is needed and not in the codebase, flag it.
 4. **Business logic in packages, not in apps.** Keep `apps/web` thin.
 
