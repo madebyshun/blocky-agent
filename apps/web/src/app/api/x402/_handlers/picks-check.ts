@@ -13,12 +13,12 @@
  */
 import { getBaseTrending }            from "@/lib/market-data";
 import { kvSet, kvGetProbe, kvMutate } from "@/lib/kv";
-// Single source of truth for "is the feed running". Imported, not copied, so
-// the message below can never drift from the actual state — flipping the flag
-// to resume the feed makes the "paused" wording disappear on its own. The
-// module is cheap (it pulls only @/lib/kv and x402-internal, both already in
-// this handler's graph); the `_` prefix keeps it out of Next's route table.
-import { FEED_PAUSED } from "@/app/api/cron/feed/_shared";
+
+// This used to import FEED_PAUSED from the feed cron so the wording could never
+// drift from the flag. Blue Feed was RETIRED on 2026-09-02 — cron, pages and
+// _shared.ts are deleted — so there is no flag left to drift from and no state
+// this handler could be wrong about. "Paused" is now the wrong word: it promises
+// a resume that will not happen.
 
 const PENDING_KEY = "feed:picks:pending";
 const HISTORY_KEY = "feed:picks:history";
@@ -142,21 +142,17 @@ export default async function handler(_req: Request): Promise<Response> {
       return Response.json({
         tool:            "picks-check",
         _noCard:         true,
-        // "No picks are due YET" is only true when something is still feeding
-        // the queue. It hasn't been since 2026-06-27: the sole writer of
-        // PENDING is `base-token-scan`, which runs only in the HOURLY feed
-        // cron — a route that short-circuits on FEED_PAUSED *and* has had no
-        // scheduler since its workflow was deleted 2026-07-17. Saying "yet" in
-        // that state promises a measurement that can never arrive, which is
-        // the same empty-as-fact lie this whole sweep exists to kill; it just
-        // wears a friendlier word. `track_record` stays a real zeroed record
-        // (not null) because the history read SUCCEEDED and is genuinely
-        // empty — null is reserved for "couldn't read", which is a different
-        // thing and is still handled below.
-        reason: FEED_PAUSED
-          ? "Blue Feed is paused, so the pick queue is not being written and nothing is being graded. This is an EMPTY record, not a measured one — win_rate is null (unknown), not zero."
-          : "No picks are due for checking yet.",
-        ...(FEED_PAUSED ? { code: "feed_paused" } : {}),
+        // "No picks are due YET" would only be true if something were still
+        // feeding the queue. Nothing has since 2026-06-27, and as of 2026-09-02
+        // nothing ever will: the sole writer of PENDING was the hourly feed
+        // cron, which is now deleted, not merely paused. Saying "yet" promises
+        // a measurement that can never arrive — the same empty-as-fact lie this
+        // sweep exists to kill, just wearing a friendlier word. `track_record`
+        // stays a real zeroed record (not null) because the history read
+        // SUCCEEDED and is genuinely empty; null is reserved for "couldn't
+        // read", a different thing, handled below.
+        reason: "Blue Feed was retired on 2026-09-02, so the pick queue is no longer written and nothing is being graded. This is an EMPTY record, not a measured one — win_rate is null (unknown), not zero. It will not resume.",
+        code: "feed_retired",
         pending_count:   stillPending.length,
         track_record:    histProbe.status === "error"
           ? null

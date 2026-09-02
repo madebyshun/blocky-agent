@@ -28,7 +28,8 @@ const APP_SEGMENTS = new Set([
   // was removed in AppShell.tsx).
   "chat",
   "dashboard",
-  "feed",
+  // `feed` removed 2026-09-02 — Blue Feed retired. Its pages are deleted and
+  // /feed + /app/feed now 301 to /chat via archivedRedirect above.
   "hood",
   "hub",
   "launches",
@@ -81,6 +82,13 @@ const APP_SEGMENTS = new Set([
  *     lands the visitor at Blue Chat instead of a 404.
  * Runs BEFORE host-specific rewrites so the semantic is identical on
  * blueagent.dev and app.blueagent.dev.
+ *
+ * Blue Feed joined this list when it was retired (2026-09-02). Its pages used
+ * to answer 404 while "parked for a rebuild"; the rebuild is cancelled, so the
+ * parked-404 becomes a permanent 301 like every other cull. This matters more
+ * than for a normal dead route: the feed published its own share links to X
+ * (app.blueagent.dev/feed/<id> from the card UI, blueagent.dev/app/feed in the
+ * tweet text), so those URLs are in the wild and outlive the product.
  */
 function archivedRedirect(pathname: string, search: string): NextResponse | null {
   const isBank =
@@ -88,7 +96,10 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
     pathname === "/app/bank" || pathname.startsWith("/app/bank/");
   const isPay =
     pathname === "/pay" || pathname.startsWith("/pay/");
-  if (!isBank && !isPay) return null;
+  const isFeed =
+    pathname === "/feed" || pathname.startsWith("/feed/") ||
+    pathname === "/app/feed" || pathname.startsWith("/app/feed/");
+  if (!isBank && !isPay && !isFeed) return null;
   return NextResponse.redirect(
     `https://${APP_HOST}/chat${search}`,
     { status: 301 },

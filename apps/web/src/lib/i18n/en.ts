@@ -127,7 +127,6 @@ export const en = {
     chat: "Chat",
     hub: "Hub",
     wallet: "Wallet",
-    feed: "Feed",
     bank: "Bank",
     launches: "Launches",
     hood: "Hood",
@@ -267,11 +266,6 @@ export const en = {
     no_tokens: "No tokens launched yet",
     unclaimed: "Unclaimed",
     search: "Search tokens...",
-  },
-  feed: {
-    title: "Blue Feed",
-    loading: "Loading feed...",
-    empty: "No feed items yet",
   },
   balance_card: {
     title: "Wallet Balance",
