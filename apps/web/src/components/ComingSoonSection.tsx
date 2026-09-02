@@ -19,7 +19,7 @@ const PRODUCTS: Product[] = [
     title: "Marketplace",
     desc:  "Browse agents, prompts, and skills. Discover what works, then monetize the best workflows.",
     price: "Take rate",
-    href:  "/market",
+    href:  "/hub",
   },
 ];
 
