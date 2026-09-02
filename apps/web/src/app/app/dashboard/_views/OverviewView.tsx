@@ -447,7 +447,7 @@ export default function OverviewView({ onSwitchTab }: Props) {
               ) : (
                 <>
                   <div className="text-2xl font-bold text-slate-500 mb-1">No stake</div>
-                  <div className="text-[11px] text-slate-600 mb-4">Earn USDC yield + AI credits</div>
+                  <div className="text-[11px] text-slate-600 mb-4">Earn AI credits</div>
                 </>
               )}
               {/* Tier ladder */}
