@@ -184,7 +184,7 @@ async function sendWelcomeEmail(to: string, tier: "daily" | "weekly"): Promise<v
   <div style="border-top:1px solid #1A1A2E;padding-top:20px">
     <p style="font-size:10px;color:#334155;margin:0">
       Blue Agent × Aeon × MiroShark ·
-      <a href="https://blueagent.dev/market" style="color:#4FC3F7;text-decoration:none">blueagent.dev/market</a>
+      <a href="https://blueagent.dev" style="color:#4FC3F7;text-decoration:none">blueagent.dev</a>
     </p>
   </div>
 

@@ -79,6 +79,40 @@ how good the prompt is. **Prompts do not prevent hallucination; data sources do.
   Do NOT fetch an Aeon `SKILL.md` from GitHub and ask the LLM to "synthesize from training knowledge" — that
   fabricates. Only the skills live in KV are real.
 
+## Retiring a surface (luật chống-bỏ-rơi)
+
+Five surfaces were built, quietly abandoned, and left live: `apps/api` (61 days between
+last maintenance and deletion), `apps/portal` (46), Blue Sentinel (~100), Blue Feed, and the
+microtask marketplace. **Not one was caught by a mechanism** — every one was caught by a
+human eventually noticing. While abandoned, Sentinel leaked `CRON_SECRET` from an
+unauthenticated route and a paid Hub tool was still selling it; the CLI still sold a
+microtask ledger backed by a `Map` that never persisted; Blue Feed's published links had to
+be 301'd after the fact.
+
+The damage is never "dead code exists" — that is normal. It is the gap between **stopping
+maintenance** and **stopping exposure**. Everything below exists to close that gap.
+
+- **"Last commit date" is NOT evidence a surface is alive.** MEASURED: `api/sentinel`'s last
+  feature commit was 2026-05-24, but two repo-wide mechanical sweeps (`maxDuration` across all
+  tool routes, 2026-05-28; the #150 kvGet family, 2026-08-28) refreshed its timestamp. On the
+  day it was deleted, git said "touched 4 days ago". **A staleness timer would have protected
+  it through the entire ~100-day window it was leaking a secret.** Sweeps camouflage
+  abandonment; never argue "it's still maintained" from `git log` alone.
+- **Retiring is ONE commit, not a cleanup backlog.** The same commit removes the route, its
+  `AGENT_TOOLS`/`HANDLERS` entry and price, every link that advertises it, and its `vercel.json`
+  cron — and names the env vars that just became dead. Whatever is left behind is the part
+  that bites.
+- **A payment path must never outlive the product it sells.** If a surface is retired, the
+  endpoint that charges for it goes in the same commit. If it cannot (it moves real USDC, or
+  it holds user funds), STOP and ask ShunTr — do not retire around it and do not quietly leave
+  it collecting.
+- **User/KV state is evidence, not clutter.** Deleting routes does not entitle you to delete
+  the data behind them. Keep it and flag it; wiping a user's subscriptions is ShunTr's call.
+- **Every published URL must resolve.** Enforced by `apps/web/scripts/link-liveness-check.ts`,
+  which runs in CI: every absolute `blueagent.dev` link in `src/` is resolved against the app's
+  real routes, `public/`, `next.config` redirects and the middleware rewrite. It exists because
+  `blueagent.dev/market` 404'd in production while two live senders kept mailing it.
+
 ## Git discipline
 
 - Always **`git branch --show-current` before committing.** Work and commit on `dev`, never on `main`.

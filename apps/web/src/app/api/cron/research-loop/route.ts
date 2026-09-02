@@ -239,7 +239,7 @@ function formatTelegram(output: ResearchOutput): string {
   }
 
   lines.push(`—`);
-  lines.push(`<a href="https://blueagent.dev/market">blueagent.dev/market</a> · Blue Agent`);
+  lines.push(`<a href="https://blueagent.dev">blueagent.dev</a> · Blue Agent`);
 
   return lines.join("\n");
 }
