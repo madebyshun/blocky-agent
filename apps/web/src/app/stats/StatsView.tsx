@@ -557,7 +557,7 @@ export default function StatsView({ stats, usage: modelUsage }: { stats: PublicS
               </div>
               <p className="font-mono text-[11px] text-slate-500 leading-relaxed">
                 Total $BLUEAGENT staked in the BlueMarketStaking contract, earning
-                USDC yield + Blue Chat credits. Verifiable on-chain on Base (8453).
+                Blue Chat credits. Verifiable on-chain on Base (8453).
               </p>
             </div>
           </Reveal>

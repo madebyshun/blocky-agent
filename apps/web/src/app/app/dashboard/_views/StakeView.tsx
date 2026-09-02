@@ -55,6 +55,8 @@ const STAKING_ABI = [
     inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
   { name: "totalStaked", type: "function", stateMutability: "view",
     inputs: [], outputs: [{ type: "uint256" }] },
+  { name: "totalYieldDistributed", type: "function", stateMutability: "view",
+    inputs: [], outputs: [{ type: "uint256" }] },
   { name: "stakes", type: "function", stateMutability: "view",
     inputs: [{ name: "", type: "address" }],
     outputs: [
@@ -166,6 +168,13 @@ export default function StakeView() {
     address: STAKING_ADDRESS, abi: STAKING_ABI, functionName: "totalStaked",
   });
 
+  // Read the payout total instead of asserting one. A hardcoded "Live" here
+  // survived ~156M BLUE being staked against a mechanism that has never paid
+  // out; anything hardcoded rots the same way the moment reality diverges.
+  const { data: yieldPaid } = useReadContract({
+    address: STAKING_ADDRESS, abi: STAKING_ABI, functionName: "totalYieldDistributed",
+  });
+
   const { writeContract, data: txHash, isPending: isWriting } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: txSuccess } =
     useWaitForTransactionReceipt({ hash: txHash });
@@ -254,7 +263,9 @@ export default function StakeView() {
         <div className="grid grid-cols-3 gap-2.5 mb-4">
           {[
             { label: "TOTAL STAKED", value: globalStaked ? fmtBlue(globalStaked) : "—", accent: "#4FC3F7" },
-            { label: "USDC YIELD",   value: "Live",                                      accent: "#22C55E" },
+            { label: "USDC PAID",
+              value: yieldPaid !== undefined ? `$${(Number(yieldPaid) / 1e6).toFixed(2)}` : "—",
+              accent: Number(yieldPaid ?? 0n) > 0 ? "#22C55E" : "#64748B" },
             { label: "COOLDOWN",     value: "1 day",                                     accent: "#A78BFA" },
           ].map(s => (
             <div key={s.label} className="rounded-2xl border p-4 text-center relative overflow-hidden"
@@ -599,11 +610,10 @@ export default function StakeView() {
 
         {/* Footer info — bento with feature pills */}
         <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] mt-4 p-5">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 mb-4">
             {[
               { icon: "📌", text: "Credits accrue on-chain",      color: "#4FC3F7" },
               { icon: "💬", text: "Unlock Blue Chat AI",          color: "#A78BFA" },
-              { icon: "💵", text: "stake BLUE → earn USDC yield",  color: "#22C55E" },
               { icon: "⏳", text: "1-day cooldown to unstake",    color: "#F59E0B" },
             ].map(item => (
               <div key={item.text} className="flex items-start gap-2.5 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] px-3 py-2.5"
