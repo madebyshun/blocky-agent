@@ -1,9 +1,11 @@
 /**
- * blue micro approve — Approve microtask submissions and release payment.
+ * blue micro approve — Record a microtask submission as approved or rejected.
  *
  * blue micro approve micro_abc123              (approve all pending)
  * blue micro approve micro_abc123 --reject     (reject and reopen slot)
  * blue micro approve micro_abc123 --claim <claimId>  (specific claim)
+ *
+ * Approving settles nothing. It updates the local ledger in ~/.blue-agent/.
  */
 
 import { printError } from "../../print";
@@ -91,13 +93,12 @@ export async function runMicroApprove(
         process.stdout.write(`  Claim:    ${claim.id}\n`);
         process.stdout.write(`  Doer:     @${claim.claimant_handle}\n`);
         process.stdout.write(`  Slot reopened — ${updatedTask.slots_remaining} slot(s) available\n`);
-        process.stdout.write(`  Escrow:   $${task.reward_per_slot.toFixed(2)} refunded to creator\n`);
+        process.stdout.write(`  Budget:   $${task.reward_per_slot.toFixed(2)} returned to the task budget\n`);
         process.stdout.write(`\n${LINE}\n\n`);
       }
     } else {
-      // Approve: release payment
+      // Approve: record the claim as owed. No transfer is made.
       claim.status = "approved";
-      claim.payout_tx = "0x" + Math.random().toString(16).slice(2).padEnd(64, "0");  // simulated
       upsertClaim(claim);
 
       let updatedTask = { ...task };
@@ -125,19 +126,19 @@ export async function runMicroApprove(
       });
 
       if (!opts.silent) {
-        process.stdout.write(`  ✅ Payment released\n\n`);
+        process.stdout.write(`  ✅ Submission approved\n\n`);
         process.stdout.write(`  Task:     ${taskId}\n`);
-        process.stdout.write(`  Paid to:  @${claim.claimant_handle}\n`);
+        process.stdout.write(`  Doer:     @${claim.claimant_handle}\n`);
         process.stdout.write(`  Gross:    $${gross.toFixed(2)}\n`);
         process.stdout.write(`  Fee:      $${fee.toFixed(2)} (5%)\n`);
-        process.stdout.write(`  Net:      $${net.toFixed(2)}\n`);
-        process.stdout.write(`  Tx:       ${claim.payout_tx?.slice(0, 20)}...\n`);
-        process.stdout.write(`  Escrow:   released\n`);
+        process.stdout.write(`  Net owed: $${net.toFixed(2)}\n`);
+        process.stdout.write(`\n  Recorded in the local ledger. No payment was sent —\n`);
+        process.stdout.write(`  pay @${claim.claimant_handle} yourself to settle this.\n`);
         process.stdout.write(`\n${LINE}\n\n`);
       } else {
         // Called from auto-approve in submit.ts — print compact confirmation
-        process.stdout.write(`  ✅ Auto-approved — $${net.toFixed(2)} USDC paid to @${claim.claimant_handle}\n`);
-        process.stdout.write(`  Tx: ${claim.payout_tx?.slice(0, 20)}...\n`);
+        process.stdout.write(`  ✅ Auto-approved — $${net.toFixed(2)} recorded as owed to @${claim.claimant_handle}\n`);
+        process.stdout.write(`  Local ledger only — no payment was sent.\n`);
         process.stdout.write(`${LINE}\n\n`);
       }
     }

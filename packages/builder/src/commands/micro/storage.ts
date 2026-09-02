@@ -1,6 +1,10 @@
 /**
  * Microtask storage — reads/writes ~/.blue-agent/microtasks.json,
  * ~/.blue-agent/microclaims.json, ~/.blue-agent/microreputation.json
+ *
+ * These three JSON files are the whole system. There is no server, no RPC,
+ * and no chain call anywhere in `blue micro` — the dollar amounts below are
+ * bookkeeping, and settling them is the operator's job.
  */
 
 import fs from "fs";
@@ -38,12 +42,14 @@ export interface MicroTask {
   deadline: string;
   status: MicroStatus;
 
+  // Named `escrow` because that is the on-disk key in existing
+  // ~/.blue-agent/microtasks.json files. Nothing is held or escrowed —
+  // these are counters over the task's stated budget.
   escrow: {
     amount_total: number;
     amount_locked: number;
     amount_released: number;
     amount_refunded: number;
-    tx_hash?: string;
     status: EscrowStatus;
   };
 
@@ -61,7 +67,6 @@ export interface MicroClaim {
   proof?: string;
   proof_note?: string;
   status: MicroClaimStatus;
-  payout_tx?: string;
 }
 
 export interface MicroReputation {
@@ -274,7 +279,8 @@ export function updateReputation(
   return rep;
 }
 
-// ── Escrow helpers (simulated) ────────────────────────────────────────────────
+// ── Budget counters ───────────────────────────────────────────────────────────
+// Arithmetic over the JSON file. No transfer happens here or anywhere else.
 
 export const PLATFORM_FEE = 0.05;  // 5%
 

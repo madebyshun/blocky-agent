@@ -22,9 +22,8 @@ export async function runSubmitTask(
     process.stdout.write(`\n  🎉 Task submitted!\n\n`);
     process.stdout.write(`  Task:      ${task.title}\n`);
     process.stdout.write(`  Proof:     ${proof}\n`);
-    process.stdout.write(`  Payout:    ${doerPayout} USDC`);
-    process.stdout.write(` (after ${fee} USDC Blue Agent fee)\n`);
-    process.stdout.write(`\n  Waiting for poster confirmation...\n\n`);
+    process.stdout.write(`  Net owed:  ${doerPayout} (after ${fee} Blue Agent fee)\n`);
+    process.stdout.write(`\n  Recorded for this session only — no payment was sent.\n\n`);
   } catch (err) {
     printError(err instanceof Error ? err.message : String(err));
   }
