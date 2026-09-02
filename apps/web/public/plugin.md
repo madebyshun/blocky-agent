@@ -3,7 +3,7 @@
 > Source of truth: https://blueagent.dev/plugin.md
 > Hub UI: https://blueagent.dev/hub · Catalog (machine-readable): https://blueagent.dev/api/catalog
 
-30+ AI tools for Base builders and autonomous agents — audits, token signals,
+112 AI tools for Base builders and autonomous agents — audits, token signals,
 market-fit analysis, deep due diligence, launch readiness, ecosystem intel and
 more. Every tool is a paid HTTP endpoint that speaks **x402 v2** natively, so
 Base MCP can call any tool and settle the USDC payment without extra wiring.
@@ -119,8 +119,8 @@ wallet (after explicit approval) and retries the request with the
 base64-encoded x402 payload in `X-Payment`. The server then:
 
 1. **Verifies** the payment via the Coinbase CDP facilitator (no charge).
-2. **Runs** the tool — 3-agent consensus (Blue · Aeon · MiroShark) over
-   live Base data.
+2. **Runs** the tool over live Base data. Most tools run one Blue persona;
+   a few (deep-analysis, the launch simulators) weight several personas.
 3. **Settles** the USDC transfer on-chain via CDP (the user is charged
    only on success).
 
