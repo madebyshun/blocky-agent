@@ -35,10 +35,10 @@ export async function runPostTask(posterHandle: string | undefined) {
     }
     const category = categoryRaw as TaskCategory;
 
-    const rewardStr = await ask(rl, "  Reward (USDC amount, e.g. 5): ");
+    const rewardStr = await ask(rl, "  Reward (USD amount, e.g. 5): ");
     const reward = parseFloat(rewardStr);
     if (isNaN(reward) || reward <= 0) {
-      printError("Reward must be a positive number (USDC)");
+      printError("Reward must be a positive number");
       return;
     }
 
@@ -73,12 +73,13 @@ export async function runPostTask(posterHandle: string | undefined) {
     process.stdout.write(`  ID:        ${task.id}\n`);
     process.stdout.write(`  Title:     ${task.title}\n`);
     process.stdout.write(`  Category:  ${task.category}\n`);
-    process.stdout.write(`  Reward:    ${task.reward} USDC\n`);
+    process.stdout.write(`  Reward:    ${task.reward}\n`);
     process.stdout.write(`  Slots:     ${task.slots_taken}/${task.max_slots} open\n`);
     process.stdout.write(`  Deadline:  ${task.deadline}\n`);
     process.stdout.write(`  Proof:     ${task.proof_required}\n`);
-    process.stdout.write(`\n  Share with agents: blue tasks\n`);
-    process.stdout.write(`  Task ID:  ${task.id}\n`);
+    process.stdout.write(`\n  ⚠️  Draft only — this task is held in memory and is gone when\n`);
+    process.stdout.write(`  the command exits. It is not published anywhere, and no funds\n`);
+    process.stdout.write(`  are held. Use \`blue micro post\` for a task that persists.\n`);
     process.stdout.write(`${line}\n\n`);
   } finally {
     rl.close();

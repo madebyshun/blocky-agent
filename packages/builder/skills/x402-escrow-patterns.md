@@ -2,7 +2,9 @@
 
 Grounding for `blue build`, `blue audit`, `blue validate`, and `blue chat`.
 
-This file is the authoritative reference for escrow design, implementation, and correctness on the Blue Agent marketplace. All escrow logic — for microtasks and gig tasks — runs on Base (chain ID 8453) using native USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`). Platform fee: 5%. Storage: `~/.blue-agent/microtasks.json`, `~/.blue-agent/microclaims.json`.
+This file is a reference for designing escrow that settles in USDC on Base (chain ID 8453, `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`) — for the system **you** are building.
+
+⚠️ **It does not describe a payment rail that Blue Agent operates.** The bundled `blue micro` and `blue post-task` commands are local task trackers: they read and write `~/.blue-agent/*.json` and make no RPC call, no `transferWithAuthorization`, and no transfer of any kind. Every amount they print is bookkeeping. Do not cite this file as evidence that the CLI moves funds, and do not tell a user that it has.
 
 Use this file whenever you are writing, reviewing, or auditing escrow flows. Do not skip sections marked "Critical."
 
@@ -26,15 +28,14 @@ Use this file whenever you are writing, reviewing, or auditing escrow flows. Do 
 
 **Why this matters:**
 
-Blue Agent's marketplace handles real USDC on Base. A double-release bug sends two payments. A double-refund bug returns more than was locked. Missing idempotency keys cause duplicate payouts on network retry. These are not theoretical risks — they are the most common class of bugs in escrow systems. This document gives you the patterns to avoid them.
+Once a marketplace handles real USDC, a double-release bug sends two payments and a double-refund bug returns more than was locked. Missing idempotency keys cause duplicate payouts on network retry. These are not theoretical risks — they are the most common class of bugs in escrow systems. This document gives you the patterns to avoid them before you attach a rail.
 
 **Scope:**
 
-- Microtasks: $0.10–$20, multi-slot, USDC on Base, stored in `~/.blue-agent/microtasks.json`
-- Gig tasks: $20+, single-claim, USDC on Base, stored in `~/.blue-agent/tasks.json`
+- Microtasks: $0.10–$20, multi-slot, tracked in `~/.blue-agent/microtasks.json` — amounts only, no settlement
+- Gig tasks: $20+, single-claim, tracked in `~/.blue-agent/tasks.json` — amounts only, no settlement
 - Platform fee: 5% of gross reward on every release
-- Treasury: `Base` (Base)
-- USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (Base, 6 decimals)
+- USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (Base, 6 decimals) — the unit of account, and the token you would settle in if you build the payout step
 
 ---
 
@@ -42,14 +43,14 @@ Blue Agent's marketplace handles real USDC on Base. A double-release bug sends t
 
 ### 2.1 Offchain Simulated Escrow
 
-Blue Agent's current escrow is **not a smart contract**. It is a state-tracked offchain system:
+The escrow described here is **not a smart contract**. It is a state-tracked offchain system:
 
-- When a task is posted, the creator's USDC balance is checked and the amount is "held" by recording it in the task's `escrow` object
+- When a task is posted, the amount is "held" by recording it in the task's `escrow` object
 - The funds are tracked in JSON storage (`microtasks.json`, `tasks.json`)
 - Releases and refunds are recorded as state mutations in storage
-- The actual USDC transfer (payout) is a separate operation — simulated now, to be replaced by a real `transferWithAuthorization` call to Base
+- The actual USDC transfer (payout) is a **separate operation that the bundled CLI does not perform**. Recording a release is not paying anyone; you must build the `transferWithAuthorization` call yourself, or settle out of band.
 
-This distinction is critical for auditing: the escrow state can diverge from actual USDC balances if the payout call fails after the state is updated, or if the state is updated twice. See Section 9 (Failure Modes) for mitigation.
+This distinction is critical for auditing: escrow state can diverge from actual USDC balances if the payout call fails after the state is updated, or if the state is updated twice. With no payout call at all, the state *always* diverges — a released ledger row means "owed", never "paid". See Section 9 (Failure Modes) for mitigation.
 
 ### 2.2 Escrow Fields
 
@@ -78,13 +79,13 @@ Any code that touches escrow fields must maintain this invariant. Violating it i
 
 ### 2.3 The Role of x402 in Escrow
 
-x402 (`transferWithAuthorization`, EIP-3009) is used for the **payout step** — when a worker is paid. The creator signs a payment authorization off-chain; the system submits it on-chain at approval time. This means:
+x402 (`transferWithAuthorization`, EIP-3009) is the intended mechanism for the **payout step** — when a worker is paid. The creator signs a payment authorization off-chain; the system submits it on-chain at approval time. Wired up, this means:
 
 - The creator does NOT need gas to authorize payment
 - The platform submits the transfer (and pays gas on behalf of the flow)
 - The transfer is atomic: either it succeeds and the worker is paid, or it reverts and no USDC moves
 
-For the hold step (escrow creation), x402 can also be used: the creator signs a `transferWithAuthorization` to a platform treasury at task creation time, locking funds. In the current implementation, this is simulated; in production it becomes a real on-chain transfer.
+For the hold step (escrow creation), x402 can also be used: the creator signs a `transferWithAuthorization` to a platform treasury at task creation time, locking funds. Neither step is implemented in the bundled CLI — both are yours to build.
 
 ### 2.4 USDC Decimal Precision
 
@@ -173,9 +174,7 @@ No escrow mutation happens at accept time. The lock is implicit in the funded st
 
 ### 3.4 Release (approval)
 
-Triggered when the poster runs `blue approve` or `blue micro approve`.
-
-Steps:
+Steps for a rail that actually pays:
 1. Load task from storage
 2. **Check escrow.status === "funded"** — if not, abort (Critical guard)
 3. **Check idempotency key** — if this claim was already paid, abort (see Section 5)
@@ -189,6 +188,8 @@ Steps:
 11. Mark claim `status = "approved"`
 
 **Critical:** Steps 7 and 8 must be atomic or idempotent. If payout fails after state is written, the system must detect and retry — not re-attempt after re-reading stale state.
+
+**`blue micro approve` stops at step 7.** It runs steps 1 and 4–7, then marks the claim approved. Steps 8–10 do not exist in it: there is no treasury, no transfer, and no `payout_tx` to store. "Released" in the local ledger means *owed*.
 
 ### 3.5 Refund (rejection)
 
@@ -313,7 +314,7 @@ const updatedEscrow = {
 type MicroApproval = "auto" | "manual" | "hybrid";
 ```
 
-- **auto** — submission is auto-approved immediately on `blue micro submit`. No poster review. Payout fires instantly. Use for objective, verifiable proofs (e.g., tweet reply with specific text).
+- **auto** — submission is auto-approved immediately on `blue micro submit`. No poster review. The ledger records the amount as owed straight away; nothing is sent. Use for objective, verifiable proofs (e.g., tweet reply with specific text).
 - **manual** — poster must run `blue micro approve <taskId>`. Use for subjective proofs (screenshots, designs, written content).
 - **hybrid** — first N slots auto-approved, then manual review kicks in. Use when you want fast early fill but quality control at scale.
 
@@ -838,7 +839,7 @@ Platform fee goes to:
 Worker net goes to:
 - Worker's wallet address (resolved from `claimant_address`)
 
-In the current simulated implementation, both transfers are logged but not submitted on-chain. In production, both use `transferWithAuthorization` from the escrow treasury.
+In the bundled CLI neither transfer happens — the split is computed and written to JSON, and that is the end of it. In a system you wire up, both use `transferWithAuthorization` from the escrow treasury.
 
 ### 8.4 Why Fee Math Must Live in One Place
 
@@ -1034,11 +1035,13 @@ function validateEscrowHealth(): { valid: boolean; errors: string[] } {
 |---------------|-------------|---------------|
 | Worker accepts task | `blue micro accept <taskId>` | None — slots_filled++, no escrow mutation |
 | Worker submits proof | `blue micro submit <taskId>` | Claim moves to "submitted", no escrow mutation yet |
-| Poster approves | `blue micro approve <taskId>` | releaseSlot() called, payout fires |
+| Poster approves | `blue micro approve <taskId>` | releaseSlot() called — counters move, nothing is sent |
 | Poster rejects | `blue micro approve <taskId> --reject` | refundSlot() called, slot reopened |
 | Auto-approve fires | (internal, triggered by submit in auto mode) | releaseSlot() called immediately |
 | Deadline passes | (background job) | expireStaleSlot() for all open/accepted slots |
 | Task cancelled | (future: blue micro cancel) | refundSlot() for all unfilled slots |
+
+Every "escrow effect" in this table is a write to `~/.blue-agent/microtasks.json`. `releaseSlot()` and `refundSlot()` are arithmetic over that file — no payout step is wired behind either one.
 
 ### 10.2 Job State Machine (Worker Perspective)
 
@@ -1229,7 +1232,7 @@ async function expireGigTask(taskId: string): Promise<void> {
 | On-chain contract | Truly trustless, auditable | Gas cost, deployment overhead, upgrade complexity |
 | Hybrid (treasury hold) | Treasury holds USDC, no custom contract | Requires treasury to be trusted, semi-centralized |
 
-The current Blue Agent approach is **simulated with treasury semantics**: escrow is tracked in JSON, payouts go via `transferWithAuthorization` from treasury wallet. This is the right tradeoff for launch. Migrate to a proper escrow contract once task volume justifies the gas overhead.
+The bundled `blue micro` sits in the first row and does not leave it: escrow is tracked in JSON and there is no payout step at all — no treasury, no `transferWithAuthorization`, no wallet. Treat it as a ledger you settle by hand. Pick one of the other two rows before you promise anyone a payout.
 
 ### 11.2 Float Precision — Always Use Integer Math
 
@@ -1469,10 +1472,13 @@ upsertTask(task);
 
 ## 13. Blue Agent CLI Integration Patterns
 
-### 13.1 Command → Escrow Event Map
+### 13.1 Command → Ledger Event Map
+
+Every command below writes to `~/.blue-agent/*.json` and stops there. "Escrow" in the
+output is a set of counters over the budget you stated when posting.
 
 ```bash
-# POST MICROTASK — creates escrow, status becomes "funded"
+# POST MICROTASK — writes the task, sets amount_total = reward × slots
 blue micro post "record a 30s demo of your project" \
   --reward 1 \
   --slots 10 \
@@ -1482,51 +1488,41 @@ blue micro post "record a 30s demo of your project" \
   --approval manual
 
 # Expected output includes:
-#   Escrow: funded ($10.00 USDC)   ← amount_total = reward × slots
+#   Budget:    $10.00 tracked locally — no funds are held
 
-# POST GIG — creates escrow
-blue hire "audit my ERC-20 contract for reentrancy" --reward 200
-
-# Expected output includes:
-#   Escrow: $200.00 USDC held
-
-# ACCEPT — no escrow change, slot reservation only
+# ACCEPT — slot reservation only
 blue micro accept micro_abc123 @workerhandle
-blue accept task_abc123 @workerhandle
 
-# SUBMIT PROOF — no escrow change, triggers review
+# SUBMIT PROOF — moves the claim to "submitted", triggers review
 blue micro submit micro_abc123 @workerhandle https://x.com/user/status/...
-blue submit task_abc123 @workerhandle https://github.com/user/repo/pull/42
 
-# APPROVE MICROTASK — triggers releaseSlot()
+# APPROVE MICROTASK — records the amount as owed
 blue micro approve micro_abc123
 # Expected output includes:
-#   Gross:   $1.00
-#   Fee:     $0.05 (5%)
-#   Net:     $0.95
-#   Escrow:  $9.00 remaining (if 9 slots still open)
+#   Gross:    $1.00
+#   Fee:      $0.05 (5%)
+#   Net owed: $0.95
+#   Recorded in the local ledger. No payment was sent.
 
 # APPROVE WITH SPECIFIC CLAIM
 blue micro approve micro_abc123 --claim claim_def456
 
-# REJECT SUBMISSION — triggers refundSlot(), reopens slot
+# REJECT SUBMISSION — returns the slot's budget, reopens the slot
 blue micro approve micro_abc123 --reject
 # Expected output includes:
 #   Slot reopened — 9 slot(s) available
-#   Escrow: $1.00 refunded to creator
+#   Budget:   $1.00 returned to the task budget
 
-# APPROVE GIG — triggers full escrow release
-blue approve task_abc123
+# READ THE LEDGER
+blue micro list micro_abc123
 # Expected output includes:
-#   Gross:  $200.00
-#   Fee:    $10.00 (5%)
-#   Net:    $190.00
-#   Escrow: released
-
-# VALIDATE ESCROW HEALTH
-blue validate escrow
-# Runs validateEscrowHealth(), reports any invariant violations
+#   Budget:      $9.00 unclaimed / $0.95 approved (local ledger)
 ```
+
+There is no `blue hire`, no top-level `blue approve`, and no `blue validate escrow` —
+`blue validate` is a project health check, unrelated to any of this. The
+`blue post-task` / `blue tasks` / `blue accept` / `blue submit` group is a separate
+in-memory draft tool whose state does not survive the process.
 
 ### 13.2 Escrow Status in CLI Output
 
@@ -1576,7 +1572,7 @@ export async function runValidate(args: string[]): Promise<void> {
 }
 ```
 
-Usage:
+Usage, once someone builds it:
 
 ```bash
 blue validate escrow
@@ -1642,10 +1638,10 @@ MEDIUM:
 
 When a user asks about escrow in chat context:
 
-- Always explain the 5% fee: "The platform takes a 5% fee. On a $10 task, the worker gets $9.50."
-- Always clarify that escrow is simulated: "Funds are tracked offchain but payouts go on-chain via USDC on Base."
-- When user asks about a failed payout: ask for the `payout_tx` field from the claim record
-- When user asks how to check if a task paid out: `blue micro list` shows escrow status per task
+- Always explain the 5% fee: "The platform takes a 5% fee. On a $10 task, the worker is owed $9.50."
+- Always say plainly that nothing settles: "`blue micro` tracks who is owed what in a local JSON file. It does not send USDC, and it has no wallet. Paying the worker is your job."
+- Never tell a user a task "paid out", and never offer a transaction hash — there is none to offer.
+- When a user asks how to check what a task owes: `blue micro list <id>` shows the ledger totals per task.
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "@blueagent/builder",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "CLI for Blue Agent — blue idea / build / audit / ship / raise / new / init / doctor / chat / validate",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

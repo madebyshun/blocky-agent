@@ -1,13 +1,15 @@
 /**
- * blue micro — x402 microtask marketplace
+ * blue micro — local microtask tracker
  *
  * Subcommands:
  *   blue micro post     — create a microtask
  *   blue micro list     — browse open microtasks
  *   blue micro accept   — claim a slot
  *   blue micro submit   — submit proof
- *   blue micro approve  — approve/reject and release payment
- *   blue micro profile  — doer performance + earnings
+ *   blue micro approve  — approve/reject a submission
+ *   blue micro profile  — doer performance + approved value
+ *
+ * State lives in ~/.blue-agent/. No payment rail is attached.
  */
 
 export { runMicroPost } from "./post";
