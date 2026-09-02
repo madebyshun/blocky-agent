@@ -47,8 +47,7 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 blue-agent/
 ├── apps/
 │   ├── web/              # Next.js app + ALL live x402 tool handlers + compute
-│   ├── docs/             # Mintlify docs source (no package.json — not an npm workspace)
-│   └── worker/           # @blueagent/worker — referenced nowhere in-repo, status unverified
+│   └── docs/             # Mintlify docs source (no package.json — not an npm workspace)
 ├── packages/
 │   ├── core/             # Shared types, schemas, pricing, tool-input specs
 │   ├── bankr/            # LEGACY — Bankr LLM client (Bankr 403-banned 2026-07-20)

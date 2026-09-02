@@ -1,0 +1,41 @@
+name: CI — types + invariant tests
+
+# Runs on EVERY pull request, with no path filter. That is the point: before this
+# workflow the only PR gate was rh-rwa-semantic-smoke.yml, which fires solely on
+# `rh-*` paths, so a change anywhere else merged with nothing run against it.
+#
+# `next build` is deliberately NOT run here — the Vercel preview already builds
+# every PR, and duplicating it would add ~4min for a second copy of the same answer.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install workspace deps
+        run: npm ci
+
+      - name: Type check
+        working-directory: apps/web
+        run: npx tsc --noEmit
+
+      - name: Invariant tests
+        working-directory: apps/web
+        run: npm test

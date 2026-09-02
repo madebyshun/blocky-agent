@@ -65,18 +65,10 @@ const COMMAND_GROUPS = [
       { cmd: "blue submit",    desc: "Submit completed work for a task — triggers review and payment." },
     ],
   },
-  {
-    group: "MICROTASKS",
-    desc: "On-demand micro work",
-    commands: [
-      { cmd: "blue micro post",    desc: "Post a microtask — quick jobs with instant USDC payout." },
-      { cmd: "blue micro list",    desc: "Browse available microtasks filtered by skill, price, or deadline." },
-      { cmd: "blue micro accept",  desc: "Accept a microtask and lock in your slot." },
-      { cmd: "blue micro submit",  desc: "Submit your microtask output for review." },
-      { cmd: "blue micro approve", desc: "Approve a microtask submission and release payment to the worker." },
-      { cmd: "blue micro profile", desc: "View your microtask history, earnings, and reputation score." },
-    ],
-  },
+  // The MICROTASKS group (6 `blue micro *` commands) was removed 2026-09-02 with
+  // the marketplace itself. It advertised "instant USDC payout" and "release
+  // payment to the worker" for an escrow layer that was pure arithmetic over a
+  // local JSON file — no RPC, no web3, no chain call anywhere. No USDC ever moved.
   {
     group: "TERMINAL UI",
     desc: "Interactive TUI shell",
@@ -86,6 +78,8 @@ const COMMAND_GROUPS = [
   },
 ];
 
+const COMMAND_COUNT = COMMAND_GROUPS.reduce((n, g) => n + g.commands.length, 0);
+
 export default function FeaturesSection() {
   return (
     <section id="commands" className="max-w-5xl mx-auto px-6 mb-24 scroll-mt-24">
@@ -94,7 +88,7 @@ export default function FeaturesSection() {
           <span className="font-mono text-xs text-[#4FC3F7] tracking-widest">ALL COMMANDS</span>
         </div>
         <h2 className="font-mono font-bold text-3xl sm:text-4xl text-white mb-3">
-          31 commands. One CLI.
+          {COMMAND_COUNT} commands. One CLI.
         </h2>
         <p className="text-slate-400 max-w-xl mx-auto">
           Install <code className="font-mono text-[#4FC3F7] text-sm">@blueagent/cli</code> and run any command from your terminal.
