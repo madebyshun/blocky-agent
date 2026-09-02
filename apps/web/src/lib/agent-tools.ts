@@ -1387,30 +1387,25 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
     x402Url: `${X402_BASE}/narrative-scan`,
     x402Body: () => ({}),
   },
-  // ⚠ PAUSED, AND FREE BECAUSE IT IS PAUSED. This sold for $0.05 while its
+  // ⚠ RETIRED, AND FREE BECAUSE IT IS RETIRED. This sold for $0.05 while its
   // input queue had been structurally unwritable since 2026-06-27: the only
-  // writer of `feed:picks:pending` is `base-token-scan`, which runs solely in
-  // the HOURLY feed cron — and that route both short-circuits on FEED_PAUSED
-  // and has had no scheduler at all since its GH Actions workflow was deleted
-  // 2026-07-17. Both KV keys aged out (pending 7d, history 30d) in July. So a
-  // paying caller could only ever receive an empty record. Charging for a
-  // measurement the system cannot take is the same dishonesty as #143/#144/
-  // #145, with money attached.
+  // writer of `feed:picks:pending` was `base-token-scan` running inside the
+  // HOURLY feed cron, which short-circuited on a pause flag and had had no
+  // scheduler since its GH Actions workflow was deleted 2026-07-17. Both KV
+  // keys aged out (pending 7d, history 30d) in July. So a paying caller could
+  // only ever receive an empty record. Charging for a measurement the system
+  // cannot take is the same dishonesty as #143/#144/#145, with money attached.
   //
-  // Kept listed rather than deleted so the tool declares its own state instead
-  // of silently vanishing, and so catalog count == handler count still holds.
+  // 2026-09-02: Blue Feed was retired outright — cron, pages and _shared.ts
+  // deleted — so "paused" became a false promise of a resume. The entry stays
+  // listed rather than deleted so the tool declares its own death instead of
+  // silently vanishing, and so catalog count == handler count still holds.
   // `priceUnits === 0` is an explicitly supported path in
   // api/x402/[tool]/route.ts (see the `!priceUnits` warnings there).
-  //
-  // ⚠ THIS TEXT IS STATIC and cannot read FEED_PAUSED — agent-tools.ts is
-  // imported by client components, so pulling in the cron module would drag
-  // @/lib/kv into the browser bundle. Resuming the feed therefore means
-  // updating this entry BY HAND. (The handler's own `reason` string does read
-  // the flag, so that half self-corrects.)
   {
     id: "picks-check",
-    name: "Signal Track Record (paused)",
-    description: "PAUSED — Blue Feed stopped writing the signal queue on 2026-06-27, so this returns an EMPTY record, not a measured one. Free while paused. When running it measures base-token-scan filter accuracy 22h after detection; WIN/LOSS = filter direction correct, not trading profit. Not financial advice.",
+    name: "Signal Track Record (retired)",
+    description: "RETIRED — Blue Feed stopped writing the signal queue on 2026-06-27 and was retired on 2026-09-02, so this returns an EMPTY record, not a measured one, and will not resume. Free. When it ran it measured base-token-scan filter accuracy 22h after detection; WIN/LOSS = filter direction correct, not trading profit. Not financial advice.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "signal",
     inputs: [],

@@ -508,7 +508,6 @@ export default function OverviewView({ onSwitchTab }: Props) {
                   // Was "Blue Bank" → /bank, but /bank 301s to /chat (Bank archived in
                   // the Agent-OS relaunch). Point at the Wallet pillar instead.
                   { label: "Wallet",    icon: "👛", href: "/wallet", color: "#818CF8" },
-                  // Blue Feed hidden while rebuilding — re-add when /feed relaunches.
                 ].map(a => (
                   <Link key={a.label} href={a.href}
                     className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] hover:border-[#2a2a3e] hover:bg-white/[0.02] transition-all">

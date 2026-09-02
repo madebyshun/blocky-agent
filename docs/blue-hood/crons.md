@@ -14,8 +14,12 @@ respect GT rate-limits (see `poller.ts`).
 | `/api/cron/blue-hood/poll` | `*/2 * * * *` | every 2 min | one M5 poll cycle over the watchlist (24 tokens, 3s stagger ≈ 72s wall time), runs rule engine + grader, writes `bh:snapshot:latest` + `bh:arrow:*`. Auth: `Authorization: Bearer $CRON_SECRET`. |
 | `/api/cron/blue-hood/sparkline-refresh` | `*/15 * * * *` | every 15 min | refreshes `bh:spark:{TICKER}` (24 tokens, 3s stagger, TTL 20 min). Runs OUTSIDE the poll hot path so the 72s cycle doesn't grow. Auth: `Authorization: Bearer $CRON_SECRET`. |
 | `/api/cron/blue-hood/brief-worker` | `* * * * *` | every 1 min | drains `bh:brief:queue` (async-brief refactor). Pops up to `BH_BRIEF_BATCH` (default 8) arrow ids, fetches A4 brief per arrow, attaches, writes chat card, runs Web Push fan-out. Poll cycle no longer blocks on A4. `BH_BRIEF_BATCH` clamped [1, 20]. Auth: `Authorization: Bearer $CRON_SECRET`. |
-| `/api/cron/feed/daily` | `0 9 * * *` | daily 09:00 UTC | Blue Feed daily digest (unrelated to Blue Hood; here for the whole-app view). |
-| `/api/cron/research-loop` | `0 6 * * *` | daily 06:00 UTC | Blue Feed autonomous research (unrelated to Blue Hood; here for the whole-app view). |
+| `/api/cron/research-loop` | `0 6 * * *` | daily 06:00 UTC | Autonomous builder-research loop; writes Aeon KV via `setAeonOutput`. Unrelated to Blue Hood; here for the whole-app view. |
+
+The `/api/cron/feed/daily` row was removed on 2026-09-02 when Blue Feed was
+retired and its cron deleted from `vercel.json`. `research-loop` was labelled
+"Blue Feed autonomous research" here, which was never true — it feeds Aeon KV
+and is untouched by the retirement.
 
 ## Automatic (GitHub Actions)
 

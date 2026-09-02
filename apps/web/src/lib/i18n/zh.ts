@@ -124,7 +124,6 @@ export const zh: Dict = {
     chat: "聊天",
     hub: "中心",
     wallet: "钱包",
-    feed: "动态",
     bank: "银行",
     launches: "发行",
     hood: "Hood",
@@ -264,11 +263,6 @@ export const zh: Dict = {
     no_tokens: "尚未发行任何代币",
     unclaimed: "未领取",
     search: "搜索代币...",
-  },
-  feed: {
-    title: "蓝色动态",
-    loading: "加载中...",
-    empty: "暂无动态",
   },
   balance_card: {
     title: "钱包余额",
