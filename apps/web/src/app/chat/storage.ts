@@ -105,6 +105,19 @@ export function saveCrons(crons: CronTask[], addr?: string): void {
   localStorage.setItem(cronsKey(addr), JSON.stringify(crons));
 }
 
+/**
+ * ⚠️ Interval-only, on purpose — `cron.time` is NOT read here.
+ *
+ * There is no background scheduler. `isDue` is evaluated in exactly ONE place:
+ * a mount-only `useEffect` in ChatContext ("Auto-run due crons on mount"). The
+ * 60s `setInterval` elsewhere in that file drives the credit-refresh countdown
+ * and never touches crons. So a task fires when the user next OPENS Blue Chat
+ * and the interval has already elapsed — never at a wall-clock time, and never
+ * while the tab is closed.
+ *
+ * Keep every label this feeds honest about that. A real server-side cron is the
+ * fix; copy is not. See the CronPanel header comment.
+ */
 export function isDue(cron: CronTask): boolean {
   if (!cron.active) return false;
   const interval = CRON_INTERVALS[cron.schedule];
@@ -112,17 +125,22 @@ export function isDue(cron: CronTask): boolean {
   return Date.now() - cron.lastRun >= interval;
 }
 
+/**
+ * Says "earliest" / "on next open" — never a firing time, because the app has
+ * no way to keep that promise (see `isDue`). The previous wording ("Due now",
+ * "in 5h 23m") read as a schedule guarantee.
+ */
 export function nextRunLabel(cron: CronTask): string {
   const interval = CRON_INTERVALS[cron.schedule];
   const last = cron.lastRun ?? 0;
   const next = last + interval;
   const diff = next - Date.now();
-  if (diff <= 0) return "Due now";
+  if (diff <= 0) return "runs on next open";
   const h = Math.floor(diff / 3_600_000);
   const m = Math.floor((diff % 3_600_000) / 60_000);
-  if (h >= 24) return `in ${Math.floor(h / 24)}d`;
-  if (h > 0)   return `in ${h}h ${m}m`;
-  return `in ${m}m`;
+  if (h >= 24) return `earliest in ${Math.floor(h / 24)}d`;
+  if (h > 0)   return `earliest in ${h}h ${m}m`;
+  return `earliest in ${m}m`;
 }
 
 // ── Persona ───────────────────────────────────────────────────────────────────
