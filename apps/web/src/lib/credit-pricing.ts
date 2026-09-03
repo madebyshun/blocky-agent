@@ -42,6 +42,9 @@ export const CHAT_BASE_COST: Record<string, number> = {
   deepseek: 10,
   gemini:   20,
   kimi:     20,
+  // V1 preset ids that carry their own cost (others fall back to pro=50).
+  flash:    10,   // google-gemini-2-5-flash · Virtuals
+  search:   60,   // grok-4-3 · Venice · live web search
   // Venice — standard
   "venice-deepseek":     10,
   "venice-deepseek-pro": 30,
