@@ -27,7 +27,7 @@ import {
 } from "@/lib/credits";
 import {
   buildMemoryContext, updateMemoryAfterChat,
-  addChunk, setChunkEmbedding, searchChunks,
+  addChunk, recentChunks,
 } from "@/lib/memory";
 
 // ── Context type ──────────────────────────────────────────────────────────────
@@ -589,24 +589,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const persona = getPersona(personaId);
     const personaPrompt = personaId === "custom" ? customPersonaPrompt : persona.systemPrompt;
 
-    // Semantic memory: embed query and find relevant past conversations
-    // This runs quickly using local cosine similarity against stored embeddings
-    let queryEmbedding: number[] | null = null;
-    try {
-      const embedRes = await fetch("/api/memory/embed", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: userMsg.slice(0, 512) }),
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (embedRes.ok) {
-        const { embedding } = await embedRes.json() as { embedding?: number[] };
-        queryEmbedding = embedding ?? null;
-      }
-    } catch { /* fall back to recency-based memory */ }
-
-    const semanticChunks = searchChunks(queryEmbedding, walletAddr, 3);
-    const memoryContext = buildMemoryContext(walletAddr, semanticChunks.length > 0 ? semanticChunks : undefined);
+    // Conversation memory: the 3 most recent chunks, read from localStorage.
+    //
+    // This used to `await` a POST to /api/memory/embed (5s timeout) to get a
+    // query embedding before ranking chunks by cosine similarity. That route
+    // was retired (2026-09-03): it had been returning 402 "Insufficient USD or
+    // Diem balance" from Venice on every message, so `queryEmbedding` was
+    // always null and the ranking always fell through to this same recency
+    // slice. The await was therefore pure latency on the critical path to the
+    // user's first token — it changed the result on zero requests.
+    const relatedChunks = recentChunks(walletAddr, 3);
+    const memoryContext = buildMemoryContext(walletAddr, relatedChunks.length > 0 ? relatedChunks : undefined);
     const modelId = VENICE_MODEL_IDS[chatTier];
     // Installed-skill prompt + integration toggles → extend the system prompt.
     const skillsPrompt = enabledSkillsPrompt();
@@ -872,17 +865,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (last?.role === "assistant" && last.content) {
           updateMemoryAfterChat(walletAddr, userMsg, last.content);
           const chunkText = `Q: ${userMsg.slice(0, 200)}\nA: ${last.content.slice(0, 400)}`;
-          const chunkId = addChunk(chunkText, walletAddr);
-          fetch("/api/memory/embed", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: chunkText.slice(0, 1024) }),
-            signal: AbortSignal.timeout(10_000),
-          }).then(r => r.ok ? r.json() : null)
-            .then((d: { embedding?: number[] } | null) => {
-              if (d?.embedding) setChunkEmbedding(chunkId, d.embedding, walletAddr);
-            })
-            .catch(() => {});
+          // Stored for recency recall. A background POST to /api/memory/embed
+          // (10s timeout) used to follow this and write the chunk's embedding;
+          // that route was retired (2026-09-03) after 402ing on every call, so
+          // the embedding it wrote was never non-null in production anyway.
+          addChunk(chunkText, walletAddr);
         }
 
         const updated = prev.map(t => t.id === tid ? { ...t, messages: finalMsgs, updatedAt: Date.now() } : t);

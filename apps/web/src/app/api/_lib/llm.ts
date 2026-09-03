@@ -18,9 +18,21 @@
 //     directly import it keep compiling. Those calls are DEAD in prod today
 //     (Bankr account 403 banned) — see the migration task that follows.
 //
-// Env: VIRTUALS_API_KEY (required), VIRTUALS_MODEL (optional). VENICE_INFERENCE_KEY
-// is no longer read anywhere in this file; a follow-up sweeps it out of the
-// rest of the codebase (chat/route.ts, memory/embed, crypto-rpc, status).
+// Env: VIRTUALS_API_KEY (required), VIRTUALS_MODEL (optional).
+//
+// VENICE_INFERENCE_KEY is not read in this file — but it is NOT a dead env var,
+// contra the older note here (and contra CLAUDE.md). Measured 2026-09-03, two
+// live readers remain and the key IS set in Vercel:
+//   • api/crypto-rpc/route.ts — backs the `hub_crypto_rpc` chat tool. Verified
+//     working: a prod POST reached Venice and came back with a *semantic* error
+//     ("Unsupported RPC network: base"), not 401/402. Auth is fine here.
+//   • api/chat/route.ts — the `provider === "venice"` branch. Unreachable from
+//     the web client (chatTier only ever holds a VIRTUALS_PRESETS_V1 id, none of
+//     which start with "venice"), but still reachable by a direct API call,
+//     because the route trusts the client-supplied `provider` field.
+// The third reader, api/memory/embed, was retired 2026-09-03 — it had been
+// answering 402 "Insufficient USD or Diem balance" on every chat message.
+// So: do NOT unset this key during env cleanup.
 
 import { getAeonOutput, formatAeonForLLM } from "./aeon-kv";
 
