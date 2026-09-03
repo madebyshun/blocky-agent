@@ -790,11 +790,19 @@ Default to "base" for Base-related queries.`,
   {
     name: "hub_b20_analyze",
     description: "Explain B20 token standard, variants (Asset/Stablecoin), roles, policies, and compliance features. Use when user asks about B20 architecture, how B20 works, B20 roles/policies, or wants to understand the Beryl upgrade.",
+    // ⚠️ This schema is BOUND to the handler contract in
+    // `api/x402/_handlers/b20-analyze.ts` — it reads `{ action, address, context }`
+    // and NOTHING else. The previous schema declared `{ question, mode }`, neither
+    // of which the handler reads: `mode` never reached `body.action`, so every call
+    // would have silently fallen back to `action = "guide"` and answered a generic
+    // guide while discarding what the user actually asked. Keep `action`'s enum
+    // identical to `type Action` in that file (5 values — there is no "full").
     input_schema: {
       type: "object",
       properties: {
-        question: { type: "string", description: "The B20 question or topic to explain" },
-        mode: { type: "string", enum: ["guide", "roles", "policy", "analyze", "compare", "full"], description: "Optional: specific aspect to focus on" },
+        action:  { type: "string", enum: ["guide", "roles", "policy", "analyze", "compare"], description: "Which aspect to explain. guide = overview + deployment steps; roles = the 7 RBAC roles; policy = PolicyRegistry (ALLOWLIST/BLOCKLIST); analyze = read a specific token/address; compare = Asset vs Stablecoin. Defaults to guide." },
+        address: { type: "string", description: "Base address to analyse. Only meaningful with action=analyze." },
+        context: { type: "string", description: "The user's own question or extra context, passed through to the model. Use this to carry what the user actually asked." },
       },
     },
   },
@@ -980,6 +988,11 @@ const TOOL_ENDPOINT: Record<string, string> = {
   blue_simulate:        "blue-simulate",
   blue_stream:          "blue-stream",
   hub_b20_inspect:      "b20-inspect",
+  // Was advertised in HUB_TOOLS (and the system prompt explicitly instructs the
+  // model to use it) but had no entry here, so every call fell through to the
+  // `[Unknown tool: …]` string below — handing the model garbage and leaving it
+  // to answer a factual B20 question from nothing. The handler existed and works.
+  hub_b20_analyze:      "b20-analyze",
 };
 
 // ─── Internal Hub tool caller ─────────────────────────────────────────────────
@@ -1624,6 +1637,11 @@ async function callHubTool(
   const FREE_DIRECT: Record<string, string> = {
     hub_crypto_rpc:  "/api/crypto-rpc",
     hub_token_price: "/api/token-price",
+    // There is no `builder-score` x402 handler — the id is absent from both
+    // AGENT_TOOLS and HANDLERS, so `/api/x402/builder-score` answers 501
+    // TOOL_UNAVAILABLE (measured in prod 2026-09-03). The live implementation
+    // is the top-level route, which serves the same `{ handle }` input.
+    hub_builder_score: "/api/builder-score",
   };
   const apiPath = FREE_DIRECT[toolName]
     ? `${BASE_URL}${FREE_DIRECT[toolName]}`
