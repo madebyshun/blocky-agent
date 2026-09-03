@@ -18,6 +18,8 @@ import { extractArtifacts } from "./artifacts";
 import { enabledSkillsPrompt, loadIntegrations, runSkillCommand } from "./integrations";
 import { enabledConnectorsForChat } from "./connectors";
 import { getPersona } from "./personas";
+import { useWorkspaceSync, WORKSPACE_HYDRATED_EVENT, type UseWorkspaceSync } from "./workspace-sync";
+import { useSiweSignIn } from "./use-siwe-signin";
 import {
   creditCost, deductCredits, addCredits,
   getNextRefresh, refreshCreditsIfNeeded, getDailyCr,
@@ -107,6 +109,11 @@ interface ChatContextValue {
   setCmdMenu: (v: boolean) => void;
   cmdFilter:  string;
   setCmdFilter: (v: string) => void;
+
+  // Cross-device sync (opt-in, wallet-gated). Lives here rather than in the
+  // Settings panel so hydration runs whenever Blue Chat is open, not only while
+  // the settings modal happens to be mounted.
+  sync: UseWorkspaceSync;
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
@@ -357,6 +364,34 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const setCrons = useCallback((cs: CronTask[]) => {
     setCreonsState(cs);
     saveCrons(cs, walletAddr);
+  }, [walletAddr]);
+
+  // ── Cross-device sync ─────────────────────────────────────────────────────
+  const siweSignIn = useSiweSignIn();
+  const signIn     = useCallback(
+    () => siweSignIn(walletAddr as string),
+    [siweSignIn, walletAddr],
+  );
+  const sync = useWorkspaceSync(walletAddr, signIn);
+
+  // Re-read localStorage after sync has merged a remote copy in underneath us.
+  //
+  // Deliberately does NOT touch `activeTaskId`. Hydration can land while the
+  // user is mid-conversation, and snapping them to a blank New Chat would look
+  // exactly like the data loss this feature exists to prevent. Empty drafts are
+  // kept at the head so the New Chat slot survives too.
+  useEffect(() => {
+    function onHydrated() {
+      const sorted = loadTasks(walletAddr)
+        .filter(t => t.messages.length > 0)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      setTasksState(prev => [...prev.filter(t => t.messages.length === 0), ...sorted]);
+      setCreonsState(loadCrons(walletAddr));
+      setPersonaIdState(loadPersona(walletAddr));
+      setCustomPersonaPromptState(loadCustomPrompt(walletAddr));
+    }
+    window.addEventListener(WORKSPACE_HYDRATED_EVENT, onHydrated);
+    return () => window.removeEventListener(WORKSPACE_HYDRATED_EVENT, onHydrated);
   }, [walletAddr]);
 
   const addCron = useCallback((c: Omit<CronTask, "id">) => {
@@ -892,6 +927,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     walletReady, onWalletChange, setCredits, walletRefresh, triggerWalletRefresh,
     webSearch, setWebSearch, pendingFiles, setPendingFiles,
     cmdMenu, setCmdMenu, cmdFilter, setCmdFilter,
+    sync,
   };
 
   return <ChatCtx.Provider value={value}>{children}</ChatCtx.Provider>;

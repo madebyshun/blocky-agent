@@ -22,6 +22,7 @@ const SCRIPTS_DIR = path.dirname(path.resolve(process.argv[1]));
 /** Suites excluded from `npm test`, each with the reason it cannot run hermetically. */
 const NEEDS_NETWORK: Record<string, string> = {
   "pledge-ledger-test.ts": "reads real pledges over RPC + indexer; run via `npm run test:pledge`",
+  "workspace-sync-test.ts": "drives the HTTP surface end-to-end; needs `npm run dev` on :3000, run via `npm run test:workspace-sync`",
 };
 
 /** A hung suite must name itself rather than blow the whole job's timeout. */

@@ -22,6 +22,7 @@
     "test:series-api": "tsx scripts/series-endpoint-test.ts",
     "test:pledge": "tsx scripts/pledge-ledger-test.ts",
     "test:sales": "tsx scripts/sale-batches-test.ts",
+    "test:workspace-sync": "tsx scripts/workspace-sync-test.ts",
     "pledge:verify": "tsx scripts/pledge-verify.ts",
     "rwa:verify": "tsx scripts/rwa-verify.ts",
     "rwa:generate": "tsx scripts/rwa-generate.ts",
