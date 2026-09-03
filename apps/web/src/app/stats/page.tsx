@@ -16,7 +16,7 @@ export const revalidate = 60;
 export const metadata = {
   title: "Traction — Blue Agent",
   description:
-    "Live, on-chain-verifiable traction for Blue Agent on Base: tokens launched, BLUE staked, and product surface.",
+    "Live, on-chain-verifiable traction for Blue Agent on Base: tokens launched, tool runs, active wallets, and product surface.",
 };
 
 export default async function StatsPage() {

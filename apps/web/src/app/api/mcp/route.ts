@@ -787,7 +787,10 @@ async function callHubTool(toolId: string, rawArgs: Record<string, unknown>): Pr
     if (code === "INSUFFICIENT_CREDITS") {
       throw new HubToolError(
         "INSUFFICIENT_CREDITS",
-        `Insufficient credits to call "${toolId}". Top up at https://blueagent.dev/chat or stake more BLUE for a bigger daily accrual.`,
+        // No "stake more BLUE for a bigger daily accrual" — staking has not fed
+        // credits for a long time and the surface selling it is retired. Every
+        // connected wallet gets the same daily bucket; more than that is bought.
+        `Insufficient credits to call "${toolId}". Your daily allowance refreshes every 24h — top up in USDC at https://blueagent.dev/chat to keep going now.`,
       );
     }
     if (!hasInternalKey()) {

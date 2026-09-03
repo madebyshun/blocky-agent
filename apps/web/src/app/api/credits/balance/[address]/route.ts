@@ -3,14 +3,17 @@
  *
  * Returns the wallet's claimable credit balance:
  *
- *   accrued  — on-chain staking accrual (BlueMarketStaking.totalCreditsAccrued)
  *   topup    — off-chain credits added via USDC top-up
  *   spent    — off-chain credits debited via chat / tool runs
- *   balance  — max(0, accrued + topup - spent)
+ *   balance  — max(0, topup - spent)
  *   recent   — last 10 ledger events
  *
- * Public read; cached for 15s so the dashboard doesn't hammer KV + RPC on
- * every render.
+ * `accrued` is still present in the payload but is permanently 0: it used to be
+ * an on-chain read of BlueMarketStaking.totalCreditsAccrued, and staking stopped
+ * feeding credits well before the stake surface was retired. It is kept as a
+ * zero rather than dropped so existing clients don't break on a missing field.
+ *
+ * Public read; cached for 15s so the dashboard doesn't hammer KV on every render.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { isAddress } from "viem";

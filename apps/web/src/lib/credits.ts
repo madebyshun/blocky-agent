@@ -14,7 +14,10 @@
 
 export const BLUE_TOKEN     = "0xf895783b2931c919955e18b5e3343e7c7c456ba3";
 export const BASE_RPC       = "https://mainnet.base.org";
-export const STAKING_ADDRESS = "0x69e539684EE48F71eCDAd58618d8e8a2423E279d";
+// `STAKING_ADDRESS` was exported here for a stake→credits reader that this file
+// stopped honouring long ago. It is gone with the stake surface; the one place
+// that still needs the address literal (the /app/rewards tombstone) carries it
+// locally, so no live code path implies staking feeds credits.
 
 const REFRESH_MS = 24 * 60 * 60 * 1000; // 24 hours
 

@@ -11,7 +11,6 @@
  *
  * Sources:
  *   - Launches:  KV `bluechat:launches` (real on-chain deploys via Bankr).
- *   - Staking:   BlueMarketStaking.totalStaked() on Base mainnet (public read).
  *   - Usage:     KV `usage:<toolId>` counters — lifetime paid tool runs (aggregate
  *                sum; no wallet is ever part of the key).
  *   - Users:     KV `claim:count` — # wallets that claimed the free-credit airdrop
@@ -27,10 +26,15 @@
  * counter. Per-row history is capped at 50 events, so the credit/message sums are
  * exact at current scale and a conservative floor thereafter. Every value degrades
  * to 0 on a source failure; none is ever invented.
+ *
+ * REMOVED: a `staking` block that read BlueMarketStaking.totalStaked() on Base and
+ * published it as a headline metric. The contract is untouched and still live, but
+ * the app no longer sells a stake, so quoting its TVL as traction advertised a
+ * retired product. The field is gone from the response, not zeroed — an absent
+ * number is honest, a zero would be a false measurement.
  */
 
 import { getLaunches } from "./launches";
-import { getTotalStaked, STAKING_ADDRESS_VERIFIED, formatBlue } from "./staking";
 import { AGENT_TOOLS } from "./agent-tools";
 import { kvGet } from "./kv";
 import { getLedgerActivity } from "./credit-ledger";
@@ -52,12 +56,6 @@ export interface PublicStats {
     peakPerDay:     number;
     byDay:          { date: string; count: number }[]; // chronological, launch days only
     recent:         PublicLaunchLite[];                 // newest first, creator stripped
-  };
-  staking: {
-    totalStakedBlue: string;  // human, e.g. "822.3M" — null-source ⟹ "—"
-    contract:        string;
-    explorerUrl:     string;
-    verified:        boolean; // true when the on-chain read succeeded
   };
   product: {
     tools:    number;
@@ -138,16 +136,6 @@ export async function buildPublicStats(): Promise<PublicStats> {
     /* degrade to zeros */
   }
 
-  // ── Staking (on-chain) ──
-  let totalStakedBlue = "—";
-  let verified = false;
-  try {
-    const wei = await getTotalStaked();
-    if (wei !== null) { totalStakedBlue = formatBlue(wei); verified = true; }
-  } catch {
-    /* leave "—" */
-  }
-
   // ── Product breadth (static) ──
   const tools = Array.isArray(AGENT_TOOLS) ? AGENT_TOOLS.length : 0;
 
@@ -196,12 +184,6 @@ export async function buildPublicStats(): Promise<PublicStats> {
   return {
     updatedAt: Date.now(),
     launches: { total, uniqueCreators, peakPerDay, byDay, recent },
-    staking: {
-      totalStakedBlue,
-      contract:    STAKING_ADDRESS_VERIFIED,
-      explorerUrl: `https://basescan.org/address/${STAKING_ADDRESS_VERIFIED}`,
-      verified,
-    },
     product: { tools, commands: CORE_COMMANDS },
     usage: { totalRuns, revenueEst: `$${revenueEstNum.toFixed(2)}`, topTools },
     users: { claims, claimCap: CLAIM_CAP, total: totalUsers },
