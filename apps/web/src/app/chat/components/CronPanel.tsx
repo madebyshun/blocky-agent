@@ -112,7 +112,15 @@ export default function CronPanel() {
             </button>
           </div>
         </div>
-        <p className="font-mono text-[10px] text-slate-700">Run prompts on a schedule. Auto-executes in chat.</p>
+        {/* ⚠️ Honest by necessity. This is NOT a scheduler: `isDue` is checked
+            only in a mount-only effect in ChatContext, so nothing runs while
+            this tab is closed. The old copy ("Auto-executes in chat") promised
+            background execution the app cannot perform — close the tab before
+            09:00 and 09:00 simply never happens. Do not restore that wording
+            until a server-side cron actually exists. */}
+        <p className="font-mono text-[10px] text-slate-700">
+          Runs when you open Blue Chat and the interval has passed — not a background scheduler.
+        </p>
       </div>
 
       {/* ── Add form ── */}
@@ -143,7 +151,16 @@ export default function CronPanel() {
                 </select>
               </div>
               <div>
-                <label className="font-mono text-[10px] text-slate-500 block mb-1.5">TIME</label>
+                {/* ⚠️ `time` is stored on the task but NOT read by `isDue` or
+                    `nextRunLabel` — both key off the interval and `lastRun`
+                    only. So this picker does not currently decide anything.
+                    It is kept (not deleted) because the server-side cron will
+                    honour it, and dropping the field would lose the preference
+                    every existing saved task already carries. Until then the
+                    label must say so — an unlabelled time picker is a promise. */}
+                <label className="font-mono text-[10px] text-slate-500 block mb-1.5">
+                  TIME <span className="text-slate-700">· saved, not yet used</span>
+                </label>
                 <input
                   type="time"
                   value={form.time}
@@ -152,6 +169,12 @@ export default function CronPanel() {
                 />
               </div>
             </div>
+
+            <p className="font-mono text-[10px] text-slate-700 leading-relaxed">
+              Tasks run on open, not on a clock — the time above is stored for when
+              scheduling moves server-side. Until then a daily task runs the first
+              time you open Blue Chat after 24h have passed.
+            </p>
 
             {/* Prompt */}
             <div>
@@ -205,7 +228,7 @@ export default function CronPanel() {
               ⏱
             </div>
             <p className="font-mono text-sm text-slate-500 mb-0.5">No scheduled tasks</p>
-            <p className="font-mono text-[10px] text-slate-700">Create one above to run prompts automatically</p>
+            <p className="font-mono text-[10px] text-slate-700">Create one above — it runs next time you open Blue Chat</p>
           </div>
         )}
 
@@ -245,12 +268,16 @@ export default function CronPanel() {
 
                 {/* ── Schedule chips ── */}
                 <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                  {/* `· {cron.time}` used to sit in this chip, which read as
+                      "fires daily at 09:00" — a time nothing in the codebase
+                      honours. Schedule only; nextRunLabel carries the honest
+                      "earliest …" / "runs on next open" wording. */}
                   <span className="font-mono text-[10px] px-2 py-1 rounded-md bg-[#11111A] text-slate-300 capitalize">
-                    🗓 {cron.schedule} · {cron.time}
+                    🗓 {cron.schedule}
                   </span>
                   {cron.active && (
                     <span className="font-mono text-[10px] px-2 py-1 rounded-md" style={{ background: "#34D39912", color: "#34D399" }}>
-                      next {nextRunLabel(cron)}
+                      {nextRunLabel(cron)}
                     </span>
                   )}
                 </div>
@@ -334,7 +361,9 @@ function ResultModal({ cron, onClose }: { cron: CronTask; onClose: () => void })
           <div className="min-w-0">
             <p className="font-mono text-[11px] text-[#4FC3F7] tracking-widest truncate">// {cron.label.toUpperCase()}</p>
             <p className="font-mono text-[9px] text-slate-600 mt-0.5">
-              {cron.schedule} · {cron.time}
+              {/* `cron.time` dropped here too — see the schedule chip. `ran` is
+                  a real observed timestamp (stamped by runCron), so it stays. */}
+              {cron.schedule}
               {cron.lastRun && ` · ran ${new Date(cron.lastRun).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`}
             </p>
           </div>
