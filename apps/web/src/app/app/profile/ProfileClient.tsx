@@ -4,14 +4,14 @@
  * /app/profile — Identity-focused page.
  *
  * Composes three layers:
- *   1. On-chain identity: address, tier, BLUE balance, builder score
+ *   1. On-chain identity: address, BLUE balance, builder score
  *      (wagmi reads + Bankr Builder Score API, same as Dashboard)
  *   2. Off-chain profile: displayName + bio + avatar URL + social links
  *      (loaded from /api/profile/[address], edits gated by EIP-191 signature)
  *   3. Edit flow: toggle into edit mode → form inputs → wallet.signMessage()
  *      authorises a PUT to /api/profile/[address]
  *
- * The dashboard handles wallet snapshot + stake + alerts; this page is for
+ * The dashboard handles the wallet snapshot and activity; this page is for
  * "who I am" — and is meant to anchor the future X / Farcaster OAuth link
  * flows (added in a follow-up commit once Twitter dev creds land).
  */
@@ -27,39 +27,18 @@ import { useBasename } from "@/lib/useBasename"; // resolves wallet → shun.bas
 
 // ─── Contracts ───────────────────────────────────────────────────────────────
 
-const STAKING_ADDRESS = (
-  process.env.NEXT_PUBLIC_STAKING_CONTRACT ??
-  "0x69e539684EE48F71eCDAd58618d8e8a2423E279d"
-) as `0x${string}`;
 const BLUE_ADDRESS = "0xf895783b2931c919955e18b5e3343e7c7c456ba3" as `0x${string}`;
-
-const STAKING_ABI = [
-  { name: "stakeInfo", type: "function", stateMutability: "view",
-    inputs: [{ name: "user", type: "address" }],
-    outputs: [
-      { name: "amount", type: "uint256" }, { name: "stakedAt", type: "uint256" },
-      { name: "dailyCredits", type: "uint256" }, { name: "cooldown", type: "uint256" },
-      { name: "pendingUsdc", type: "uint256" },
-    ] },
-] as const;
 
 const ERC20_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view",
     inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
 ] as const;
 
-const TIERS = [
-  { name: "None",    min: 0,          color: "#475569" },
-  { name: "Starter", min: 500_000,    color: "#4FC3F7" },
-  { name: "Pro",     min: 2_000_000,  color: "#A78BFA" },
-  { name: "Max",     min: 10_000_000, color: "#F59E0B" },
-];
-function getTier(n: number) {
-  if (n >= 10_000_000) return TIERS[3];
-  if (n >= 2_000_000)  return TIERS[2];
-  if (n >= 500_000)    return TIERS[1];
-  return TIERS[0];
-}
+// The stakeInfo read and the Starter/Pro/Max table were removed with the
+// stake surface. The page accent used to be the tier colour; it is now fixed,
+// because a colour derived from a stake size implied an entitlement that
+// `lib/credits.ts` no longer grants.
+const ACCENT = "#4FC3F7";
 function fmtBlue(wei: bigint) {
   const n = Number(formatUnits(wei, 18));
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
@@ -152,16 +131,11 @@ export default function ProfilePage() {
 
   const { data: contractData } = useReadContracts({
     contracts: [
-      { address: STAKING_ADDRESS, abi: STAKING_ABI, functionName: "stakeInfo", args: address ? [address] : undefined },
-      { address: BLUE_ADDRESS,    abi: ERC20_ABI,   functionName: "balanceOf", args: address ? [address] : undefined },
+      { address: BLUE_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: address ? [address] : undefined },
     ],
     query: { enabled: !!address },
   });
-  const stakeInfo   = contractData?.[0]?.result as [bigint, bigint, bigint, bigint, bigint] | undefined;
-  const blueBalance = contractData?.[1]?.result as bigint | undefined;
-  const stakedWei   = stakeInfo?.[0] ?? 0n;
-  const staked      = Number(formatUnits(stakedWei, 18));
-  const tier        = getTier(staked);
+  const blueBalance = contractData?.[0]?.result as bigint | undefined;
 
   // ── Builder score ────────────────────────────────────────────────────────
 
@@ -268,14 +242,14 @@ export default function ProfilePage() {
       <div className="flex-1 overflow-y-auto relative">
         <div className="pointer-events-none overflow-hidden absolute inset-x-0 top-0 h-[260px]">
           <div className="absolute inset-0"
-            style={{ background: `radial-gradient(ellipse 80% 50% at 50% -10%, ${tier.color}10 0%, transparent 70%)` }} />
+            style={{ background: `radial-gradient(ellipse 80% 50% at 50% -10%, ${ACCENT}10 0%, transparent 70%)` }} />
         </div>
 
         <div className="relative px-4 sm:px-6 py-6 max-w-2xl mx-auto">
 
           {!isConnected ? (
             <AppConnectPrompt
-              accent={tier.color}
+              accent={ACCENT}
               title="Connect to view your profile"
               subtitle="Identity, bio, social links — all attached to your wallet."
               icon={
@@ -287,7 +261,7 @@ export default function ProfilePage() {
           ) : (
             <>
               {/* ── Identity strip ────────────────────────────────────────── */}
-              <AppCard className="p-6 mb-4" accent={tier.color}>
+              <AppCard className="p-6 mb-4" accent={ACCENT}>
                 <div className="flex items-start gap-4 mb-5">
                   {avatarSrc ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -296,7 +270,7 @@ export default function ProfilePage() {
                       onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                   ) : (
                     <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-bold shrink-0"
-                      style={{ background: `${tier.color}18`, border: `1px solid ${tier.color}30`, color: tier.color }}>
+                      style={{ background: `${ACCENT}18`, border: `1px solid ${ACCENT}30`, color: ACCENT }}>
                       {avatarInitial}
                     </div>
                   )}
@@ -307,10 +281,6 @@ export default function ProfilePage() {
                       {address?.slice(0, 10)}…{address?.slice(-6)}
                     </p>
                     <div className="flex items-center gap-2 mt-2 flex-wrap">
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
-                        style={{ color: tier.color, background: `${tier.color}18`, border: `1px solid ${tier.color}30` }}>
-                        {tier.name === "None" ? "No Tier" : tier.name}
-                      </span>
                       <span className="text-[10px] text-slate-600">
                         {blueBalance !== undefined ? fmtBlue(blueBalance) : "—"} BLUE
                       </span>

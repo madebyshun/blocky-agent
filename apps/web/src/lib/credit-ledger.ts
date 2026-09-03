@@ -1,11 +1,14 @@
 /**
  * Credit ledger — Phase 1 source of truth for spendable credits.
  *
- * Two-source model:
+ * Two-source model, now effectively one:
  *
- *   - On-chain ACCRUED  (BlueMarketStaking.totalCreditsAccrued)
- *       Read-only counter that increases with stake size × time.
- *       Never deducted on-chain.
+ *   - On-chain ACCRUED  — DEAD. Once read BlueMarketStaking.totalCreditsAccrued,
+ *       a counter that grew with stake size × time. The token-free rebuild
+ *       stopped honouring it and `readAccruedCredits()` has returned a hard 0
+ *       ever since; the stake surface that advertised it is now retired too.
+ *       The term is still threaded through the arithmetic below so the payload
+ *       shape stays stable for existing clients — it just always adds zero.
  *
  *   - Off-chain SPENT   (this file, backed by Upstash KV)
  *       Increases when the user runs a chat message or tool call.

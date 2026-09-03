@@ -46,12 +46,19 @@ const APP_SEGMENTS = new Set([
   "usage",        // credit balance + ledger activity (getBalance)
   "plans",        // pricing comparison → TopUpModal (CREDIT_PACKS)
   "robinhood-router",
-  // `profile`, `rewards`, `terminal` removed 2026-07 (0.1 route
-  // consolidation) — all three now 301 to their canonical home via
-  // culledRedirect() below (profile → dashboard, rewards → dashboard?tab=stake,
-  // terminal → chat), so they intentionally do NOT rewrite into /app/* here.
-  // Their src/app/**/{profile,rewards,terminal} page stubs are kept as dead
-  // code (smaller diff, mirrors the /bank precedent).
+  // `rewards` is BACK in this set as of the stake retirement. It was culled in
+  // 2026-07 and 301'd to `dashboard?tab=stake`; that tab no longer exists, so the
+  // redirect pointed at a query param the dashboard silently ignores. It now
+  // rewrites to /app/rewards — a static tombstone naming the BlueMarketStaking
+  // contract — because the one visitor this URL still has is someone holding a
+  // position who needs the address, and "hide the page" must not mean "strand
+  // the holder". See the main-host /rewards 301 near the bottom of this file.
+  "rewards",
+  // `profile` and `terminal` removed 2026-07 (0.1 route consolidation) — both
+  // 301 to their canonical home via culledRedirect() below (profile →
+  // dashboard, terminal → chat), so they intentionally do NOT rewrite into
+  // /app/* here. Their src/app/**/{profile,terminal} page stubs are kept as
+  // dead code (smaller diff, mirrors the /bank precedent).
   //
   // `wallet` SHIPPED (#291) — the "Wallet support" pillar, live (noindex) at
   // /app/wallet. It reuses the fully-built BlueBank dashboard (real wagmi
@@ -117,12 +124,19 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
  *   /micro[/…]    → app Hub                (micro-apps were the ancestors of Hub tools)
  *   /terminal[/…] → Blue Chat              (the browser terminal folded into /chat)
  *   /profile[/…]  → app dashboard          (self-management folded into the dashboard)
- *   /rewards[/…]  → dashboard?tab=stake    (staking is the dashboard's Stake tab)
  *
- * profile + rewards used to 307 from a page-level redirect() (temporary, and a
- * 2-hop chain through /app/dashboard). Handling them here makes them a single
- * permanent 301 straight to the app host — the "every cull = 301, collapse the
- * double-hop" contract of 0.1.
+ * profile used to 307 from a page-level redirect() (temporary, and a 2-hop chain
+ * through /app/dashboard). Handling it here makes it a single permanent 301
+ * straight to the app host — the "every cull = 301, collapse the double-hop"
+ * contract of 0.1.
+ *
+ * /rewards LEFT this list with the stake retirement. It used to 301 to
+ * `dashboard?tab=stake`, and when the Stake tab was deleted that target became a
+ * lie — the dashboard drops the unknown param and shows the overview, so a
+ * staker following an old link got no signal that anything had changed. It is an
+ * APP_SEGMENT again now, rewriting to the /app/rewards tombstone. It must NOT be
+ * handled here: culledRedirect runs on every host, so a /rewards branch pointing
+ * at the app host would redirect the app host to itself, forever.
  */
 function culledRedirect(pathname: string): NextResponse | null {
   if (pathname === "/code" || pathname.startsWith("/code/")) {
@@ -136,9 +150,6 @@ function culledRedirect(pathname: string): NextResponse | null {
   }
   if (pathname === "/profile" || pathname.startsWith("/profile/")) {
     return NextResponse.redirect(`https://${APP_HOST}/dashboard`, { status: 301 });
-  }
-  if (pathname === "/rewards" || pathname.startsWith("/rewards/")) {
-    return NextResponse.redirect(`https://${APP_HOST}/dashboard?tab=stake`, { status: 301 });
   }
   return null;
 }
@@ -427,6 +438,17 @@ export function middleware(request: NextRequest) {
   if (pathname === "/hood" || pathname.startsWith("/hood/")) {
     return NextResponse.redirect(
       `https://${APP_HOST}${pathname}${request.nextUrl.search}`,
+      { status: 301 },
+    );
+  }
+
+  // /rewards → the app host, where APP_SEGMENTS rewrites it into the
+  // /app/rewards stake tombstone. Same shape as /hub and /hood above. This
+  // replaces the old culledRedirect hop to `dashboard?tab=stake`, whose target
+  // stopped existing when the Stake tab was retired.
+  if (pathname === "/rewards" || pathname.startsWith("/rewards/")) {
+    return NextResponse.redirect(
+      `https://${APP_HOST}/rewards`,
       { status: 301 },
     );
   }

@@ -235,7 +235,10 @@ async function handle(
                 code:   "INSUFFICIENT_CREDITS",
                 tool,
                 needed: cost,
-                hint:   "Top up credits or stake more BLUE for a bigger daily accrual.",
+                // Was "…or stake more BLUE for a bigger daily accrual." Staking
+                // stopped feeding credits before the stake surface was retired;
+                // the daily bucket is flat per wallet and extra is bought in USDC.
+                hint:   "Top up credits in USDC, or wait for the 24h daily allowance to refresh.",
               },
               { status: 402 },
             );
