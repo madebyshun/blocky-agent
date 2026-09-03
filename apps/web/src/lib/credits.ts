@@ -73,6 +73,7 @@ export const BASE_COST: Record<string, number> = {
   // stable ids saved to localStorage; server resolves them → Virtuals
   // model ids via `VIRTUALS_PRESETS` in `_lib/llm.ts`. Cost per preset
   // matches the "chốt preset" chart shared in chat.
+  free:                    0,  // qwen3-5-9b · Venice · chat-only · no credits
   balanced:               50,  // anthropic-claude-sonnet-5 · 200k ctx
   deep:                  200,  // anthropic-claude-opus-4-8 · 200k ctx · heavy reason
   private:                30,  // e2ee-deepseek-v4-flash · E2EE, no logs
@@ -104,6 +105,10 @@ export const BASE_COST: Record<string, number> = {
 
 export function creditCost(chatTier: string, holderTier: TierInfo): number {
   const base = BASE_COST[chatTier] ?? BASE_COST.pro;
+  // A genuinely free tier (base 0) must resolve to 0, not the Math.max(1,…)
+  // floor below — that floor exists so a discounted PAID tier never rounds to
+  // free, which is the opposite concern. Only an explicit 0 base is free.
+  if (base <= 0) return 0;
   return Math.max(1, Math.round(base * (1 - holderTier.discount)));
 }
 
