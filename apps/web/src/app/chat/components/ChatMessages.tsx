@@ -371,7 +371,7 @@ const MODEL_LABELS: Record<string, string> = {
   fast: NON_VENICE_LABEL, pro: NON_VENICE_LABEL, max: NON_VENICE_LABEL,
   deepseek: NON_VENICE_LABEL,
   // V1 presets with a distinct runtime model (others resolve to the default).
-  flash: "Gemini 2.5 Flash · Virtuals", search: "Grok 4.3 · Venice",
+  free: "Qwen 3.5 9B · Free", flash: "Gemini 2.5 Flash · Virtuals", search: "Grok 4.3 · Venice",
   "venice-deepseek": "DeepSeek V4 Flash", "venice-deepseek-pro": "DeepSeek V4 Pro",
   "venice-kimi": "Kimi K2", "venice-claude": "Claude Opus 4",
   "venice-grok": "Grok 4", "venice-qwen": "Qwen3 235B",
@@ -382,7 +382,7 @@ const MODEL_LABELS: Record<string, string> = {
 };
 
 const MODEL_COLORS: Record<string, string> = {
-  fast: "#64748b", pro: "#4FC3F7", max: "#A78BFA",
+  free: "#34D399", fast: "#64748b", pro: "#4FC3F7", max: "#A78BFA",
   flash: "#FBBF24", search: "#22D3EE",
   "venice-deepseek": "#34D399", "venice-deepseek-pro": "#2DD4BF",
   "venice-kimi": "#818CF8", "venice-claude": "#F472B6",

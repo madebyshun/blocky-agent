@@ -358,7 +358,7 @@ export default function ChatInput() {
                 const prevOptional = virtualsPresets[idx - 1]?.optional === true;
                 const showDividerBefore = p.optional && !prevOptional;
                 const iconMap: Record<VirtualsPresetV1["id"], string> = {
-                  fast: "⚡", balanced: "💬", deep: "🔬", private: "🔒", grok: "🧠",
+                  free: "🎁", fast: "⚡", balanced: "💬", deep: "🔬", private: "🔒", grok: "🧠",
                   flash: "🚀", search: "🌐",
                 };
                 return (
@@ -397,7 +397,9 @@ export default function ChatInput() {
                         <p className="font-mono text-[10px] text-slate-500 leading-snug truncate">{p.desc}</p>
                       </div>
                       <span className="font-mono text-[10px] shrink-0" style={{ color: accent }}>
-                        {p.credits}<span className="text-slate-700"> cr</span>
+                        {p.credits === 0
+                          ? <span className="font-bold">Free</span>
+                          : <>{p.credits}<span className="text-slate-700"> cr</span></>}
                       </span>
                     </button>
                   </div>

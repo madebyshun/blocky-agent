@@ -9,7 +9,7 @@
 // hardcode a model id anywhere else — this file and the server-side spec are
 // the two authoritative sites.
 export interface VirtualsPresetV1 {
-  id: "fast" | "balanced" | "deep" | "private" | "grok" | "flash" | "search";
+  id: "free" | "fast" | "balanced" | "deep" | "private" | "grok" | "flash" | "search";
   /** Which upstream this dispatches to — see the server spec for why. */
   provider: "virtuals" | "venice";
   model: string;
@@ -22,9 +22,23 @@ export interface VirtualsPresetV1 {
   optional?: boolean;
   /** Venice-only live web search. Never set on a `virtuals` preset (#143). */
   webSearch?: boolean;
+  /**
+   * Chat-only: never register Hub tools for this preset. Set on the free tier
+   * so a 0-credit message can't invoke a paid tool. The route enforces this
+   * server-side from its OWN preset copy — this field only mirrors that fact
+   * for the picker; a client can't turn tools on by flipping it.
+   */
+  noTools?: boolean;
 }
 export const VIRTUALS_PRESETS_V1: VirtualsPresetV1[] = [
   { id: "fast",     provider: "virtuals", model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_000_000, credits: 10 },
+  // Free tier — no credits, chat-only. Placed AFTER `fast` (not at index 0) on
+  // purpose: the picker's `?? presets[0]` fallback must keep landing on a PAID
+  // default for the legacy `pro` chatTier, because highlighting "Free/0 cr"
+  // while the server actually runs sonnet@50cr is exactly the honesty defect
+  // #143 is about. The model is a Venice one, so it depends on the provider
+  // routing (PR feat/chat-venice-provider) to be reachable at all.
+  { id: "free",     provider: "venice",   model: "qwen3-5-9b",                 label: "Free",     desc: "Qwen 3.5 9B · no credits · chat only",   cost: "●",   contextTokens: 256_000,   credits: 0,   noTools: true },
   { id: "balanced", provider: "virtuals", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 200_000,   credits: 50 },
   { id: "deep",     provider: "virtuals", model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 200_000,   credits: 200 },
   { id: "private",  provider: "virtuals", model: "e2ee-deepseek-v4-flash",     label: "Private",  desc: "E2EE · no logs · DeepSeek V4",            cost: "●",   contextTokens: 1_000_000, credits: 30,  privacy: true },

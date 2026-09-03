@@ -173,6 +173,7 @@ const VENICE_DISPLAY: Record<string, string> = {
   "deepseek-v4-pro":                    "DeepSeek V4 Pro (Venice)",
   "kimi-k2-6":                          "Kimi K2 (Venice)",
   "claude-opus-4-7":                    "Claude Opus 4 (Venice)",
+  "qwen3-5-9b":                         "Qwen 3.5 9B (Venice) · Free",
 };
 
 // Pre-merge task #4 — label bug. Bankr was banned 2026-07-18; Blue
@@ -205,6 +206,7 @@ const VENICE_MAX_TOKENS: Record<string, number> = {
   "claude-opus-4-7":                   4096,
   "claude-fable-5":                    4096,
   "grok-4-3":                          4096,
+  "qwen3-5-9b":                        4096,
   "qwen3-235b-a22b-instruct-2507":     8192,
   "mistral-small-3-2-24b-instruct":    4096,
   "venice-uncensored-1-2":             4096,
@@ -2398,7 +2400,24 @@ export async function POST(req: NextRequest) {
 
   // /credits and /help are knowledge-only — no live tools needed.
   const knowledgeOnly = !!cmdPrompt;
-  const modelLabel = getModelLabel(tier, modelId, provider);
+
+  // ── Free tier: server-pin provider + model (never trust the client here) ──
+  // The free preset is the only 0-credit tier and is chat-only. Because it
+  // costs nothing, a crafted request `{ tier: "free", provider: "venice",
+  // modelId: "grok-4-3" }` would otherwise run a PAID model at zero cost. Bind
+  // provider / model / web-search / tool-gate to the SERVER preset keyed on
+  // `tier === "free"`, mirroring how `debitChatCredits(address, tier)` already
+  // pins the PRICE to the tier. A client may SELECT the free tier but cannot
+  // smuggle a different model under it. Every Venice-branch read below uses the
+  // `eff*` values, never the raw client `provider` / `modelId` / `webSearch`.
+  const freePreset   = VIRTUALS_PRESETS.find((p) => p.id === "free");
+  const isFreeTier   = tier === "free" && !!freePreset;
+  const effProvider  = isFreeTier ? freePreset!.provider : provider;
+  const effModelId   = isFreeTier ? freePreset!.model    : modelId;
+  const effWebSearch = isFreeTier ? false                : webSearch;
+  const freeNoTools  = isFreeTier && freePreset!.noTools === true;
+
+  const modelLabel = getModelLabel(tier, effModelId, effProvider);
   const modelLine = `## Active model\nYou are currently running as: **${modelLabel}**. When asked "what model are you?", "which AI are you?", "what are you running on?", or similar — answer precisely with this model name.`;
 
   // ── Language preference (EN / 中文) ───────────────────────────────────────
@@ -2426,7 +2445,7 @@ export async function POST(req: NextRequest) {
   // If either branch's rule changes, this must change with it or the prompt
   // starts lying again — that coupling is the whole point of the comment.
   const hasWebSearch =
-    provider === "venice" && !!modelId && (webSearch || modelId.startsWith("grok-"));
+    effProvider === "venice" && !!effModelId && (effWebSearch || effModelId.startsWith("grok-"));
 
   const system = [
     // SOUL.md goes FIRST — it's the identity layer (who Blue Agent is, how it
@@ -2460,18 +2479,21 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Venice provider ───────────────────────────────────────────────────────
-  if (provider === "venice" && modelId) {
+  // Gated on the server-pinned `eff*` values, not the raw client fields, so the
+  // free tier lands here on its pinned model even if a crafted request set a
+  // different `provider` / `modelId`.
+  if (effProvider === "venice" && effModelId) {
     const apiKey = process.env.VENICE_INFERENCE_KEY ?? process.env.VENICE_API_KEY;
     if (!apiKey) {
       return textToSSE("Please select a model: Fast · Chat · Deep Think · DeepSeek");
     }
 
     const veniceMessages = injectAttachments(cleanMessages, attachments, "venice");
-    const maxTok     = veniceMaxTokens(modelId);
+    const maxTok     = veniceMaxTokens(effModelId);
     // Grok 4 always uses web search (internet-native model)
-    const autoSearch = webSearch || modelId.startsWith("grok-");
+    const autoSearch = effWebSearch || effModelId.startsWith("grok-");
     // E2EE models skip tool use — smaller models, tool calling unreliable
-    const isE2EE     = modelId.startsWith("e2ee-");
+    const isE2EE     = effModelId.startsWith("e2ee-");
 
     const openaiMsgs = [
       { role: "system", content: system },
@@ -2481,7 +2503,9 @@ export async function POST(req: NextRequest) {
       })),
     ];
 
-    if (!isE2EE && !knowledgeOnly) {
+    // `freeNoTools` drops the tool phase for the chat-only free tier: a
+    // 0-credit message must never be able to invoke a paid Hub tool.
+    if (!isE2EE && !knowledgeOnly && !freeNoTools) {
       // Phase 1: detect tool intent (skipped for pure-knowledge commands).
       // Force check_wallet when the user clearly asks for their wallet balance
       // and a wallet is connected, so the wallet card reliably renders.
@@ -2494,15 +2518,15 @@ export async function POST(req: NextRequest) {
       // echo back what we're forcing. Synthesize the tool_call locally instead.
       const toolCalls = forceTool
         ? [forcedToolCall(forceTool)]
-        : (await callVenicePhase1(apiKey, modelId, openaiMsgs, maxTok, autoSearch))
+        : (await callVenicePhase1(apiKey, effModelId, openaiMsgs, maxTok, autoSearch))
             ?.choices?.[0]?.message?.tool_calls;
       if (toolCalls?.length) {
-        return veniceToolStream(apiKey, modelId, openaiMsgs, toolCalls, maxTok, autoSearch, address);
+        return veniceToolStream(apiKey, effModelId, openaiMsgs, toolCalls, maxTok, autoSearch, address);
       }
     }
 
     // No tools (or E2EE): direct stream
-    return callVeniceStream(apiKey, modelId, openaiMsgs, maxTok, autoSearch);
+    return callVeniceStream(apiKey, effModelId, openaiMsgs, maxTok, autoSearch);
   }
 
 
