@@ -1,5 +1,10 @@
 // Blue Chat v2 — localStorage helpers
 import type { ChatTask, CronTask, CronSchedule } from "./types";
+// The SAME schedule math the server tick runs on. Imported rather than
+// reimplemented so the "next run" this file renders is the instant the cron
+// actually fires — a scheduler whose display disagrees with its execution is
+// worse than none, because the user has no way to notice it is wrong.
+import { nextFireAt, formatNextRun } from "@/lib/cron-schedule";
 
 // ── Key helpers ────────────────────────────────────────────────────────────────
 
@@ -87,6 +92,11 @@ const CRON_INTERVALS: Record<CronSchedule, number> = {
   weekly: 7  * 24 * 60 * 60 * 1000,
 };
 
+/** A task the user has switched on for server-side firing. */
+export function isBackground(cron: CronTask): boolean {
+  return cron.background === true;
+}
+
 export function loadCrons(addr?: string): CronTask[] {
   if (typeof window === "undefined") return [];
   try {
@@ -102,31 +112,48 @@ export function saveCrons(crons: CronTask[], addr?: string): void {
 }
 
 /**
- * ⚠️ Interval-only, on purpose — `cron.time` is NOT read here.
+ * Should the BROWSER run this task on open?
  *
- * There is no background scheduler. `isDue` is evaluated in exactly ONE place:
- * a mount-only `useEffect` in ChatContext ("Auto-run due crons on mount"). The
- * 60s `setInterval` elsewhere in that file drives the credit-refresh countdown
- * and never touches crons. So a task fires when the user next OPENS Blue Chat
- * and the interval has already elapsed — never at a wall-clock time, and never
- * while the tab is closed.
+ * Two different questions live behind one name, and keeping them apart is the
+ * point of the `background` branch:
  *
- * Keep every label this feeds honest about that. A real server-side cron is the
- * fix; copy is not. See the CronPanel header comment.
+ *   • background OFF → interval-only, exactly as before. `cron.time` is not read,
+ *     because nothing in the browser can promise a wall-clock instant while the
+ *     tab is closed. The task fires when the user next opens Blue Chat and the
+ *     interval has elapsed.
+ *   • background ON  → the SERVER owns this task. The browser must never fire it,
+ *     even if it looks overdue: the tick and the tab would both debit credits for
+ *     the same window, and the user would be charged twice for one run.
+ *
+ * The wall-clock answer for a background task is `cron.nextAt`, computed once by
+ * `lib/cron-schedule.ts` and used by both ends — see `nextRunLabel`.
  */
 export function isDue(cron: CronTask): boolean {
   if (!cron.active) return false;
+  if (isBackground(cron)) return false;   // the server owns it — see above
   const interval = CRON_INTERVALS[cron.schedule];
   if (!cron.lastRun) return true;
   return Date.now() - cron.lastRun >= interval;
 }
 
 /**
- * Says "earliest" / "on next open" — never a firing time, because the app has
- * no way to keep that promise (see `isDue`). The previous wording ("Due now",
- * "in 5h 23m") read as a schedule guarantee.
+ * What the panel shows under a task.
+ *
+ * A background task gets a real time ("in 3h 12m", "tomorrow 09:00"), rendered
+ * from the SAME `nextFireAt` the cron executes on, so the label cannot promise a
+ * moment the scheduler will not honour. A foreground task keeps the deliberately
+ * hedged wording from #169 — "earliest", "on next open" — because the app still
+ * cannot keep a wall-clock promise for it.
  */
 export function nextRunLabel(cron: CronTask): string {
+  if (isBackground(cron)) {
+    if (!cron.active) return cron.pausedReason ? "paused" : "off";
+    const at = typeof cron.nextAt === "number" && Number.isFinite(cron.nextAt)
+      ? cron.nextAt
+      : nextFireAt({ schedule: cron.schedule, time: cron.time, tz: cron.tz, lastRun: cron.lastRun });
+    return formatNextRun(at);
+  }
+
   const interval = CRON_INTERVALS[cron.schedule];
   const last = cron.lastRun ?? 0;
   const next = last + interval;

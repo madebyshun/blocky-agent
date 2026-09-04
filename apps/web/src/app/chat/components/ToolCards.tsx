@@ -2399,18 +2399,23 @@ function B20ManageCard({ result }: { result: B20ManageResult }) {
 
 interface YieldMoveResult { action?: string; amount?: number | string; network?: string }
 
-export function MoveToYieldCard({ result, account }: { result: YieldMoveResult; account?: `0x${string}` }) {
+export function MoveToYieldCard({ result, account, withdrawOnly = false }: { result: YieldMoveResult; account?: `0x${string}`; withdrawOnly?: boolean }) {
   // `account` is the connected wallet, passed in by the host (chat dispatcher
   // reads it from useChat; the /app/bank dashboard reads it from useAccount) so
   // the card works both inside and outside the chat. wagmi hooks below still
   // drive the actual signing.
+  //
+  // `withdrawOnly` locks the card to the exit: the Supply/Withdraw toggle is not
+  // rendered and `action` can never leave "withdraw". The Wallet passes it
+  // because new yield deposits are deferred to phase 2 while existing positions
+  // must stay withdrawable; chat's prepare_yield tool leaves it off.
   const address = account;
   const isConnected = !!account;
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
   const [venue,   setVenue]   = useState<VenueId>("aave");
-  const [action,  setAction]  = useState<"supply" | "withdraw">(result.action === "withdraw" ? "withdraw" : "supply");
+  const [action,  setAction]  = useState<"supply" | "withdraw">(withdrawOnly || result.action === "withdraw" ? "withdraw" : "supply");
   const [network, setNetwork] = useState<YieldNetwork>(result.network === "base" ? "base" : "baseSepolia");
   const [amount,  setAmount]  = useState<string>(
     result.amount != null && (typeof result.amount === "number" || typeof result.amount === "string") ? String(result.amount) : "");
@@ -2565,7 +2570,9 @@ export function MoveToYieldCard({ result, account }: { result: YieldMoveResult; 
 
   return (
     <div className="mt-2 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3.5">
-      <div className="font-mono text-[10px] text-slate-500 tracking-widest font-bold mb-3">MOVE TO YIELD · BASE</div>
+      <div className="font-mono text-[10px] text-slate-500 tracking-widest font-bold mb-3">
+        {withdrawOnly ? "WITHDRAW FROM YIELD · BASE" : "MOVE TO YIELD · BASE"}
+      </div>
 
       {/* Network risk banner */}
       <div className="rounded-lg px-2.5 py-1.5 mb-3 font-mono text-[10px] leading-relaxed"
@@ -2638,21 +2645,24 @@ export function MoveToYieldCard({ result, account }: { result: YieldMoveResult; 
         </div>
       )}
 
-      {/* Supply / Withdraw toggle */}
-      <div className="flex gap-1 mb-3">
-        {(["supply", "withdraw"] as const).map(a => {
-          const active = action === a;
-          return (
-            <button key={a} onClick={() => setAction(a)}
-              className="flex-1 font-mono text-[11px] py-1.5 rounded-md transition-colors"
-              style={active
-                ? { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
-                : { color: "#64748b", border: "1px solid #1A1A2E" }}>
-              {a === "supply" ? "Supply" : "Withdraw"}
-            </button>
-          );
-        })}
-      </div>
+      {/* Supply / Withdraw toggle — omitted entirely when the host locked the
+          card to withdraw, so there is no control that re-opens supply. */}
+      {!withdrawOnly && (
+        <div className="flex gap-1 mb-3">
+          {(["supply", "withdraw"] as const).map(a => {
+            const active = action === a;
+            return (
+              <button key={a} onClick={() => setAction(a)}
+                className="flex-1 font-mono text-[11px] py-1.5 rounded-md transition-colors"
+                style={active
+                  ? { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
+                  : { color: "#64748b", border: "1px solid #1A1A2E" }}>
+                {a === "supply" ? "Supply" : "Withdraw"}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Network */}
       <label className="block mb-3">

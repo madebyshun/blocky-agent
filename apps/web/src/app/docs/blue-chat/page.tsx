@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { DocHeader, H2, P, CardGrid, Card, PrevNext, Callout } from "../_ui";
 import { CHAT_MODELS, CHAT_CAPABILITIES } from "../_data";
-import { AGENT_SKILLS, SKILL_PROVIDERS, PROVIDER_COLORS, PROVIDER_ICONS } from "@/app/chat/agent-skills";
+import { AGENT_SKILLS, SKILL_PROVIDERS, PROVIDER_ICONS } from "@/app/chat/agent-skills";
 import { HUB_SKILLS, SKILL_CATEGORIES, CATEGORY_ICONS } from "@/app/chat/hub-skills";
 import { TOOL_COUNT } from "@/lib/agent-tools";
 
@@ -75,12 +75,13 @@ export default function BlueChatDoc() {
       </P>
       {SKILL_PROVIDERS.map((provider) => {
         const skills = AGENT_SKILLS.filter((s) => s.provider === provider);
-        const color = PROVIDER_COLORS[provider];
         return (
           <div key={provider} className="my-5">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-base">{PROVIDER_ICONS[provider]}</span>
-              <span className="font-mono text-[11px] tracking-widest uppercase" style={{ color }}>{provider}</span>
+              {/* No per-provider hue: the header prints the provider's NAME, so a
+                  colour keyed to that same name carries no information. */}
+              <span className="font-mono text-[11px] tracking-widest uppercase text-slate-400">{provider}</span>
               <span className="font-mono text-[10px] text-slate-600">{skills.length} skills</span>
             </div>
             <div className="rounded-2xl border border-[#1A1A2E] bg-[#0d0d12] overflow-hidden divide-y divide-[#1A1A2E]">

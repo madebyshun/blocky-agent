@@ -93,11 +93,39 @@ export interface CronTask {
   id:          string;
   label:       string;
   schedule:    CronSchedule;
-  time:        string;      // "HH:MM" local
+  time:        string;      // "HH:MM" in `tz`
+  /**
+   * IANA zone the `time` is written in, stamped from the browser at creation.
+   * An OFFSET would be wrong here: it is a snapshot, and half the world's
+   * offsets change twice a year, so a task created in January would fire an
+   * hour off in July. Older tasks have no `tz` and degrade to UTC.
+   */
+  tz?:         string;
   prompt:      string;
   active:      boolean;
+  /**
+   * Model preset this task runs on, stamped at creation from the composer's
+   * current pick. Stored PER TASK rather than read live, because a background
+   * run has no session behind it: if it followed whatever preset happened to be
+   * selected last, switching the composer to Deep would silently re-price every
+   * standing task, and the user would find out from their balance.
+   */
+  tier?:       string;
+  /**
+   * Run on the server while the tab is closed. Off by default and requires a
+   * signed-in session (see /api/chat/schedule) — a background task is a standing
+   * instruction to spend the owner's credits, so it needs a stronger proof of
+   * ownership than a message the user is watching. Tasks without this still work
+   * exactly as before: they fire when Blue Chat is next opened.
+   */
+  background?: boolean;
+  /** Server-computed firing instant. Present only while `background` is on. */
+  nextAt?:     number;
   lastRun?:    number;      // epoch ms
   lastResult?: string;      // truncated output
+  lastError?:  string;      // why the last run produced nothing
+  /** Set by the scheduler when it disabled the task (e.g. out of credits). */
+  pausedReason?: string;
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
