@@ -83,6 +83,12 @@ const IconHome = (
   </svg>
 );
 
+const IconModels = (
+  <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17 9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2Z" />
+  </svg>
+);
+
 // ── Nav model ───────────────────────────────────────────────────────────────────
 // Grouped sidebar mirroring the "onchain Agent OS" framing — three product
 // pillars + an account band. Every destination is backed by REAL data (no
@@ -103,6 +109,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: "group_agent",
     items: [
       { id: "chat", href: "/chat", icon: IconChat },
+      { id: "models", href: "/models", icon: IconModels },
       { id: "wallet", href: "/wallet", icon: IconWallet },
       { id: "dashboard", href: "/dashboard", icon: IconOverview },
       { id: "connectors", href: "/connectors", icon: IconConnectors },
