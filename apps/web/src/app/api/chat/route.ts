@@ -2331,10 +2331,20 @@ export async function POST(req: NextRequest) {
   }
   void remaining;
 
-  const apiKey = process.env.BANKR_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "BANKR_API_KEY not configured." }, { status: 500 });
-  }
+  // NO provider-key gate here, deliberately. Each provider branch below checks
+  // its OWN key and fails with a message naming that key:
+  //   - Venice   → VENICE_INFERENCE_KEY ?? VENICE_API_KEY  (the `venice` branch)
+  //   - Virtuals → VIRTUALS_API_KEY                        (the default branch)
+  //
+  // Until 2026-09-03 this spot read `process.env.BANKR_API_KEY` and 500'd the
+  // WHOLE endpoint when it was missing — while never using its value: both
+  // branches shadow it with their own key. So Blue Chat's availability was
+  // wired to a Bankr credential that Bankr has 403-banned since 2026-07-20 and
+  // that CLAUDE.md lists as a dead env var. Anyone following that doc and
+  // unsetting it in Vercel would have taken chat down with a 500 naming a
+  // vendor this codebase no longer calls. Measured live before removal: prod
+  // chat answered 200, so the var was set — the outage was one env edit away.
+  // Do not reintroduce a gate here; gate on the key you are about to USE.
 
   let body: {
     messages?:    LLMMessage[];
