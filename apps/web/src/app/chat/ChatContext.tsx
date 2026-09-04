@@ -16,6 +16,7 @@ import {
 import { extractArtifacts } from "./artifacts";
 import { enabledSkillsPrompt, loadIntegrations, runSkillCommand } from "./integrations";
 import { enabledConnectorsForChat } from "./connectors";
+import { resolvePresetDispatch, VIRTUALS_PRESETS_V1 } from "./components/presets";
 import { useWorkspaceSync, WORKSPACE_HYDRATED_EVENT, type UseWorkspaceSync } from "./workspace-sync";
 import { useSiweSignIn } from "./use-siwe-signin";
 import {
@@ -196,13 +197,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [chatTier,     setChatTier]    = useState("pro");
 
-  // Landing → chat deep-link: `/app/chat?preset=<id>` selects a V1 preset
-  // (fast · balanced · deep · private · grok). Guarded to the 5 known
-  // ids so nothing else in the query string can wedge the picker.
+  // Landing → chat deep-link: `/app/chat?preset=<id>` selects a V1 preset.
+  // Guarded to the live preset ids (derived from the spec, not hardcoded, so
+  // it can't drift as presets are added) so nothing else in the query string
+  // can wedge the picker.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const p = new URLSearchParams(window.location.search).get("preset");
-    if (p && ["fast", "balanced", "deep", "private", "grok"].includes(p)) {
+    if (p && VIRTUALS_PRESETS_V1.some((x) => x.id === p)) {
       setChatTier(p);
     }
   }, []);
@@ -433,28 +435,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Only block sending after wallet detection is done — avoids false "out of credits" on F5
   const outOfCredits = walletReady && !isUnlimited && credits < cost;
 
-  // ── Tier config ────────────────────────────────────────────────────────────
-  // Pre-merge task #4 followup — Bankr got banned; every non-venice
-  // tier now routes through Virtuals server-side (task B). Send the
-  // truthful provider name over the wire so server logs / label pipes
-  // don't have to invert a stale value.
-  const activeTierProvider = chatTier.startsWith("venice") ? "venice" : "virtuals";
-  const VENICE_MODEL_IDS: Record<string, string> = {
-    // Venice — standard
-    "venice-deepseek":      "deepseek-v4-flash",
-    "venice-deepseek-pro":  "deepseek-v4-pro",
-    "venice-kimi":          "kimi-k2-6",
-    "venice-claude":        "claude-opus-4-7",
-    "venice-fable":         "claude-fable-5",
-    "venice-grok":          "grok-4-3",
-    "venice-qwen":          "qwen3-235b-a22b-instruct-2507",
-    "venice-mistral":       "mistral-small-3-2-24b-instruct",
-    "venice-uncut":         "venice-uncensored-1-2",
-    // Venice — Privacy / E2EE
-    "venice-e2ee-venice":   "e2ee-venice-uncensored-24b-p",
-    "venice-e2ee-gemma":    "e2ee-gemma-3-27b-p",
-    "venice-e2ee-qwen":     "e2ee-qwen3-6-35b-a3b",
-  };
 
   // ── send() ────────────────────────────────────────────────────────────────
   const send = useCallback(async (text: string) => {
@@ -567,7 +547,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // user's first token — it changed the result on zero requests.
     const relatedChunks = recentChunks(walletAddr, 3);
     const memoryContext = buildMemoryContext(walletAddr, relatedChunks.length > 0 ? relatedChunks : undefined);
-    const modelId = VENICE_MODEL_IDS[chatTier];
+    // How this preset dispatches: provider, the Venice model id (only set for
+    // a venice preset), and whether it carries live web search. One lookup off
+    // the preset spec — replaces the old startsWith("venice")/VENICE_MODEL_IDS
+    // pair that could never match a real preset id.
+    const dispatch = resolvePresetDispatch(chatTier);
     // Installed-skill prompt + integration toggles → extend the system prompt.
     const skillsPrompt = enabledSkillsPrompt();
     const integ = loadIntegrations();
@@ -589,15 +573,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({
           messages:    next,
           tier:        chatTier,
-          provider:    activeTierProvider,
+          provider:    dispatch.provider,
           // Connected wallet — when present, the chat backend debits the
           // message + tool credit cost from this wallet's unified ledger
           // (Week 2 of the credit redesign). Guest sessions omit this and
           // continue to use the localStorage daily-quota path.
-          ...(walletAddr    ? { address: walletAddr } : {}),
-          ...(modelId       ? { modelId }       : {}),
-          ...(memoryContext ? { memoryContext }  : {}),
-          ...(webSearch     ? { webSearch: true } : {}),
+          ...(walletAddr        ? { address: walletAddr } : {}),
+          ...(dispatch.modelId  ? { modelId: dispatch.modelId } : {}),
+          ...(memoryContext     ? { memoryContext }  : {}),
+          // Preset-carried web search (the Search preset) OR the manual toggle.
+          ...((dispatch.webSearch || webSearch) ? { webSearch: true } : {}),
           ...(files.length  ? { attachments: files } : {}),
           ...(skillsPrompt  ? { skills: skillsPrompt } : {}),
           ...(integ.baseMcp  ? { baseMcp: true }  : {}),
@@ -860,7 +845,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [
     streaming, activeTask, activeTaskId, chatTier, walletAddr, cost, credits,
-    isUnlimited, activeTierProvider,
+    isUnlimited,
     webSearch, pendingFiles,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 

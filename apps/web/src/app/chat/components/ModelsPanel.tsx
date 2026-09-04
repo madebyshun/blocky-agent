@@ -6,13 +6,14 @@ import { VIRTUALS_PRESETS_V1, formatContextTokens, type VirtualsPresetV1 } from 
 /**
  * Models page — a readable catalog of every model Blue Chat can run, so users
  * understand what's available and what each one is for before picking. Each
- * card maps a use-case preset (Fast · Balanced · Deep · Private · Grok) to its
- * underlying model + credit cost, and selecting one sets the active chat model
- * (same pipeline + same preset ids as the composer model picker).
+ * card maps a use-case preset to its underlying model + credit cost, and
+ * selecting one sets the active chat model (same pipeline + same preset ids as
+ * the composer model picker).
  *
  * Data is sourced 1:1 from VIRTUALS_PRESETS_V1 in ChatInput — the single source
- * of truth the composer also uses. Every model runs through the Virtuals
- * gateway; there is no per-model funding story and no token.
+ * of truth the composer also uses. Most presets run through the Virtuals
+ * gateway; the venice-provider presets (e.g. Search) run through Venice. There
+ * is no per-model funding story and no token.
  */
 
 // Per-preset accent + icon + longer "best for" guidance. VIRTUALS_PRESETS_V1
@@ -23,7 +24,9 @@ const PRESET_META: Record<VirtualsPresetV1["id"], { icon: string; color: string;
   balanced: { icon: "💬", color: "#4FC3F7", bestFor: "Everyday building, brainstorming, and the 5 blue commands. The balanced default." },
   deep:     { icon: "🔬", color: "#A78BFA", bestFor: "Hard reasoning: audits, architecture, tricky debugging, multi-step analysis." },
   private:  { icon: "🔒", color: "#6EE7B7", bestFor: "Sensitive prompts — runs end-to-end encrypted with no logs retained." },
+  flash:    { icon: "🚀", color: "#FBBF24", bestFor: "Snappy back-and-forth — Gemini 2.5 Flash for the fastest first token. 1M-token context." },
   grok:     { icon: "🧠", color: "#E879F9", bestFor: "Live-data and huge-context tasks — Grok 4 with a 2M-token window." },
+  search:   { icon: "🌐", color: "#22D3EE", bestFor: "Questions that need the live web — Grok 4.3 on Venice with real-time search. 1M-token context." },
 };
 
 export default function ModelsPanel({ onPick }: { onPick?: () => void }) {
@@ -52,7 +55,9 @@ export default function ModelsPanel({ onPick }: { onPick?: () => void }) {
             const isActive = chatTier === preset.id;
             const chip     = preset.privacy
               ? { label: "Private · E2EE", color: "#6EE7B7" }
-              : { label: "Virtuals",       color: "#4FC3F7" };
+              : preset.provider === "venice"
+                ? { label: preset.webSearch ? "Venice · Search" : "Venice", color: "#22D3EE" }
+                : { label: "Virtuals",       color: "#4FC3F7" };
 
             return (
               <button

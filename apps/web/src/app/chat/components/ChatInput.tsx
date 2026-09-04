@@ -5,37 +5,14 @@ import { creditCost } from "@/lib/credits";
 import { useLang } from "@/lib/i18n/context";
 import type { Attachment } from "../types";
 
-// ── V1 catalog-driven Virtuals presets ────────────────────────────────────
-// Shape mirrors `VirtualsPreset` in `/api/_lib/llm.ts`. The list served
-// here is the STATIC fallback used until `/api/chat/presets` responds; the
-// server may filter this down based on the live Virtuals /v1/models
-// catalog (missing id → hidden). Never hardcode the model id anywhere
-// else — this file + the server-side spec are the two authoritative sites.
-export interface VirtualsPresetV1 {
-  id: "fast" | "balanced" | "deep" | "private" | "grok";
-  model: string;
-  label: string;
-  desc: string;
-  cost: "●" | "●●" | "●●●";
-  contextTokens: number;
-  credits: number;
-  privacy?: boolean;
-  optional?: boolean;
-}
-export const VIRTUALS_PRESETS_V1: VirtualsPresetV1[] = [
-  { id: "fast",     model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_000_000, credits: 10 },
-  { id: "balanced", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 200_000,   credits: 50 },
-  { id: "deep",     model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 200_000,   credits: 200 },
-  { id: "private",  model: "e2ee-deepseek-v4-flash",     label: "Private",  desc: "E2EE · no logs · DeepSeek V4",            cost: "●",   contextTokens: 1_000_000, credits: 30,  privacy: true },
-  { id: "grok",     model: "x-ai-grok-4-20",             label: "Grok",     desc: "Grok 4 · 2M context window",              cost: "●●",  contextTokens: 2_000_000, credits: 60,  optional: true },
-];
-
-/** "1M" / "200k" — human-readable context size for the preset subtitle. */
-export function formatContextTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return `${n}`;
-}
+// The V1 preset spec + dispatch helper moved to the leaf module `./presets`
+// so ChatContext can read them without importing this component (which imports
+// ChatContext → cycle). Imported here for the picker's own use, and re-exported
+// so existing callers that import them from `./ChatInput` (e.g. ModelsPanel)
+// keep resolving.
+import { VIRTUALS_PRESETS_V1, formatContextTokens, type VirtualsPresetV1 } from "./presets";
+export { VIRTUALS_PRESETS_V1, resolvePresetDispatch, formatContextTokens } from "./presets";
+export type { VirtualsPresetV1 } from "./presets";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -342,6 +319,7 @@ export default function ChatInput() {
                 const showDividerBefore = p.optional && !prevOptional;
                 const iconMap: Record<VirtualsPresetV1["id"], string> = {
                   fast: "⚡", balanced: "💬", deep: "🔬", private: "🔒", grok: "🧠",
+                  flash: "🚀", search: "🌐",
                 };
                 return (
                   <div key={p.id}>

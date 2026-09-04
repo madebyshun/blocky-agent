@@ -76,7 +76,9 @@ export const BASE_COST: Record<string, number> = {
   balanced:               50,  // anthropic-claude-sonnet-5 · 200k ctx
   deep:                  200,  // anthropic-claude-opus-4-8 · 200k ctx · heavy reason
   private:                30,  // e2ee-deepseek-v4-flash · E2EE, no logs
+  flash:                  10,  // google-gemini-2-5-flash · 1M ctx · fastest first token
   grok:                   60,  // x-ai-grok-4-20 · 2M ctx · optional
+  search:                 60,  // venice grok-4-3 · live web search · 1M ctx · optional
   // Bankr-legacy tier ids kept for localStorage compatibility. `fast`
   // in the V1 spec (deepseek-flash) shares an id with the legacy fast
   // tier — happy coincidence, no rename needed.
