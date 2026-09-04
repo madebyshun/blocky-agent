@@ -1,6 +1,5 @@
 "use client";
 
-import type { ActiveTab } from "../types";
 import { useChat } from "../ChatContext";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -14,53 +13,16 @@ function relativeTime(ms: number): string {
   return `${Math.floor(h / 24)}d`;
 }
 
-// ── Nav tabs ──────────────────────────────────────────────────────────────────
-const NAV_TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
-  {
-    id: "chat",
-    label: "Chat",
-    icon: (
-      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
-          d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-      </svg>
-    ),
-  },
-  {
-    id: "models",
-    label: "Models",
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
-          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-      </svg>
-    ),
-  },
-  // Skills + Connectors are NOT tabs here any more (2026-08, AgentOS Control).
-  // Both were promoted to shell pages (/skills, /connectors) that render the
-  // exact same panels, so listing them here too put one catalog behind two
-  // different navs. The shell's Control group is now their single home.
-  // Settings is also not a tab — it opens as a modal from the footer account
-  // chip (ChatGPT/Claude pattern). See SettingsModal + onOpenSettings.
-];
-
-// The labeled action rows shown under "New chat". "chat" is excluded — the
-// conversation list itself is the chat surface. Models stays because it is a
-// per-conversation setting (the ChatInput dropdown is its primary control;
-// this row opens the expanded comparison view), not a shared catalog.
-const ACTION_ORDER: ActiveTab[] = ["models"];
-const ACTION_ITEMS = ACTION_ORDER
-  .map(id => NAV_TABS.find(t => t.id === id))
-  .filter((t): t is (typeof NAV_TABS)[number] => Boolean(t));
+// No nav rows under "New chat" any more. Models was the last one, and it moved
+// to /models in the shell's Control group (2026-09) the same way Skills and
+// Connectors did — one catalog behind two navs is the thing being avoided.
+// Settings is not a row either; it opens as a modal from the footer account
+// chip (ChatGPT/Claude pattern). See SettingsModal + onOpenSettings.
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function AppSidebar({
-  activeTab,
-  onSelect,
   onOpenSettings,
 }: {
-  activeTab: ActiveTab;
-  onSelect: (id: ActiveTab) => void;
   onOpenSettings: () => void;
 }) {
   const {
@@ -86,11 +48,10 @@ export default function AppSidebar({
         <p className="font-mono text-xs text-[#4FC3F7] tracking-widest">// BLUE CHAT</p>
       </div>
 
-      {/* ── Primary actions — labeled vertical rows ── */}
-      <nav className="px-2 pt-2 pb-2 shrink-0 space-y-0.5">
-        {/* New chat */}
+      {/* ── Primary action ── */}
+      <nav className="px-2 pt-2 pb-2 shrink-0">
         <button
-          onClick={() => { createNewTask(); onSelect("chat"); }}
+          onClick={createNewTask}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-[#ffffff08] transition-colors group"
         >
           <svg className="w-4 h-4 text-[#4FC3F7] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -99,31 +60,6 @@ export default function AppSidebar({
           <span className="font-mono text-[13px] text-slate-200 font-medium flex-1 text-left">New chat</span>
           <span className="font-mono text-[9px] text-slate-700 group-hover:text-slate-500 transition-colors">⌘N</span>
         </button>
-
-        {/* Skills · Tools · Scheduled */}
-        {ACTION_ITEMS.map(item => {
-          const isActive = activeTab === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onSelect(item.id)}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors"
-              style={isActive ? { background: "#4FC3F712" } : undefined}
-              onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "#ffffff08"; }}
-              onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
-            >
-              <span className="shrink-0" style={{ color: isActive ? "#4FC3F7" : "#64748b" }}>
-                {item.icon}
-              </span>
-              <span
-                className="font-mono text-[13px] flex-1 text-left"
-                style={{ color: isActive ? "#4FC3F7" : "#cbd5e1" }}
-              >
-                {item.label}
-              </span>
-            </button>
-          );
-        })}
       </nav>
 
       {/* ── Conversations — "Recents" section ── */}
@@ -146,11 +82,11 @@ export default function AppSidebar({
             </div>
           ) : (
             sorted.map(task => {
-              const isActive = task.id === activeTaskId && activeTab === "chat";
+              const isActive = task.id === activeTaskId;
               return (
                 <div
                   key={task.id}
-                  onClick={() => { selectTask(task.id); onSelect("chat"); }}
+                  onClick={() => selectTask(task.id)}
                   className={`group relative w-full text-left px-5 py-2 transition-all cursor-pointer flex items-center gap-2 ${
                     isActive ? "bg-[#4FC3F7]/8" : "hover:bg-[#ffffff05]"
                   }`}

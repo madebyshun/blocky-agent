@@ -6,10 +6,8 @@ import SettingsPanel, { type SettingsSection } from "./SettingsPanel";
 
 // Mobile-only quick links — kept out of the nav drawer so the drawer stays
 // focused. Hidden on desktop (lg:hidden), so the web Settings experience is
-// unchanged. Every entry is a route now: Models joined Skills on its own shell
-// page (/models), so nothing here switches a chat tab any more. Models is still
-// a chat tab as well — but from a modal, sending the user to the full page beats
-// closing the modal onto a half-width tab.
+// unchanged. Every entry is a route: Models joined Skills on its own shell page
+// (/models) and is no longer a chat tab, so nothing here switches tab state.
 const QUICK_ROUTES: { href: string; label: string; icon: string }[] = [
   { href: "/models", label: "Models", icon: "🤖" },
   { href: "/skills", label: "Skills", icon: "⚡" },

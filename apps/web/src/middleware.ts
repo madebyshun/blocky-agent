@@ -37,14 +37,13 @@ const APP_SEGMENTS = new Set([
   // first-class /app pages, each backed by REAL data (installed skills, the
   // connector store, the wallet's crons, the credit ledger, CREDIT_PACKS).
   // Promotion is one-way: these are NO LONGER chat tabs, so this set is their
-  // only home (see ChatClient's TAB_META + AppSidebar's ACTION_ORDER).
+  // only home (the chat sub-nav has no tabs at all now — see chat/types.ts).
   // `skills` is unambiguous — the marketing SOUL.md page that used to own
   // /skills moved to /soul, and /skills 301s there on the main host.
   "skills",       // installed agent-skills catalog (SkillsPanel)
-  // `models` is the one promoted panel that is NOT one-way: it stays a chat tab
-  // too, because picking a model is a per-conversation setting (`chatTier` is
-  // in-memory ChatContext state) and not just a catalog to browse. The page
-  // routes its pick through /chat?preset=<id> for that reason.
+  // `models` joined them 2026-09. Picking a model is still a per-conversation
+  // setting (`chatTier` is in-memory ChatContext state), so the page cannot set
+  // it directly — it routes a pick through /chat?preset=<id> instead.
   //
   // ⚠️ This segment collides with `public/models/*.svg` (the provider marks).
   // Both rewrite branches below must skip paths containing a dot, or every
