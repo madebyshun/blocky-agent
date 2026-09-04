@@ -482,10 +482,23 @@ const HUB_TOOLS = [
   },
   {
     name: "hub_narrative",
-    description: "Get the current narrative map — mindshare scores, velocity, phase (Emerging/Rising/Peak/Fading), and position calls (FRONT-RUN/RIDE/FADE/WATCH). Use when user asks about narratives, trends, what's running on CT.",
+    description: "Get the current narrative map — mindshare scores, velocity, phase (Emerging/Rising/Peak/Fading), and position calls (FRONT-RUN/RIDE/FADE/WATCH). Use when user asks about narratives, trends, what's running on CT. Do NOT also call hub_narrative_pulse for the same question — they read the same trending source; pick one.",
     input_schema: {
       type: "object",
       properties: { focus: { type: "string", description: "Specific narratives to focus on (optional)" } },
+    },
+  },
+  {
+    // Named by the always-on "Trader Intel" default skill (chat/integrations.ts).
+    // Reads the SAME GeckoTerminal trending set as hub_narrative and differs only
+    // in output shape (entry windows + avoid list vs position calls), so the two
+    // descriptions each tell the model not to call both — otherwise a single
+    // "what's running?" bills the user twice for one dataset.
+    name: "hub_narrative_pulse",
+    description: "Narrative pulse — the same live Base trending set as hub_narrative, but framed as entry windows (open/closing/closed), a single top opportunity, and an avoid list. Use when the user wants timing ('am I early?', 'is it too late to enter?') rather than a full narrative map. Do NOT also call hub_narrative for the same question.",
+    input_schema: {
+      type: "object",
+      properties: { focus: { type: "string", description: "Narrative to focus on, e.g. 'AI agents', 'RWA' (optional)" } },
     },
   },
   {
@@ -640,6 +653,21 @@ const HUB_TOOLS = [
     },
   },
   {
+    // Named by the always-on "Base Builder" default skill (chat/integrations.ts)
+    // as the deep step after hub_builder_score / hub_repo_health.
+    name: "hub_builder_dd",
+    description: "Full due diligence on a Base builder or project — on-chain activity, shipped products, credibility signals. Use when the user wants a deeper verdict than hub_builder_score, or asks to vet/DD a builder before working with or funding them. Accepts an X/Twitter handle OR a 0x wallet address.",
+    input_schema: {
+      type: "object",
+      properties: {
+        target:  { type: "string", description: "Builder handle (@name or name) or 0x wallet address" },
+        type:    { type: "string", enum: ["builder", "project"], description: "Whether the target is a person or a project (default: project)" },
+        context: { type: "string", description: "Anything already known about them (optional)" },
+      },
+      required: ["target"],
+    },
+  },
+  {
     name: "hub_ecosystem",
     description: "Daily Base ecosystem digest — top launches, protocol updates, builder activity. USE WHEN: the user explicitly asks what's happening on Base TODAY / latest news / ecosystem updates. NOT FOR: writing code, building, explaining concepts, architecture, or idea/concept brainstorming — answer those directly without a tool.",
     input_schema: {
@@ -681,6 +709,22 @@ const HUB_TOOLS = [
       type: "object",
       properties: { token: { type: "string", description: "Token contract address on Base" } },
       required: ["token"],
+    },
+  },
+  {
+    // Named by the always-on "Trader Intel" default skill (chat/integrations.ts).
+    // SCHEMA IS DELIBERATELY ONE FIELD: the token-momentum-scanner handler reads
+    // ONLY `min_mcap` (handler line 35-38). The Hub catalog entry sends
+    // {chain, context} built from "Timeframe"/"Filter" inputs the handler never
+    // reads — do not mirror that here. Advertising a timeframe the scanner
+    // ignores would make the model report a 1h scan it never ran.
+    name: "hub_token_momentum",
+    description: "Scan Base tokens for momentum right now — breakouts, volume spikes, narrative alignment. Use when the user asks what's moving/pumping/breaking out, with no specific token in mind. The scan window is fixed; it cannot be narrowed to a timeframe.",
+    input_schema: {
+      type: "object",
+      properties: {
+        min_mcap: { type: "number", description: "Minimum market cap in USD to include (optional, default 0 = no floor)" },
+      },
     },
   },
   {
@@ -1009,6 +1053,17 @@ const TOOL_ENDPOINT: Record<string, string> = {
   hub_aml:              "aml-screen",
   hub_whale_tracker:    "whale-tracker",
   hub_dex_flow:         "dex-flow",
+  // The three below back the always-on default skills in chat/integrations.ts
+  // ("Trader Intel", "Base Builder"). Those packs are injected into every user's
+  // localStorage with enabled+default true, so their text has been in every
+  // system prompt since they shipped — naming tools that were in NEITHER
+  // HUB_TOOLS nor this map. Trader Intel went further and told the model to
+  // "synthesize all five into BUY / WATCH / AVOID", i.e. produce a five-tool
+  // verdict from the three that existed. The handlers were live the whole time
+  // under different ids; only the chat wiring was missing.
+  hub_narrative_pulse:  "narrative-pulse",
+  hub_builder_dd:       "builder-deep-dd",
+  hub_token_momentum:   "token-momentum-scanner",
   hub_airdrop:          "airdrop-check",
   hub_crypto_rpc:       "crypto-rpc",
   hub_token_price:      "token-price",
