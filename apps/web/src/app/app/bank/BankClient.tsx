@@ -40,7 +40,10 @@ const CAMPAIGNS: { name: string; desc: string; badge: string; color: string }[] 
   { name: "Morpho Boost", desc: "+0.5% APY on USDC deposits", badge: "LIVE", color: "#A78BFA" },
 ];
 
-type Panel = "positions" | "earn" | "send" | "receive" | "convert" | "orders";
+// "withdraw" was "earn" until yield was deferred to phase 2. The panel still
+// renders MoveToYieldCard, but withdraw-only: no new supply can be started from
+// this surface, while anyone already deposited keeps a way out.
+type Panel = "positions" | "withdraw" | "send" | "receive" | "convert" | "orders";
 
 // Sticky testnet unlock. Deliberately NOT the same key family as `bluebank:*`
 // user settings — this is a developer escape hatch, not a preference.
@@ -282,6 +285,15 @@ export default function BankPage() {
   // `total`, or a slow RPC gets rendered as a fact about their money.
   const balancesKnown = walletUsdc != null;
 
+  // Same trap, but with money on the other side of it. `inYield` collapses
+  // "the read has not resolved" into 0, and the withdraw path is gated on
+  // `inYield > 0` — so an RPC that fails and stays null would hide the ONLY
+  // exit from a user who really does have USDC supplied. Anything that gates
+  // the exit must ask "is it positively known to be zero", not "is it zero".
+  // Cosmetic gates (widgets that print a dollar figure) stay on `inYield > 0`:
+  // those must not assert $0.00 from a read that never landed.
+  const noPositions = aavePos != null && morphoPos != null && inYield === 0;
+
   // Stats from real wallet history (this calendar month)
   const netFlowMonth      = txData?.stats?.netFlowUsdcMonth ?? 0;
   const transferCountMonth = txData?.stats?.transferCountMonth ?? 0;
@@ -302,16 +314,6 @@ export default function BankPage() {
   const fabDrag = useRef<{ ox: number; oy: number; sx: number; sy: number; moved: boolean } | null>(null);
   const [fabXY, setFabXY]       = useState<{ x: number; y: number } | null>(null);
   const [fabDragging, setFabDragging] = useState(false);
-
-  // ── Auto Earn ────────────────────────────────────────────────────────────
-  const [autoEarn, setAutoEarn]               = useState(false);
-  const [autoEarnThreshold, setAutoEarnThreshold] = useState(50);
-  useEffect(() => {
-    try { const s = localStorage.getItem("bluebank:autoEarn"); if (s) { const p = JSON.parse(s); setAutoEarn(!!p.enabled); setAutoEarnThreshold(p.threshold ?? 50); } } catch {}
-  }, []);
-  useEffect(() => {
-    try { localStorage.setItem("bluebank:autoEarn", JSON.stringify({ enabled: autoEarn, threshold: autoEarnThreshold })); } catch {}
-  }, [autoEarn, autoEarnThreshold]);
 
   function fabDown(e: React.PointerEvent<HTMLButtonElement>) {
     e.preventDefault();
@@ -442,12 +444,17 @@ export default function BankPage() {
   const identity = useWalletIdentity(chainId);
 
   if (!isConnected) {
-    return <BankLanding bestApy={bestApy} />;
+    return <BankLanding />;
   }
 
+  // The Withdraw tab is hidden only for a wallet POSITIVELY known to hold
+  // nothing — it is the exit from a feature whose entrance is closed, so a
+  // read that has not resolved keeps it visible. Hiding it on a stale null
+  // would strand a depositor's funds; showing it on an empty wallet costs a
+  // tab that reports "no positions".
   const TABS: { id: Panel; label: string; icon: string; desc: string }[] = [
     { id: "positions", label: "Positions", icon: "📊", desc: "Your yield" },
-    { id: "earn",      label: "Earn",      icon: "🌾", desc: "Grow USDC" },
+    ...(noPositions ? [] : [{ id: "withdraw" as Panel, label: "Withdraw", icon: "↩︎", desc: "Exit yield" }]),
     { id: "send",      label: "Send",      icon: "➡",  desc: "Pay anyone" },
     { id: "receive",   label: "Receive",   icon: "⬇",  desc: "Get paid" },
     { id: "convert",   label: "Convert",   icon: "⇅",  desc: "Swap tokens" },
@@ -530,14 +537,18 @@ export default function BankPage() {
   if (!balancesKnown) {
     /* nothing to advise until the balance read lands */
   } else if (total === 0) {
-    allMissions.push({ priority: "info", icon: "💡", text: `Add USDC to start earning yield on ${net.short}`, action: "Add cash", onAction: addCash, color: "#F59E0B" });
+    allMissions.push({ priority: "info", icon: "💡", text: `Add USDC to fund your wallet on ${net.short}`, action: "Add cash", onAction: addCash, color: "#F59E0B" });
   } else {
-    if ((walletUsdc ?? 0) > 50 && inYield === 0 && bestApy != null)
-      allMissions.push({ priority: "high", icon: "📈", text: `$${usd(walletUsdc)} idle — earn ~$${(((walletUsdc ?? 0) * bestApy / 100) / 12).toFixed(0)}/mo at ${bestApy.toFixed(1)}%`, action: "Earn now", onAction: () => openAction("earn"), color: "#34D399" });
+    // The two missions that used to sit here — "$X idle, earn ~$Y/mo" and
+    // "Enable Auto Earn" — both invited a NEW supply, which is the entrance
+    // this phase closes. Only the passive one below survives: it reports a
+    // position the user already holds rather than asking for another.
+    //
+    // Auto Earn is gone outright, not hidden. It persisted a flag to
+    // localStorage and nothing anywhere read it back, so the toggle promised
+    // an auto-deploy that never ran once.
     if (inYield > 0 && bestApy != null)
       allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} earning ${bestApy.toFixed(1)}% · ~$${((inYield * bestApy / 100) / 12).toFixed(0)}/month`, color: "#34D399" });
-    if ((walletUsdc ?? 0) > 50 && !autoEarn)
-      allMissions.push({ priority: "info", icon: "⚙️", text: "Enable Auto Earn to auto-deploy idle USDC", action: "Enable", onAction: () => setAutoEarn(true), color: "#A78BFA" });
     if (ethBal != null && ethBal < 0.005)
       allMissions.push({ priority: "warn", icon: "⛽", text: "ETH too low for gas fees", action: "Get ETH", onAction: () => openAction("convert"), color: "#F59E0B" });
     if (new Date() >= new Date("2026-06-25"))
@@ -557,12 +568,8 @@ export default function BankPage() {
   const missionSummary =
     !balancesKnown ? "Reading your balances…" :
     total === 0 ? `Wallet connected · add USDC on ${net.short} to get started.` :
-    (walletUsdc ?? 0) > 100 && inYield === 0 ? "Idle cash detected — put it to work." :
-    inYield > 0 && (walletUsdc ?? 0) < 50 ? `Fully deployed · earning ${bestApy?.toFixed(1) ?? "—"}% APY` :
-    `$${usd(walletUsdc)} liquid · $${usd(inYield)} earning`;
-
-  // ── Auto Earn surplus ─────────────────────────────────────────────────────
-  const autoEarnSurplus = Math.max(0, (walletUsdc ?? 0) - autoEarnThreshold);
+    inYield > 0 ? `$${usd(walletUsdc)} liquid · $${usd(inYield)} earning ${bestApy?.toFixed(1) ?? "—"}% APY` :
+    `$${usd(walletUsdc)} USDC on ${net.short}`;
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
@@ -607,21 +614,24 @@ export default function BankPage() {
           )}
         </div>
 
-        {/* 3. Earn widget */}
-        <div className="mx-3 mb-3 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3">
-          <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-1">EARNING</div>
-          <div className="font-mono text-[18px] font-bold text-[#A78BFA]">${usd(walletState.inYield)}</div>
-          <div className="font-mono text-[9px] text-slate-600 mt-0.5">
-            best {bestApy != null ? `${bestApy.toFixed(1)}%` : "—"} APY
-          </div>
-          {walletState.inYield === 0 && walletState.balance > 0 && (
-            <button onClick={() => openAction("earn")}
+        {/* 3. Yield position — only for a wallet that HAS one. It used to render
+            at $0.00 with a "Deploy →" button underneath, which made an empty
+            widget the loudest pitch on the page for the one feature this phase
+            withdraws. Nothing supplied, nothing to say. */}
+        {walletState.inYield > 0 && (
+          <div className="mx-3 mb-3 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3">
+            <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-1">EARNING</div>
+            <div className="font-mono text-[18px] font-bold text-[#4FC3F7]">${usd(walletState.inYield)}</div>
+            <div className="font-mono text-[9px] text-slate-600 mt-0.5">
+              best {bestApy != null ? `${bestApy.toFixed(1)}%` : "—"} APY
+            </div>
+            <button onClick={() => openAction("withdraw")}
               className="w-full font-mono text-[10px] font-bold mt-2 py-1.5 rounded-lg"
-              style={{ background: "#A78BFA15", color: "#A78BFA", border: "1px solid #A78BFA40" }}>
-              Deploy →
+              style={{ background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
+              ↩︎ Withdraw
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* 4. BlueAgent mini chat */}
         <div className="mx-3 mb-3">
@@ -792,7 +802,7 @@ export default function BankPage() {
                   Wallet is on {walletChain?.name ?? `chain ${walletChainId}`}
                 </div>
                 <div className="font-mono text-[9px] text-slate-400 mt-0.5">
-                  Balances below are read from {net.label}. Send, swap and earn need your wallet on the same network.
+                  Balances below are read from {net.label}. Send and swap need your wallet on the same network.
                 </div>
               </div>
               <button onClick={switchToAppChain} disabled={switchBusy}
@@ -868,12 +878,10 @@ export default function BankPage() {
                   {cashOutBusy ? "…" : "🏦 Out"}
                 </button>
               </div>
+              {/* 🌾 Earn used to lead this row. Supplying into Aave/Morpho is
+                  deferred to phase 2, so the control that starts a deposit is
+                  gone; the withdraw path lives on the Positions panel. */}
               <div className="flex gap-1.5">
-                <button onClick={() => openAction("earn")}
-                  className="flex-1 font-mono text-[10px] py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
-                  style={{ border: "1px solid #1A1A2E" }}>
-                  🌾 Earn
-                </button>
                 <button onClick={() => openAction("convert")}
                   className="flex-1 font-mono text-[10px] py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
                   style={{ border: "1px solid #1A1A2E" }}>
@@ -949,7 +957,7 @@ export default function BankPage() {
             <SpendConsole address={acct} />
           </div>
 
-          {/* ── Section 2: Wallet+Earn | AI+Portfolio ─────────────────────── */}
+          {/* ── Section 2: Wallet+Yield | AI+Portfolio ────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3 items-start">
 
             {/* Left stack */}
@@ -975,31 +983,37 @@ export default function BankPage() {
                 </div>
               </div>
 
-              {/* Earn card with APY bars */}
-              <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-mono text-[9px] text-slate-500 tracking-widest">YIELD RATES · BASE</div>
-                  <button onClick={() => openAction("earn")}
-                    className="font-mono text-[9px] px-2 py-1 rounded-lg"
-                    style={{ background: "#34D39910", color: "#34D399", border: "1px solid #34D39920" }}>
-                    Earn →
-                  </button>
-                </div>
-                {rates && rates.length ? rates.slice(0, 4).map((r, i) => (
-                  <div key={r.project} className="mb-2">
-                    <div className="flex justify-between font-mono text-[10px] mb-1">
-                      <span className={i === 0 ? "text-[#34D399]" : "text-slate-400"}>{i === 0 ? "★ " : ""}{r.label}</span>
-                      <span className={i === 0 ? "text-[#34D399] font-bold" : "text-slate-300"}>{r.apy.toFixed(2)}%</span>
-                    </div>
-                    <div className="h-1 rounded-full bg-[#1A1A2E] overflow-hidden">
-                      <div className="h-full rounded-full transition-all"
-                        style={{ width: `${Math.min(100, (r.apy / (rates[0].apy + 1)) * 100)}%`, background: i === 0 ? "#34D399" : "#4FC3F740" }} />
-                    </div>
+              {/* Yield rates — shown only to a wallet that already holds a
+                  position, for whom this is context on the money they have in.
+                  For everyone else it was a full-width board advertising a
+                  feature they can no longer enter, with an "Earn →" button on
+                  it. Gated rather than deleted so phase 2 can un-gate it. */}
+              {inYield > 0 && (
+                <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="font-mono text-[9px] text-slate-500 tracking-widest">YIELD RATES · BASE</div>
+                    <button onClick={() => openAction("withdraw")}
+                      className="font-mono text-[9px] px-2 py-1 rounded-lg"
+                      style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
+                      Withdraw →
+                    </button>
                   </div>
-                )) : (
-                  <div className="font-mono text-[10px] text-slate-600">loading rates…</div>
-                )}
-              </div>
+                  {rates && rates.length ? rates.slice(0, 4).map((r, i) => (
+                    <div key={r.project} className="mb-2">
+                      <div className="flex justify-between font-mono text-[10px] mb-1">
+                        <span className={i === 0 ? "text-[#34D399]" : "text-slate-400"}>{i === 0 ? "★ " : ""}{r.label}</span>
+                        <span className={i === 0 ? "text-[#34D399] font-bold" : "text-slate-300"}>{r.apy.toFixed(2)}%</span>
+                      </div>
+                      <div className="h-1 rounded-full bg-[#1A1A2E] overflow-hidden">
+                        <div className="h-full rounded-full transition-all"
+                          style={{ width: `${Math.min(100, (r.apy / (rates[0].apy + 1)) * 100)}%`, background: i === 0 ? "#34D399" : "#4FC3F740" }} />
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="font-mono text-[10px] text-slate-600">loading rates…</div>
+                  )}
+                </div>
+              )}
 
             </div>
 
@@ -1166,9 +1180,9 @@ export default function BankPage() {
               <div className="overflow-y-auto p-4 min-h-0">
                 {panel === "positions" && (
                   <div>
-                    <PositionRow label="Aave v3" pos={aavePos} apy={aaveApy} onManage={() => setPanel("earn")} />
+                    <PositionRow label="Aave v3" pos={aavePos} apy={aaveApy} onManage={() => setPanel("withdraw")} />
                     <PositionRow label="Morpho · Gauntlet USDC Prime" pos={morphoPos} apy={morphoApy}
-                      disabled={!morphoVnet} disabledNote="mainnet only" onManage={() => setPanel("earn")} />
+                      disabled={!morphoVnet} disabledNote="mainnet only" onManage={() => setPanel("withdraw")} />
                     <div className="mt-3 rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-3">
                       <div className="font-mono text-[9px] text-slate-600 mb-1.5">BEST SAFE RATE · BASE</div>
                       {rates && rates.length ? rates.slice(0, 3).map((r, i) => (
@@ -1178,17 +1192,33 @@ export default function BankPage() {
                         </div>
                       )) : <div className="font-mono text-[10px] text-slate-600">loading…</div>}
                     </div>
-                    <button onClick={() => setPanel("earn")}
-                      className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl mt-3"
-                      style={{ background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B40" }}>
-                      🌾 {inYield > 0 ? "Manage yield" : "Start earning"}
-                    </button>
-                    <p className="font-mono text-[9px] text-slate-600 mt-2 leading-relaxed px-0.5">
-                      Supply idle USDC into Aave or Morpho — non-custodial, you sign, withdraw anytime.
-                    </p>
+                    {/* The button said "Start earning" to anyone with no
+                        position — the last remaining control that could open a
+                        new deposit. It is now the exit only, and it stays put
+                        unless the reads came back and said zero. */}
+                    {!noPositions ? (
+                      <>
+                        <button onClick={() => setPanel("withdraw")}
+                          className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl mt-3"
+                          style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
+                          ↩︎ Withdraw
+                        </button>
+                        <p className="font-mono text-[9px] text-slate-600 mt-2 leading-relaxed px-0.5">
+                          Pulls USDC back out of Aave or Morpho to your wallet — non-custodial, you sign every transaction.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="font-mono text-[9px] text-slate-600 mt-3 leading-relaxed px-0.5">
+                        New yield deposits are paused. Existing positions stay withdrawable at any time.
+                      </p>
+                    )}
                   </div>
                 )}
-                {panel === "earn" && <MoveToYieldCard result={{ network }} account={acct} />}
+                {/* `withdrawOnly` is what actually closes the entrance. Hiding
+                    the buttons above is not enough on its own — the card ships
+                    a Supply/Withdraw toggle, so without this prop a user who
+                    reached the exit could flip straight back into a deposit. */}
+                {panel === "withdraw" && <MoveToYieldCard result={{ network, action: "withdraw" }} account={acct} withdrawOnly />}
                 {/* Convert is a 0x-API flow that exists on Base mainnet only, and
                     SwapCard force-switches the wallet to mainnet before signing.
                     Rendering it while the dashboard is on testnet would move REAL
@@ -1497,8 +1527,7 @@ function PositionRow({ label, pos, apy, onManage, disabled, disabledNote }: {
 }
 
 // ── Landing hero (shown until the wallet connects) ───────────────────────────
-function BankLanding({ bestApy }: { bestApy: number | null }) {
-  const apyText = bestApy != null ? `~${bestApy.toFixed(1)}%` : "up to ~5%";
+function BankLanding() {
   // The lead bullet MIRRORS the panel's primary control so the two can never
   // disagree. With Privy on, the way in is "sign in, we make the wallet" — and
   // the method name is read from the same config the button reads, not typed
@@ -1512,9 +1541,14 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
   const signIn = PRIVY_ENABLED
     ? { icon: "✉️", title: `Sign in with ${describeLoginMethods()} — no seed phrase`, body: "No extension, no app, no 12-word phrase. Signing in creates a wallet that is yours — we never hold the keys." }
     : { icon: "🔌", title: "Bring your own wallet", body: "MetaMask, Coinbase Wallet, Rabby, Phantom, or any WalletConnect wallet. Connect in one tap." };
+  // The second bullet used to promise "Earn ~X% APY on idle USDC". It is the
+  // first thing an unconnected visitor reads, and it sold the one feature this
+  // phase withdraws — so it advertised a door that is now closed. Replaced with
+  // the agent spend console, which is the thing on this page no other wallet
+  // can show (see the SpendConsole comment above).
   const features: { icon: string; title: string; body: string }[] = [
     signIn,
-    { icon: "📈", title: `Earn ${apyText} APY on idle USDC`, body: "Live rates across blue-chip lending (Aave · Morpho). Your USDC works while you sleep — no lockups." },
+    { icon: "📊", title: "See every payment your agent made", body: "Each x402 tool call your agent paid for, itemised in USDC — the ledger a generic wallet cannot reconstruct." },
     { icon: "➡", title: "Send to any wallet or name.base", body: "Pay anyone on Base by address or Basename. Instant, 24/7, no cut-off times." },
     { icon: "🔒", title: "Non-custodial — you hold the keys", body: "You sign every transaction from your own wallet. BlueAgent never holds your keys or funds." },
     { icon: "🌐", title: "On-chain, withdraw anytime", body: "Your money lives on Base, not in a silo. Pull it out whenever you want, in one click." },
@@ -1528,7 +1562,7 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
             A wallet you<br />actually own.
           </h1>
           <p className="font-mono text-[12px] text-slate-400 leading-relaxed mb-5 max-w-md">
-            Hold USDC, earn real yield, and move money on Base — <span className="text-slate-200">non-custodial</span>.
+            Hold USDC, move money, and track every agent payment on Base — <span className="text-slate-200">non-custodial</span>.
             You hold the keys; BlueAgent only prepares the transaction, you sign it.
           </p>
           <div className="space-y-3">
@@ -1559,9 +1593,15 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
             <div className="h-px flex-1 bg-[#1A1A2E]" /><span className="font-mono text-[9px] text-slate-700">SECURED BY YOU</span><div className="h-px flex-1 bg-[#1A1A2E]" />
           </div>
           <div className="flex items-center justify-center gap-4 font-mono text-[9px] text-slate-600">
-            <span>🔒 Non-custodial</span><span>·</span><span>⛓ On Base</span><span>·</span><span>↩ Withdraw anytime</span>
+            <span>🔒 Non-custodial</span><span>·</span><span>⛓ On Base</span><span>·</span><span>🔑 You sign everything</span>
           </div>
-          <p className="font-mono text-[9px] text-slate-700 text-center mt-4">Powered by Base · Aave v3 · Morpho</p>
+          {/* Named Aave v3 and Morpho, which this surface no longer sends money
+              to — the only thing left pointing at them is the withdraw path,
+              and an unconnected visitor has no position to withdraw. Naming a
+              lender under the signup button reads as "your deposit goes here".
+              "Withdraw anytime" left the row above for the same reason: it
+              answers a question about a deposit you can no longer make. */}
+          <p className="font-mono text-[9px] text-slate-700 text-center mt-4">Powered by Base · USDC</p>
         </div>
       </div>
     </div>
