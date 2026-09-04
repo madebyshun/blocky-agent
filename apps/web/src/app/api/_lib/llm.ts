@@ -358,13 +358,22 @@ export interface VirtualsPreset {
 }
 
 // CONTEXT-WINDOW CAVEAT: `contextTokens` is a VENDOR-PUBLISHED figure, not a
-// measured one. Venice's /v1/models reports `availableContextTokens`, so the
-// venice rows are read off the live catalog; the Virtuals catalog returns ids
-// ONLY — no context, no pricing, no capability flags — so those rows carry the
-// model maker's published window. It drives a picker subtitle, nothing
-// load-bearing, but don't quote it as verified.
+// measured one. It drives a picker subtitle, nothing load-bearing, but don't
+// quote it as verified.
+//
+// CORRECTED 2026-09-04. This comment used to say the Virtuals catalog "returns
+// ids ONLY — no context, no pricing, no capability flags". Measured against
+// /v1/models: it returns `contextLength`, `pricing{input,output,cacheInput}`,
+// `name`, `description` and `modality` for all 191 rows. Only the capability
+// flags were genuinely absent. Because the comment said otherwise, nobody went
+// back to the catalog, and two of the numbers below drifted into being wrong:
+// `balanced` and `deep` both claimed 200k while the catalog says 1,000,000 —
+// understating the real window 5x on the two most-used presets. The values here
+// are now reconciled with the catalog and are the pre-fetch FALLBACK only; the
+// display path reads the live figure via `getCatalogModels()`.
+
 export const VIRTUALS_PRESETS: VirtualsPreset[] = [
-  { id: "fast",     provider: "virtuals", model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_000_000, credits: 10 },
+  { id: "fast",     provider: "virtuals", model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_048_576, credits: 10 },
   // NEW — Free. The only 0-credit preset, and deliberately chat-only
   // (`noTools`): a message that costs nothing must not be able to spend a paid
   // Hub tool. Model measured in the live Venice catalog 2026-09-03 —
@@ -375,8 +384,8 @@ export const VIRTUALS_PRESETS: VirtualsPreset[] = [
   // VIRTUALS_PRESETS_V1 (fast, then free) so the picker renders identically
   // before and after the /api/chat/presets fetch resolves.
   { id: "free",     provider: "venice",   model: "qwen3-5-9b",                 label: "Free",     desc: "Qwen 3.5 9B · no credits · chat only",   cost: "●",   contextTokens: 256_000,   credits: 0,   noTools: true },
-  { id: "balanced", provider: "virtuals", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 200_000,   credits: 50 },
-  { id: "deep",     provider: "virtuals", model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 200_000,   credits: 200 },
+  { id: "balanced", provider: "virtuals", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 1_000_000, credits: 50 },
+  { id: "deep",     provider: "virtuals", model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 1_000_000, credits: 200 },
   { id: "private",  provider: "virtuals", model: "e2ee-deepseek-v4-flash",     label: "Private",  desc: "E2EE · no logs · DeepSeek V4",            cost: "●",   contextTokens: 1_000_000, credits: 30,  privacy: true },
   // NEW — Instant. Measured 2026-09-03 against the full tool schema:
   // 1,231 ms and 7,375 prompt tokens, the fastest and the cheapest-to-prompt
@@ -396,8 +405,68 @@ export const VIRTUALS_PRESETS: VirtualsPreset[] = [
   { id: "search",   provider: "venice",   model: "grok-4-3",                   label: "Search",   desc: "Grok 4.3 · live web search · 1M ctx",     cost: "●●",  contextTokens: 1_000_000, credits: 60,  optional: true, webSearch: true },
 ];
 
+/**
+ * One model row, normalised across the two upstreams so a caller never has to
+ * know which provider it came from. Every optional field is `null` when the
+ * provider does not publish it — **never `false` and never a guess**. A models
+ * page that renders `false` for an unpublished capability is asserting a
+ * negative it cannot measure, which is the #143 defect family.
+ */
+export interface CatalogModel {
+  id: string;
+  provider: "virtuals" | "venice";
+  /** Vendor display name, e.g. "Anthropic: Claude Sonnet 5". */
+  name: string | null;
+  description: string | null;
+  /** Vendor-published context window, in tokens. */
+  contextTokens: number | null;
+  /** USD per 1M tokens, as published by the provider. Not what a user pays. */
+  pricing: { input: number | null; output: number | null; cachedInput: number | null } | null;
+  inputModalities: string[];
+  outputModalities: string[];
+  /**
+   * Provider-declared capability flags. Venice publishes 15 of them; Virtuals
+   * publishes none, so this is `null` on every Virtuals row — absent, not false.
+   */
+  capabilities: Record<string, boolean> | null;
+  maxOutputTokens: number | null;
+  privacy: string | null;
+}
+
 const CATALOG_CACHE_MS = 6 * 60 * 60 * 1000; // 6h — matches the "chốt preset" spec
-let _virtualsCatalogCache: { ids: Set<string>; fetchedAt: number } | null = null;
+let _virtualsCatalogCache: { ids: Set<string>; models: Map<string, CatalogModel>; fetchedAt: number } | null = null;
+
+/** Raw shape of one Virtuals /v1/models row. Measured 2026-09-04. */
+type VirtualsCatalogRow = {
+  id?: string;
+  name?: string;
+  description?: string;
+  contextLength?: number;
+  pricing?: { input?: number; output?: number; cacheInput?: number };
+  modality?: { input?: string[]; output?: string[] };
+};
+
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+
+function normaliseVirtualsRow(row: VirtualsCatalogRow): CatalogModel {
+  const p = row.pricing;
+  return {
+    id: row.id as string,
+    provider: "virtuals",
+    name: str(row.name),
+    description: str(row.description),
+    contextTokens: num(row.contextLength),
+    pricing: p ? { input: num(p.input), output: num(p.output), cachedInput: num(p.cacheInput) } : null,
+    inputModalities: Array.isArray(row.modality?.input) ? row.modality.input : [],
+    outputModalities: Array.isArray(row.modality?.output) ? row.modality.output : [],
+    // Virtuals publishes no capability flags at all — see the caveat above
+    // VIRTUALS_PRESETS. `null`, so a renderer shows "unknown" rather than "no".
+    capabilities: null,
+    maxOutputTokens: null,
+    privacy: null,
+  };
+}
 
 /**
  * Fetches the current Virtuals /v1/models catalog and returns the set of
@@ -431,16 +500,19 @@ export async function getVirtualsCatalog(): Promise<Set<string> | null> {
       console.warn(`[virtuals-catalog] /v1/models ${res.status} — using stale cache=${_virtualsCatalogCache?.ids.size ?? 0}`);
       return _virtualsCatalogCache?.ids ?? null;
     }
-    const d = (await res.json()) as { data?: { id?: string }[] };
+    const d = (await res.json()) as { data?: VirtualsCatalogRow[] };
     const ids = new Set<string>();
+    const models = new Map<string, CatalogModel>();
     for (const row of d.data ?? []) {
-      if (typeof row.id === "string" && row.id.length > 0) ids.add(row.id);
+      if (typeof row.id !== "string" || row.id.length === 0) continue;
+      ids.add(row.id);
+      models.set(row.id, normaliseVirtualsRow(row));
     }
     if (ids.size === 0) {
       console.warn("[virtuals-catalog] empty catalog — using stale cache");
       return _virtualsCatalogCache?.ids ?? null;
     }
-    _virtualsCatalogCache = { ids, fetchedAt: now };
+    _virtualsCatalogCache = { ids, models, fetchedAt: now };
     console.log(`[virtuals-catalog] refreshed size=${ids.size}`);
     return ids;
   } catch (e) {
@@ -449,7 +521,53 @@ export async function getVirtualsCatalog(): Promise<Set<string> | null> {
   }
 }
 
-let _veniceCatalogCache: { ids: Set<string>; fetchedAt: number } | null = null;
+let _veniceCatalogCache: { ids: Set<string>; models: Map<string, CatalogModel>; fetchedAt: number } | null = null;
+
+/** Raw shape of one Venice /v1/models row. Measured 2026-09-04. */
+type VeniceCatalogRow = {
+  id?: string;
+  type?: string;
+  context_length?: number;
+  model_spec?: {
+    name?: string;
+    description?: string;
+    availableContextTokens?: number;
+    maxCompletionTokens?: number;
+    privacy?: string;
+    capabilities?: Record<string, unknown>;
+    pricing?: {
+      input?: { usd?: number };
+      output?: { usd?: number };
+      cache_input?: { usd?: number };
+    };
+  };
+};
+
+function normaliseVeniceRow(row: VeniceCatalogRow): CatalogModel {
+  const spec = row.model_spec ?? {};
+  const p = spec.pricing;
+  // Keep only the real booleans. Venice mixes in string values (e.g.
+  // `quantization: "not-available"`), which are not capability answers.
+  const caps: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(spec.capabilities ?? {})) {
+    if (typeof v === "boolean") caps[k] = v;
+  }
+  return {
+    id: row.id as string,
+    provider: "venice",
+    name: str(spec.name),
+    description: str(spec.description),
+    contextTokens: num(spec.availableContextTokens) ?? num(row.context_length),
+    pricing: p
+      ? { input: num(p.input?.usd), output: num(p.output?.usd), cachedInput: num(p.cache_input?.usd) }
+      : null,
+    inputModalities: str(row.type) ? [row.type as string] : [],
+    outputModalities: str(row.type) ? [row.type as string] : [],
+    capabilities: Object.keys(caps).length > 0 ? caps : null,
+    maxOutputTokens: num(spec.maxCompletionTokens),
+    privacy: str(spec.privacy),
+  };
+}
 
 /**
  * Same contract as `getVirtualsCatalog`, for Venice.
@@ -477,22 +595,49 @@ export async function getVeniceCatalog(): Promise<Set<string> | null> {
       console.warn(`[venice-catalog] /v1/models ${res.status} — using stale cache=${_veniceCatalogCache?.ids.size ?? 0}`);
       return _veniceCatalogCache?.ids ?? null;
     }
-    const d = (await res.json()) as { data?: { id?: string }[] };
+    const d = (await res.json()) as { data?: VeniceCatalogRow[] };
     const ids = new Set<string>();
+    const models = new Map<string, CatalogModel>();
     for (const row of d.data ?? []) {
-      if (typeof row.id === "string" && row.id.length > 0) ids.add(row.id);
+      if (typeof row.id !== "string" || row.id.length === 0) continue;
+      ids.add(row.id);
+      models.set(row.id, normaliseVeniceRow(row));
     }
     if (ids.size === 0) {
       console.warn("[venice-catalog] empty catalog — using stale cache");
       return _veniceCatalogCache?.ids ?? null;
     }
-    _veniceCatalogCache = { ids, fetchedAt: now };
+    _veniceCatalogCache = { ids, models, fetchedAt: now };
     console.log(`[venice-catalog] refreshed size=${ids.size}`);
     return ids;
   } catch (e) {
     console.warn(`[venice-catalog] fetch failed: ${(e as Error).message} — using stale cache`);
     return _veniceCatalogCache?.ids ?? null;
   }
+}
+
+/**
+ * The full catalog rows, not just the ids. Backed by the SAME 6h cache and the
+ * same fetch as `getVirtualsCatalog` / `getVeniceCatalog`, so asking for
+ * metadata costs no extra upstream call once either is warm.
+ *
+ * Why both shapes exist: the id-only helpers are the validation path (three
+ * call sites depend on `Set<string>`), and widening their return type would
+ * churn all of them for no behaviour change. This is the display path.
+ *
+ * Returns `null` on the same terms as the id helpers — a null here means "the
+ * catalog is unavailable", which a caller must render as *unknown*, not as an
+ * empty catalog (the #149/#150 bug family).
+ */
+export async function getCatalogModels(
+  provider: "virtuals" | "venice",
+): Promise<Map<string, CatalogModel> | null> {
+  if (provider === "virtuals") {
+    const ids = await getVirtualsCatalog();
+    return ids === null ? null : (_virtualsCatalogCache?.models ?? null);
+  }
+  const ids = await getVeniceCatalog();
+  return ids === null ? null : (_veniceCatalogCache?.models ?? null);
 }
 
 /**
