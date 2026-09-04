@@ -13,11 +13,13 @@ import {
   loadTasks, saveTasks, createTask, migrateOldChat, mergeTaskLists, clearGuestTasks,
   loadCrons, saveCrons, isDue,
 } from "./storage";
+import { localTz } from "@/lib/cron-schedule";
 import { extractArtifacts } from "./artifacts";
 import { enabledSkillsPrompt, loadIntegrations, runSkillCommand } from "./integrations";
 import { enabledConnectorsForChat } from "./connectors";
 import { resolvePresetDispatch, VIRTUALS_PRESETS_V1 } from "./components/presets";
 import { useWorkspaceSync, WORKSPACE_HYDRATED_EVENT, type UseWorkspaceSync } from "./workspace-sync";
+import { useScheduleSync, type UseScheduleSync } from "./use-schedule-sync";
 import { useSiweSignIn } from "./use-siwe-signin";
 import {
   creditCost, deductCredits, addCredits,
@@ -65,6 +67,8 @@ interface ChatContextValue {
   deleteCron: (id: string) => void;
   runCron:    (id: string) => Promise<void>;
   cronRunning: string | null; // id of running cron
+  /** Server-side scheduling: state, count, and the two toggles. */
+  schedule:   UseScheduleSync;
 
   // Sidebar
   sidebarTab:    SidebarTab;
@@ -368,9 +372,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [walletAddr]);
 
   const addCron = useCallback((c: Omit<CronTask, "id">) => {
-    const newCron: CronTask = { ...c, id: Math.random().toString(36).slice(2, 10) };
+    const newCron: CronTask = {
+      ...c,
+      id: Math.random().toString(36).slice(2, 10),
+      // Stamp the zone the user typed the time IN. Without it "09:00" is 09:00
+      // nowhere in particular, and the server would fall back to UTC — a task
+      // set for breakfast in Ho Chi Minh City would fire at 16:00 local.
+      tz:   c.tz   ?? localTz(),
+      // And the preset it should run on, so a later composer change cannot
+      // silently re-price a standing task. See CronTask.tier.
+      tier: c.tier ?? chatTier,
+    };
     setCrons([...crons, newCron]);
-  }, [crons]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [crons, chatTier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateCron = useCallback((id: string, patch: Partial<CronTask>) => {
     setCrons(crons.map(c => c.id === id ? { ...c, ...patch } : c));
@@ -391,16 +405,39 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         // Send the wallet: a task run is a chat message and is metered like
         // one. Without it the run reaches /api/chat as a guest, and its paid
         // Hub tools 402 instead of billing the person who scheduled them.
-        body: JSON.stringify({ prompt: cron.prompt, tier: chatTier, address: walletAddr }),
+        //
+        // `cron.tier` — the preset saved ON THE TASK — not the composer's
+        // current pick, so "Run now" costs what the card says it costs and
+        // matches what the background tick will charge. Older tasks have none
+        // and fall back to the composer, which is what they did before.
+        body: JSON.stringify({ prompt: cron.prompt, tier: cron.tier ?? chatTier, address: walletAddr }),
         signal: AbortSignal.timeout(60_000),
       });
-      const data = await res.json() as { result?: string };
+      const data = await res.json() as {
+        result?: string;
+        error?: string;
+        insufficientCredits?: { needed?: number; balance?: number; message?: string };
+      };
+      if (data.insufficientCredits) {
+        // Out of credits is not a result. Storing it as one would render as a
+        // successful run whose answer happens to be empty — the user would have
+        // no idea why the task stopped producing anything.
+        updateCron(id, {
+          lastRun:   Date.now(),
+          lastError: data.insufficientCredits.message ?? "Not enough credits to run this task.",
+        });
+        return;
+      }
       // Keep the full markdown report (capped to bound localStorage) so the
       // Scheduled card can render it properly on demand, not just a garbled
       // 200-char slice.
-      updateCron(id, { lastRun: Date.now(), lastResult: data.result?.slice(0, 4000) });
-    } catch {
-      updateCron(id, { lastRun: Date.now(), lastResult: "Error running task" });
+      updateCron(id, {
+        lastRun:    Date.now(),
+        lastResult: data.result?.slice(0, 4000),
+        lastError:  data.result ? undefined : (data.error ?? "The model returned nothing."),
+      });
+    } catch (e) {
+      updateCron(id, { lastRun: Date.now(), lastError: (e as Error).message || "Error running task" });
     } finally {
       setCronRunning(null);
     }
@@ -413,6 +450,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // run reaches /api/chat as a guest — its paid Hub tools would 402 for a user
   // who is in fact connected. `walletReady` flips true even when no wallet is
   // found, so a guest still gets their run; it just isn't raced.
+  //
+  // `isDue` returns false for background tasks — the server owns those, and a
+  // tab firing one the tick has already run would charge the user twice for the
+  // same window.
   const autoRanRef = useRef(false);
   useEffect(() => {
     if (!walletReady || autoRanRef.current) return;
@@ -421,6 +462,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (due.length === 0) return;
     (async () => { for (const c of due) await runCron(c.id); })();
   }, [walletReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the server's copy of the background tasks in step with this one, and
+  // adopt whatever the tick did while the tab was closed.
+  const schedule = useScheduleSync(walletAddr, crons, updateCron, signIn);
 
   // ── Chat state ─────────────────────────────────────────────────────────────
   const [streaming,    setStreaming]    = useState(false);
@@ -869,7 +914,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     streaming, error, setError, input, setInput, send, stop,
     chatTier, setChatTier,
     artifacts, artifactsPanelOpen, setArtifactsPanelOpen,
-    crons, addCron, updateCron, deleteCron, runCron, cronRunning,
+    crons, addCron, updateCron, deleteCron, runCron, cronRunning, schedule,
     sidebarTab, setSidebarTab,
     buyOpen, setBuyOpen,
     walletAddr, holderTier, credits, countdown, isUnlimited, daily, cost, outOfCredits,
