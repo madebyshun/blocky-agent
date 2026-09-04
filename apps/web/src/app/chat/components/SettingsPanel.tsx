@@ -5,11 +5,10 @@ import { useChat } from "../ChatContext";
 import { getMemory, clearMemory } from "@/lib/memory";
 import WalletBar from "@/components/WalletBar";
 import TopUpModal from "@/components/TopUpModal";
-import PersonaSelector from "./PersonaSelector";
 
 // The settings categories — Claude-style two-pane modal. The modal owns the
 // left nav + active section; this panel renders the matching content.
-export type SettingsSection = "account" | "credits" | "persona" | "memory" | "about";
+export type SettingsSection = "account" | "credits" | "memory" | "about";
 
 const LINKS: { label: string; sub: string; href: string }[] = [
   { label: "Website",     sub: "blueagent.dev",      href: "https://blueagent.dev" },
@@ -299,17 +298,6 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
               </Link>
             </div>
           )}
-        </>
-      )}
-
-      {/* ── Persona ─────────────────────────────────────────────────────── */}
-      {section === "persona" && (
-        <>
-          <PaneHeader
-            title="Persona"
-            subtitle="The expert role the agent takes on — it swaps the system prompt, not the model. Pick the model (Chat · Fast · Web Search · Deep Think · Private) in the chat composer."
-          />
-          <PersonaSelector />
         </>
       )}
 

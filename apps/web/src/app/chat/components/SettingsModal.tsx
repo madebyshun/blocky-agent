@@ -20,7 +20,7 @@ const QUICK_ROUTES: { href: string; label: string; icon: string }[] = [
 
 /**
  * Account / Settings modal — Claude-style two-pane layout: a left category
- * rail (Account · Credits · Persona · Memory) and a right content pane that
+ * rail (Account · Credits · Memory) and a right content pane that
  * renders the selected section. Replaces the old single-column long-scroll.
  * Opens from the sidebar account chip.
  */
@@ -41,15 +41,6 @@ const SECTIONS: { id: SettingsSection; label: string; icon: React.ReactNode }[] 
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 9v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-  },
-  {
-    id: "persona",
-    label: "Persona",
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
       </svg>
     ),
   },
