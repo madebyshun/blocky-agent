@@ -242,11 +242,16 @@ export const AGENT_SKILLS: AgentSkill[] = [
 
 export const SKILL_PROVIDERS: SkillProvider[] = ["Blue Agent", "Base MCP", "Bundled"];
 
-export const PROVIDER_COLORS: Record<SkillProvider, string> = {
-  "Blue Agent": "#4FC3F7",
-  "Base MCP":   "#34D399",
-  "Bundled":    "#F59E0B",
-};
+/** The one accent. Reserved for things the user can ACT on — the install
+ *  button, focus rings, the "use →" affordance, an enabled toggle.
+ *
+ *  There is deliberately no provider→colour map any more. Each provider used to
+ *  own a hue (blue / green / amber), which meant a screen of ~20 skills carried
+ *  three decorative hues plus three more for status — and the hue was pure
+ *  redundancy, because every badge prints the provider's NAME right beside it.
+ *  Colour that repeats the adjacent label is noise; colour that says something
+ *  the label doesn't (danger, a destructive action) stays. */
+export const SKILL_ACCENT = "#4FC3F7";
 
 export const PROVIDER_ICONS: Record<SkillProvider, string> = {
   "Blue Agent": "⚡",

@@ -43,44 +43,77 @@ const DEFAULT_SKILLS: InstalledSkill[] = [
     enabled: true, installedAt: 0, default: true,
   },
   // ── Bundled skill packs — each teaches the model to chain multiple tools ──
+  //
+  // COST NOTE, and why none of these say "run ALL of them" any more.
+  //
+  // These three are default:true — injected into every user's localStorage and
+  // merged forward on load — so their text sits in EVERY system prompt whether
+  // or not the user ever opted in. Each Hub tool they name is separately
+  // metered and debited from the user's ledger (X-Credits-Debited, set by
+  // api/x402/[tool]). The old text ordered a full sweep. Priced out against
+  // agent-tools.ts at CREDIT_USD = 0.0005:
+  //
+  //   token-safety  4 tools  $0.95  = 1,900 credits
+  //   base-builder  4 tools  $0.75  = 1,500 credits
+  //   trader-intel  5 tools  $0.90  = 1,800 credits
+  //
+  // A connected wallet gets WALLET_DAILY = 500 credits/day and a guest gets
+  // GUEST_DAILY = 100 (lib/credits.ts). So one obeyed sweep is ~3-4x a member's
+  // ENTIRE DAY and up to 19x a guest's — spent on a single question, from a
+  // pack nobody switched on. In practice the user does not even get the sweep
+  // they paid for: the ledger runs dry partway and the rest fail
+  // insufficient_credits.
+  //
+  // Second reason the mandate was wrong: it ordered tools whose REQUIRED input
+  // the request often does not contain. hub_whale_signal requires `address`,
+  // hub_dex_flow requires `token`, hub_repo_health requires `url`. "What should
+  // I buy?" supplies none of them, and a prompt that says run all five pushes
+  // the model to invent one — the exact failure CLAUDE.md forbids.
+  //
+  // So each pack now says: pick what the question needs, run only what you have
+  // real inputs for, and sweep only on an explicit ask. If you add a tool to a
+  // pack, re-price the comment above — the tools are not free.
   {
     name: "token-safety-bundle",
-    description: "Token Safety bundle — chains hub_risk_gate + hub_honeypot + hub_contract_trust + hub_key_exposure",
+    description: "Token Safety — hub_risk_gate · hub_honeypot · hub_contract_trust · hub_key_exposure",
     url: "",
     content: `## Token Safety Bundle (active)
-When the user asks about token or contract safety, run ALL four tools together (not just one):
+For token or contract safety questions, these four tools are available. All take a contract address:
 - hub_risk_gate: overall risk score and critical flags
 - hub_honeypot: buy/sell trap detection and tax analysis
 - hub_contract_trust: verification status and trust signals
 - hub_key_exposure: backdoor, private key, and ownership risk
-Chain them sequentially and synthesize into one verdict. A single tool gives an incomplete picture.`,
+Start with hub_risk_gate — it is the broadest single read. Add the others only when the question calls for them (a trade → hub_honeypot; "can the dev rug me?" → hub_key_exposure), or when the user explicitly asks for a full sweep. Each tool is separately charged to the user, so do not run all four by reflex.
+Say which checks you ran and which you skipped, and never state a verdict a tool did not return.`,
     enabled: true, installedAt: 0, default: true,
   },
   {
     name: "base-builder-bundle",
-    description: "Base Builder bundle — chains hub_repo_health + hub_builder_score + hub_base_grant + hub_builder_dd",
+    description: "Base Builder — hub_repo_health · hub_builder_score · hub_base_grant · hub_builder_dd",
     url: "",
     content: `## Base Builder Bundle (active)
-When evaluating a Base builder, project, or team, run all four tools together:
-- hub_repo_health: GitHub activity, commit frequency, contributor count
-- hub_builder_score: overall credibility and onchain builder signals
-- hub_base_grant: grant eligibility and alignment with Base ecosystem
-- hub_builder_dd: comprehensive due diligence report
-Combine all four into a structured assessment with a clear INVEST / WATCH / PASS verdict.`,
+For evaluating a Base builder, project, or team:
+- hub_repo_health: GitHub activity, commit frequency, contributor count — needs a repo URL
+- hub_builder_score: credibility and onchain builder signals — needs an X/Twitter handle
+- hub_base_grant: grant eligibility and Base ecosystem alignment
+- hub_builder_dd: full due diligence — takes a handle OR a 0x address
+Run only the tools whose input the user actually gave you. If they named a handle but no repo, do not guess a repo URL — skip hub_repo_health and say so. hub_builder_dd is the deep one; reach for it when the user wants a real verdict, not as a warm-up.
+When you do have several reads, combine them into an INVEST / WATCH / PASS assessment and state which inputs were missing.`,
     enabled: true, installedAt: 0, default: true,
   },
   {
     name: "trader-intel-bundle",
-    description: "Trader Intel bundle — chains hub_token_pick + hub_whale_signal + hub_narrative_pulse + hub_token_momentum + hub_dex_flow",
+    description: "Trader Intel — hub_token_pick · hub_whale_signal · hub_narrative_pulse · hub_token_momentum · hub_dex_flow",
     url: "",
     content: `## Trader Intel Bundle (active)
-For trading decisions and market edge, run the full intelligence stack:
-- hub_token_pick: AI-generated token selection signal
-- hub_whale_signal: large wallet movements and smart money flow
-- hub_narrative_pulse: CT narrative tracker and trend signals
-- hub_token_momentum: price/volume momentum indicators
-- hub_dex_flow: real-time DEX order flow and liquidity depth
-For a serious trade thesis, synthesize all five into BUY / WATCH / AVOID with a confidence score.`,
+For trading decisions and market edge:
+- hub_token_pick: AI-generated token selection signal — no input needed
+- hub_token_momentum: what is breaking out right now — no input needed
+- hub_narrative_pulse: which narratives are running and whether the entry window is still open
+- hub_whale_signal: what one wallet is doing on-chain — REQUIRES a 0x address
+- hub_dex_flow: buy/sell pressure for one token — REQUIRES a token address
+Match the tool to the question. "What should I buy?" / "what's moving?" needs no address — use hub_token_pick or hub_token_momentum. Only call hub_whale_signal or hub_dex_flow when the user actually supplied an address; NEVER invent one to complete a set.
+Run the full stack only when the user explicitly asks for a full thesis — it bills five tools. When you do, synthesize into BUY / WATCH / AVOID with a confidence score, and name the tools that fed it.`,
     enabled: true, installedAt: 0, default: true,
   },
 ];
@@ -93,16 +126,44 @@ export function loadSkills(): InstalledSkill[] {
     if (!raw) { localStorage.setItem(SKILLS_KEY, JSON.stringify(DEFAULT_SKILLS)); return DEFAULT_SKILLS; }
     const list: InstalledSkill[] = JSON.parse(raw);
     if (!Array.isArray(list)) return DEFAULT_SKILLS;
-    // Merge: inject any DEFAULT_SKILLS not yet in the stored list so existing
-    // users automatically receive new default/bundled skills on next load.
-    const names = new Set(list.map(s => s.name));
+
+    // Merge, in two directions.
+    //
+    // (1) REFRESH the text of every default pack from DEFAULT_SKILLS. This used
+    //     to be missing, and the omission was load-bearing: a default skill was
+    //     written to localStorage once and then frozen there forever, so editing
+    //     the pack in this file only ever reached users who had never opened the
+    //     app. Anyone already using Blue Chat kept the original copy — including
+    //     the "run ALL four/five tools together" mandate these packs no longer
+    //     make. A default pack is OUR prompt, shipped with the build, not user
+    //     data; the file is the source of truth for its wording.
+    //
+    //     `enabled` is the exception and is preserved from storage, because that
+    //     one IS the user's decision. Someone who switched a pack off must stay
+    //     switched off — a content refresh is not a licence to re-enable it.
+    //
+    // (2) INJECT any default pack not in storage yet, so new packs reach
+    //     existing users (the original behaviour).
+    const byName = new Map(DEFAULT_SKILLS.map(d => [d.name, d]));
+    let changed  = false;
+
+    const refreshed = list.map(s => {
+      const def = s.default ? byName.get(s.name) : undefined;
+      if (!def) return s;
+      if (def.content === s.content && def.description === s.description) return s;
+      changed = true;
+      return { ...s, content: def.content, description: def.description };
+    });
+
+    const names       = new Set(refreshed.map(s => s.name));
     const newDefaults = DEFAULT_SKILLS.filter(d => !names.has(d.name));
-    if (newDefaults.length > 0) {
-      const merged = [...list, ...newDefaults];
+    if (newDefaults.length > 0) changed = true;
+
+    const merged = newDefaults.length > 0 ? [...refreshed, ...newDefaults] : refreshed;
+    if (changed) {
       try { localStorage.setItem(SKILLS_KEY, JSON.stringify(merged.slice(0, 50))); } catch { /* blocked */ }
-      return merged;
     }
-    return list;
+    return merged;
   } catch { return DEFAULT_SKILLS; }
 }
 export function saveSkills(list: InstalledSkill[]): void {

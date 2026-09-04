@@ -3,35 +3,30 @@
 import { useState } from "react";
 import BrandMark from "@/components/BrandMark";
 import {
-  AGENT_SKILLS, SKILL_PROVIDERS, PROVIDER_COLORS, PROVIDER_ICONS, PROVIDER_BRANDS,
+  AGENT_SKILLS, SKILL_PROVIDERS, SKILL_ACCENT, PROVIDER_ICONS, PROVIDER_BRANDS,
   type SkillProvider, type SkillAuthor,
 } from "../agent-skills";
 import { useChat } from "../ChatContext";
 import { useIntegrations, setSkillEnabled, removeSkill, runSkillCommand } from "../integrations";
 import { useSkillUsage } from "../use-skill-usage";
 
-// ── Provider pill colors ───────────────────────────────────────────────────────
-const PROVIDER_BG: Record<SkillProvider, string> = {
-  "Blue Agent": "#4FC3F7",
-  "Base MCP":   "#34D399",
-  "Bundled":    "#F59E0B",
-};
-
-// ── Status styles ──────────────────────────────────────────────────────────────
-const STATUS_STYLE: Record<string, { label: string; color: string }> = {
-  active:    { label: "active",    color: "#34D399" },
-  available: { label: "available", color: "#60A5FA" },
-  soon:      { label: "soon",      color: "#475569" },
-};
+// One accent, one border, one surface. Everything else is slate.
+//
+// This panel used to carry six hues at once — three for provider (blue / green /
+// amber) and three more for status (green / blue / slate) — none of which said
+// anything the text beside it wasn't already saying. Colour now marks only two
+// things: what you can ACT on (SKILL_ACCENT) and what is DESTRUCTIVE (the red
+// remove hover). Everything a label already explains is rendered in slate.
+const BORDER  = "#1A1A2E";
+const SURFACE = "#0A0A12";
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function ProviderBadge({ provider }: { provider: SkillProvider }) {
-  const color = PROVIDER_BG[provider];
   return (
     <span
-      className="font-mono text-[8px] px-1.5 py-0.5 rounded border shrink-0"
-      style={{ color, borderColor: `${color}30`, background: `${color}10` }}
+      className="font-mono text-[8px] px-1.5 py-0.5 rounded border shrink-0 text-slate-500"
+      style={{ borderColor: BORDER, background: SURFACE }}
     >
       {PROVIDER_ICONS[provider]} {provider}
     </span>
@@ -174,7 +169,6 @@ export default function SkillsPanel({ onPick, onUse }: {
             All
           </button>
           {SKILL_PROVIDERS.map(p => {
-            const color   = PROVIDER_BG[p];
             const isActive = activeProvider === p;
             const count   = AGENT_SKILLS.filter(s => s.provider === p && s.status === "active").length;
             return (
@@ -183,7 +177,7 @@ export default function SkillsPanel({ onPick, onUse }: {
                 onClick={() => setActiveProvider(p)}
                 className="flex items-center gap-1 font-mono text-[10px] px-2.5 py-1 rounded-lg border transition-all"
                 style={isActive
-                  ? { color, background: `${color}15`, borderColor: `${color}35` }
+                  ? { color: "white", background: "#ffffff15", borderColor: "#ffffff25" }
                   : { color: "#475569", borderColor: "transparent" }}
               >
                 <span>{PROVIDER_ICONS[p]}</span>
@@ -203,8 +197,8 @@ export default function SkillsPanel({ onPick, onUse }: {
               Default / bundled skills are always-on and shown in the ACTIVE catalog below. */}
           <section>
             <div className="flex items-center justify-between mb-3">
-              <p className="font-mono text-[9px] text-[#4FC3F7] tracking-widest flex items-center gap-2">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#4FC3F7]" />
+              <p className="font-mono text-[9px] text-slate-500 tracking-widest flex items-center gap-2">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-700" />
                 INSTALLED · {userInstalled.length}
               </p>
               <button
@@ -225,7 +219,7 @@ export default function SkillsPanel({ onPick, onUse }: {
                     onClick={() => setSkillEnabled(s.name, !s.enabled)}
                     title={s.enabled ? "Disable" : "Enable"}
                     className="relative w-9 h-5 rounded-full transition-colors shrink-0"
-                    style={{ background: s.enabled ? "#34D39955" : "#1A1A2E" }}
+                    style={{ background: s.enabled ? `${SKILL_ACCENT}55` : BORDER }}
                   >
                     <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={{ left: s.enabled ? 18 : 2 }} />
                   </button>
@@ -254,13 +248,12 @@ export default function SkillsPanel({ onPick, onUse }: {
           {/* Active skills */}
           {active.length > 0 && (
             <section>
-              <p className="font-mono text-[9px] text-[#34D399] tracking-widest mb-3 flex items-center gap-2">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#34D399]" />
+              <p className="font-mono text-[9px] text-slate-500 tracking-widest mb-3 flex items-center gap-2">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-700" />
                 ACTIVE · {active.length}
               </p>
               <div className="space-y-1.5">
                 {active.map(skill => {
-                  const color = PROVIDER_COLORS[skill.provider];
                   const runs  = runsOf(skill);
                   // Meta row appears only when there is something TRUE to say —
                   // a real backend operator, or a run count we actually recorded.
@@ -271,8 +264,9 @@ export default function SkillsPanel({ onPick, onUse }: {
                       onClick={() => use(skill.trigger)}
                       className="group w-full text-left flex items-center gap-4 px-4 py-3 rounded-xl border border-transparent hover:border-[#1A1A2E] hover:bg-[#0A0A12] transition-all"
                     >
-                      {/* Provider dot */}
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                      {/* List bullet — a bullet, not a code. It used to be tinted
+                          by provider, which the badge on the right already says. */}
+                      <span className="w-2 h-2 rounded-full shrink-0 bg-slate-700" />
 
                       {/* Info */}
                       <div className="flex-1 min-w-0">
@@ -282,8 +276,8 @@ export default function SkillsPanel({ onPick, onUse }: {
                           </span>
                           {skill.badge && (
                             <span
-                              className="font-mono text-[8px] px-1.5 py-0.5 rounded border"
-                              style={{ color, borderColor: `${color}35`, background: `${color}10` }}
+                              className="font-mono text-[8px] px-1.5 py-0.5 rounded border text-slate-500"
+                              style={{ borderColor: BORDER, background: SURFACE }}
                             >
                               {skill.badge}
                             </span>
@@ -307,8 +301,8 @@ export default function SkillsPanel({ onPick, onUse }: {
                             {skill.tools.map(t => (
                               <span
                                 key={t}
-                                className="font-mono text-[8px] px-1.5 py-0.5 rounded"
-                                style={{ background: "#F59E0B0A", color: "#F59E0B70", border: "1px solid #F59E0B20" }}
+                                className="font-mono text-[8px] px-1.5 py-0.5 rounded text-slate-600"
+                                style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
                               >
                                 {t}
                               </span>
@@ -320,10 +314,11 @@ export default function SkillsPanel({ onPick, onUse }: {
                       {/* Provider + use */}
                       <div className="flex flex-col items-end gap-1 shrink-0">
                         <ProviderBadge provider={skill.provider} />
+                        {/* The one accent, on the one thing you can act on. */}
                         {skill.trigger && (
                           <span
                             className="font-mono text-[9px] opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded"
-                            style={{ color, background: `${color}10` }}
+                            style={{ color: SKILL_ACCENT, background: `${SKILL_ACCENT}10` }}
                           >
                             use →
                           </span>
@@ -339,20 +334,19 @@ export default function SkillsPanel({ onPick, onUse }: {
           {/* Available skills */}
           {available.length > 0 && (
             <section>
-              <p className="font-mono text-[9px] text-[#60A5FA] tracking-widest mb-3 flex items-center gap-2">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#60A5FA]" />
+              <p className="font-mono text-[9px] text-slate-500 tracking-widest mb-3 flex items-center gap-2">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-700" />
                 AVAILABLE · {available.length}
               </p>
               <div className="space-y-1.5">
                 {available.map(skill => {
-                  const color = PROVIDER_COLORS[skill.provider];
                   return (
                     <button
                       key={skill.id}
                       onClick={() => use(skill.trigger)}
                       className="group w-full text-left flex items-center gap-4 px-4 py-3 rounded-xl border border-transparent hover:border-[#1A1A2E] hover:bg-[#0A0A12] transition-all"
                     >
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color, opacity: 0.5 }} />
+                      <span className="w-2 h-2 rounded-full shrink-0 bg-slate-800" />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-0.5">
                           <span className="font-mono text-sm text-slate-400 group-hover:text-slate-200 transition-colors">{skill.name}</span>
@@ -363,7 +357,7 @@ export default function SkillsPanel({ onPick, onUse }: {
                       {skill.trigger && (
                         <span
                           className="font-mono text-[9px] shrink-0 opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded"
-                          style={{ color, background: `${color}10` }}
+                          style={{ color: SKILL_ACCENT, background: `${SKILL_ACCENT}10` }}
                         >
                           use →
                         </span>
@@ -408,7 +402,6 @@ export default function SkillsPanel({ onPick, onUse }: {
               <p className="font-mono text-[9px] text-slate-600 tracking-widest mb-3">// POWERED BY</p>
               <div className="grid grid-cols-2 gap-3">
                 {SKILL_PROVIDERS.map(p => {
-                  const color  = PROVIDER_BG[p];
                   const count  = AGENT_SKILLS.filter(s => s.provider === p && s.status === "active").length;
                   const total  = AGENT_SKILLS.filter(s => s.provider === p).length;
                   return (
@@ -416,14 +409,16 @@ export default function SkillsPanel({ onPick, onUse }: {
                       key={p}
                       onClick={() => setActiveProvider(p)}
                       className="px-3 py-3 rounded-xl border text-left transition-all hover:scale-[1.02]"
-                      style={{ borderColor: `${color}25`, background: `${color}08` }}
+                      style={{ borderColor: BORDER, background: SURFACE }}
                     >
+                      {/* The logo is the brand's own colour and stays — a mark
+                          identifies its owner, which a slate square would not. */}
                       <div className="mb-1.5">
                         {PROVIDER_BRANDS[p]
                           ? <BrandMark brand={PROVIDER_BRANDS[p]} size={24} />
                           : <span className="text-lg">{PROVIDER_ICONS[p]}</span>}
                       </div>
-                      <div className="font-mono text-xs font-semibold mb-0.5" style={{ color }}>{p}</div>
+                      <div className="font-mono text-xs font-semibold mb-0.5 text-slate-300">{p}</div>
                       <div className="font-mono text-[9px] text-slate-600">{count}/{total} active</div>
                     </button>
                   );
