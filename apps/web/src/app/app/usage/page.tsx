@@ -4,9 +4,13 @@
 //
 // 100% real data: reads GET /api/credits/balance/[address] (getBalance in the
 // credit ledger). No mock numbers. Shows the two spendable buckets — the daily
-// tier allowance (use-it-or-lose-it) and the cumulative USDC-topup pool — plus
-// all-time spend and the recent ledger events. "Top up" opens the same
-// TopUpModal used everywhere; the pricing table lives on /plans.
+// tier allowance (use-it-or-lose-it) and the USDC-topup pool — plus all-time
+// spend and the recent ledger events. "Top up" opens the same TopUpModal used
+// everywhere; the pricing table lives on /plans.
+//
+// This is the ONE page that breaks the credit arithmetic down. The dashboard
+// used to reprint three of these four figures from the same endpoint, so the
+// two could disagree — and did. It now shows the balance and links here.
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -86,6 +90,22 @@ export default function UsagePage() {
   const dailyLeft = data?.dailyRemaining ?? 0;
   const pool      = data?.pool ?? 0;
 
+  // "Spent all-time" needs BOTH halves. `spent` is only what came out of the
+  // paid pool — a debit drains the free daily bucket first and just the
+  // overflow lands there — so on its own it reads 0 for ever for anyone living
+  // inside their daily allowance, under a label claiming to count chat and tool
+  // runs. `freeSpent` is the free half, and it has three states, not two:
+  //   number, exact    → the wallet's whole history is counted
+  //   number, partial  → counting began mid-life; the total is a FLOOR
+  //   undefined        → never measured; say so instead of adding a 0
+  const poolSpent = data?.spent ?? 0;
+  const freeSpent = data?.freeSpent;
+  const spentTotal = poolSpent + (freeSpent ?? 0);
+  const spentSub =
+    freeSpent === undefined      ? "from top-up pool · free use not counted"
+    : data?.freeSpentPartial     ? "chat + tool runs · at least"
+    :                              "chat + tool runs";
+
   return (
     <div className="flex flex-col h-full bg-[#050508] overflow-hidden">
       {/* Header — mirrors PanelHost so promoted pages look uniform. */}
@@ -148,13 +168,12 @@ export default function UsagePage() {
               <StatCard
                 label="Top-up pool"
                 value={loading && !data ? "…" : pool.toLocaleString()}
-                sub="cumulative · never resets"
-                accent="#34D399"
+                sub="bought with USDC · no daily reset"
               />
               <StatCard
                 label="Spent all-time"
-                value={loading && !data ? "…" : (data?.spent ?? 0).toLocaleString()}
-                sub="chat + tool runs"
+                value={loading && !data ? "…" : spentTotal.toLocaleString()}
+                sub={spentSub}
               />
             </div>
 
