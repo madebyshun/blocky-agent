@@ -160,13 +160,15 @@ export default function OverviewView() {
   const [copied,       setCopied]       = useState(false);
   const [builderScore, setBuilderScore] = useState<number | null>(null);
   const [scoreLoading, setScoreLoading] = useState(false);
-  // Claimable credit balance from the ledger API: topup (off-chain USDC
-  // top-ups) - spent (chat + tool runs). `accrued` is still in the payload
-  // but is a 0-returning stub since the token-free rebuild, so it is no
-  // longer surfaced — showing a permanent 0 read as "accrued" invites the
-  // same misreading the stake tier ladder did.
+  // Only the two numbers this view renders. It used to hold accrued / topup /
+  // spent / dailyCr too and print three of them — the same figures /app/usage
+  // shows, off the same endpoint, relabelled. The breakdown belongs to the page
+  // that owns it; a dashboard keeps the headline.
+  // (`accrued` was already unrendered before that: a 0-returning stub since the
+  // token-free rebuild, and a permanent 0 labelled "accrued" invites the same
+  // misreading the stake tier ladder did.)
   const [ledger, setLedger] = useState<{
-    accrued: number; topup: number; spent: number; balance: number; dailyCr: number;
+    balance: number; dailyRemaining: number | null;
   } | null>(null);
 
   useEffect(() => { setChatStats(loadChatStats(address)); }, [address]);
@@ -228,11 +230,10 @@ export default function OverviewView() {
         if (cancelled) return;
         if (d?.balance === undefined) { setLedger(null); return; }
         setLedger({
-          accrued: Number(d.accrued ?? 0),
-          topup:   Number(d.topup   ?? 0),
-          spent:   Number(d.spent   ?? 0),
           balance: Number(d.balance ?? 0),
-          dailyCr: Number(d.dailyCr ?? 0),
+          // An older server that doesn't send this field leaves it null, and
+          // the sub-line drops the clause rather than printing a 0 free-today.
+          dailyRemaining: Number.isFinite(Number(d.dailyRemaining)) ? Number(d.dailyRemaining) : null,
         });
       })
       .catch(() => { if (!cancelled) setLedger(null); });
@@ -318,44 +319,31 @@ export default function OverviewView() {
                 </div>
               </div>
 
-              {/* 3 stat chips reading from the credit ledger. BALANCE is the
-                  spendable number; TOP-UP and SPENT explain the arithmetic
-                  behind it. The former STAKED and USDC YIELD chips went with
-                  the stake surface — both read a mechanism that no longer
-                  feeds credits or pays out. */}
-              <div className="grid grid-cols-3 gap-2">
-                <StatChip
-                  label="BALANCE"
-                  value={ledger ? ledger.balance.toLocaleString() : "—"}
-                  sub="credits · spendable"
-                  color="#4FC3F7" />
-                <StatChip
-                  label="TOP-UP"
-                  value={ledger ? ledger.topup.toLocaleString() : "—"}
-                  sub="credits · bought"
-                  color="#22C55E" />
-                <StatChip
-                  label="SPENT"
-                  value={ledger ? ledger.spent.toLocaleString() : "—"}
-                  sub="chat · tool runs"
-                  color="#A78BFA" />
-              </div>
+              {/* ONE credit number, not three.
+                  This cell printed BALANCE / TOP-UP / SPENT — three of the four
+                  headline figures on /app/usage, off the same
+                  /api/credits/balance call, relabelled. Under them ran the line
+                  "{topup} top-up − {spent} spent = {balance} balance", which is
+                  false: that subtraction gives the PAID POOL, and balance is
+                  pool + the day's unspent free allowance. It was short by
+                  dailyRemaining for anyone who hadn't burned through their daily
+                  credits — the common case — so the dashboard's own three
+                  numbers visibly failed to add up.
+                  The arithmetic now lives on the one page that owns it. */}
+              <StatChip
+                label="CREDITS"
+                value={ledger ? ledger.balance.toLocaleString() : "—"}
+                sub={ledger?.dailyRemaining != null
+                  ? `spendable now · ${ledger.dailyRemaining.toLocaleString()} free today`
+                  : "spendable now"}
+                color="#4FC3F7" />
 
-              {/* Ledger breakdown — surfaces the spent + top-up history so the
-                  user understands the BALANCE arithmetic. Only renders once
-                  the ledger has loaded so we don't flash a zero row. */}
-              {ledger && (ledger.spent > 0 || ledger.topup > 0) && (
-                <div className="mt-3 flex items-center gap-2 text-[10px] text-slate-600">
-                  <svg className="w-3 h-3 shrink-0 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                  </svg>
-                  <span>
-                    <span className="text-[#22C55E]">{ledger.topup.toLocaleString()} top-up</span>
-                    {ledger.spent > 0  && <> − <span className="text-[#A78BFA]">{ledger.spent.toLocaleString()} spent</span></>}
-                    {" "}= <span className="text-slate-400 font-medium">{ledger.balance.toLocaleString()} balance</span>
-                  </span>
-                </div>
-              )}
+              <div className="mt-3 flex items-center justify-between gap-3 text-[10px]">
+                <span className="text-slate-600 truncate">Top-ups, spend and history</span>
+                <Link href="/app/usage" className="text-[#4FC3F7] hover:underline shrink-0">
+                  Usage →
+                </Link>
+              </div>
             </BentoCell>
 
             {/* The STAKE mini-cell stood here — staked total, pending USDC,
