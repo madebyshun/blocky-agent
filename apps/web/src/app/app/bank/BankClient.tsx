@@ -28,6 +28,7 @@ import TransactionHistory, { type WalletTx } from "./TransactionHistory";
 // Shared with the Blue Hub home — lives in components/, not this route folder.
 import SpendConsole from "@/components/SpendConsole";
 import TokenTable from "./TokenTable";
+import StockTable from "./StockTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
 import { useWalletIdentity } from "@/lib/wallet/identity";
 import { buildWalletState } from "@/lib/state";
@@ -1131,6 +1132,14 @@ export default function BankPage() {
 
           {/* ── Section 2.5: Token holdings — full live portfolio ──────────── */}
           <TokenTable address={acct} onQuickSell={quickSell} />
+
+          {/* ── Section 2.6: Tokenized stocks — Base B20 + Robinhood RWA ────
+              Mainnet-only by construction: B20 stocks exist on Base 8453 and
+              the RWA registry on RH 4663, and neither has a testnet twin. On a
+              testnet dashboard this would show mainnet positions under a banner
+              saying "no real value", so it is absent instead — the same refusal
+              the Convert panel makes. */}
+          {!isTestnet && <StockTable address={acct} />}
 
           {/* ── Section 3: Transaction History ─────────────────────────────── */}
           <TransactionHistory
