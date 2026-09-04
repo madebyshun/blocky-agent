@@ -388,7 +388,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const res = await fetch("/api/cron/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: cron.prompt, tier: chatTier }),
+        // Send the wallet: a task run is a chat message and is metered like
+        // one. Without it the run reaches /api/chat as a guest, and its paid
+        // Hub tools 402 instead of billing the person who scheduled them.
+        body: JSON.stringify({ prompt: cron.prompt, tier: chatTier, address: walletAddr }),
         signal: AbortSignal.timeout(60_000),
       });
       const data = await res.json() as { result?: string };
@@ -401,14 +404,23 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } finally {
       setCronRunning(null);
     }
-  }, [crons, chatTier]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [crons, chatTier, walletAddr]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-run due crons on mount
+  // Auto-run due crons — once, after wallet detection settles.
+  //
+  // Waiting on `walletReady` is load-bearing, not tidiness: detection is async,
+  // so a mount-only effect fires while `walletAddr` is still undefined and the
+  // run reaches /api/chat as a guest — its paid Hub tools would 402 for a user
+  // who is in fact connected. `walletReady` flips true even when no wallet is
+  // found, so a guest still gets their run; it just isn't raced.
+  const autoRanRef = useRef(false);
   useEffect(() => {
+    if (!walletReady || autoRanRef.current) return;
+    autoRanRef.current = true;
     const due = crons.filter(isDue);
     if (due.length === 0) return;
     (async () => { for (const c of due) await runCron(c.id); })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [walletReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Chat state ─────────────────────────────────────────────────────────────
   const [streaming,    setStreaming]    = useState(false);

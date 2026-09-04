@@ -15,18 +15,22 @@
  *   and avoids duplicating (and drifting) the tool catalog.
  *
  * Rule: real-data, the LLM must NOT fabricate data.
+ *
+ * PRIVILEGE: none. This route is reachable by anyone — it is the "Run now"
+ * button, called straight from the browser — so it must never hold authority
+ * the caller doesn't already have. It used to attach INTERNAL_SERVICE_KEY while
+ * forwarding no wallet, which is precisely the combination `/api/chat` reads as
+ * "authorized server job with no end-user" and answers by free-bypassing the
+ * x402 paywall on every paid Hub tool. Anyone who could POST here could spend
+ * the operator's tool budget anonymously. Forwarding the caller's own address
+ * instead makes a scheduled run cost exactly what typing the same prompt into
+ * the composer costs, which is the only defensible price for it.
  */
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const BASE_URL     = process.env.NEXT_PUBLIC_APP_URL ?? "https://blueagent.dev";
-const INTERNAL_KEY = process.env.INTERNAL_SERVICE_KEY ?? "";
-
-// Chat route only knows the bankr tiers fast | pro | max. Cron may pass any
-// ModelTier id; coerce anything unknown to `pro` so we always get a tool-
-// enabled Anthropic run (Venice path is intentionally NOT used here).
-const KNOWN_TIERS = new Set(["fast", "pro", "max"]);
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://blueagent.dev";
 
 // Expand bare slash commands into an explicit, tool-grounded ask so the model
 // reliably calls the backing Hub tool instead of answering from memory.
@@ -90,28 +94,33 @@ async function collectSSEText(res: Response): Promise<string> {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { prompt?: string; tier?: string };
+    const body = (await req.json()) as { prompt?: string; tier?: string; address?: string };
     const prompt = (body.prompt ?? "").trim();
-    const tier = KNOWN_TIERS.has(body.tier ?? "") ? (body.tier as string) : "pro";
+    // Pass `tier` through untouched. This route used to keep its own
+    // `fast | pro | max` allow-list and coerce everything else to `pro`, which
+    // silently ran Deep/Private/Grok tasks on the default model — a third copy
+    // of the tier table, drifting exactly the way the chat price tables did.
+    // /api/chat already resolves tiers (and prices them); one owner is enough.
+    const tier = (body.tier ?? "").trim() || "pro";
+    const address = (body.address ?? "").trim();
 
     if (!prompt) {
       return NextResponse.json({ error: "prompt required" }, { status: 400 });
     }
 
     // Route through the live chat pipeline so the model has the real-data Hub
-    // tools available. Carry the internal key so /api/chat recognizes this as an
-    // authorized server job → its paid tools may free-bypass (browser guests,
-    // which can't supply the key, stay blocked from paid tools).
+    // tools available — as the CALLER, with no borrowed authority. Forwarding
+    // the wallet lets /api/chat set X-Blue-User on its x402 calls, so paid Hub
+    // tools still run and are billed to the person who asked for them.
     const res = await fetch(`${BASE_URL}/api/chat`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(INTERNAL_KEY ? { "X-Blue-Internal": INTERNAL_KEY } : {}),
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "user", content: expandPrompt(prompt) }],
         tier,
-        // Omit `provider` → Anthropic/Bankr path WITH HUB_TOOLS (real data).
+        // Only forward a well-formed address; junk here would be sent onward as
+        // a ledger key. Absent/invalid → the run is treated as a guest chat.
+        ...(/^0x[a-fA-F0-9]{40}$/.test(address) ? { address } : {}),
       }),
       signal: AbortSignal.timeout(90_000),
     });
