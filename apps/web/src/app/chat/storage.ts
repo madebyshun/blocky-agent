@@ -1,12 +1,10 @@
 // Blue Chat v2 — localStorage helpers
-import type { ChatTask, CronTask, PersonaId, CronSchedule } from "./types";
+import type { ChatTask, CronTask, CronSchedule } from "./types";
 
 // ── Key helpers ────────────────────────────────────────────────────────────────
 
 const tasksKey  = (a?: string) => a ? `blue_tasks_v1_${a.toLowerCase()}`          : "blue_tasks_v1_guest";
 const cronsKey  = (a?: string) => a ? `blue_crons_v1_${a.toLowerCase()}`          : "blue_crons_v1_guest";
-const personaKey= (a?: string) => a ? `blue_persona_v1_${a.toLowerCase()}`        : "blue_persona_v1_guest";
-const customKey = (a?: string) => a ? `blue_persona_custom_v1_${a.toLowerCase()}` : "blue_persona_custom_v1_guest";
 const oldChatKey= (a?: string) => a ? `blue_chat_v1_${a}`                         : "blue_chat_v1_guest";
 
 function uid() {
@@ -44,12 +42,11 @@ export function migrateOldChat(addr?: string): ChatTask | null {
       createdAt: Date.now() - 86_400_000,
       updatedAt: Date.now() - 86_400_000,
       model:     "pro",
-      persona:   "blue-agent",
     };
   } catch { return null; }
 }
 
-export function createTask(model: string, persona: PersonaId): ChatTask {
+export function createTask(model: string): ChatTask {
   return {
     id:        uid(),
     title:     "",
@@ -57,7 +54,6 @@ export function createTask(model: string, persona: PersonaId): ChatTask {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     model,
-    persona,
   };
 }
 
@@ -141,26 +137,4 @@ export function nextRunLabel(cron: CronTask): string {
   if (h >= 24) return `earliest in ${Math.floor(h / 24)}d`;
   if (h > 0)   return `earliest in ${h}h ${m}m`;
   return `earliest in ${m}m`;
-}
-
-// ── Persona ───────────────────────────────────────────────────────────────────
-
-export function loadPersona(addr?: string): PersonaId {
-  if (typeof window === "undefined") return "blue-agent";
-  return (localStorage.getItem(personaKey(addr)) ?? "blue-agent") as PersonaId;
-}
-
-export function savePersona(id: PersonaId, addr?: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(personaKey(addr), id);
-}
-
-export function loadCustomPrompt(addr?: string): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(customKey(addr)) ?? "";
-}
-
-export function saveCustomPrompt(text: string, addr?: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(customKey(addr), text);
 }

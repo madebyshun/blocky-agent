@@ -24,10 +24,10 @@
  *   • Lists that are DATA (tasks, crons, chunks, skills) → merged by id/name,
  *     newest wins. Never replaced. Losing one conversation is unacceptable, so
  *     the merge is union-biased even when that means keeping something stale.
- *   • Scalars that are PREFERENCES (persona, custom prompt, integrations) →
+ *   • Scalars that are PREFERENCES (integrations) →
  *     the server copy wins, once, at hydrate. "Local wins" sounds safer but
- *     silently breaks the feature: a fresh device sits on the default persona
- *     and would never receive the synced one. The blast radius is a preference,
+ *     silently breaks the feature: a fresh device sits on the defaults and
+ *     would never receive the synced ones. The blast radius is a preference,
  *     not data.
  *
  * ── Budget ───────────────────────────────────────────────────────────────────
@@ -38,12 +38,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatTask, CronTask, PersonaId } from "./types";
+import type { ChatTask, CronTask } from "./types";
 import {
   loadTasks, saveTasks, mergeTaskLists,
   loadCrons, saveCrons,
-  loadPersona, savePersona,
-  loadCustomPrompt, saveCustomPrompt,
 } from "./storage";
 import {
   loadSkills, saveSkills,
@@ -88,8 +86,6 @@ export function setSyncEnabled(on: boolean, addr?: string): void {
 export interface WorkspaceSections {
   tasks?:        ChatTask[];
   crons?:        CronTask[];
-  persona?:      PersonaId;
-  customPrompt?: string;
   memory?:       UserMemory;
   chunks?:       MemoryChunk[];
   skills?:       InstalledSkill[];
@@ -100,8 +96,6 @@ export function snapshotWorkspace(addr?: string): WorkspaceSections {
   return {
     tasks:        loadTasks(addr),
     crons:        loadCrons(addr),
-    persona:      loadPersona(addr),
-    customPrompt: loadCustomPrompt(addr),
     memory:       getMemory(addr),
     chunks:       getChunks(addr),
     skills:       loadSkills(),
@@ -178,8 +172,6 @@ export function hydrateWorkspace(remote: Partial<WorkspaceSections>, addr?: stri
     saveMemory(mergeMemory(getMemory(addr), remote.memory as UserMemory));
   }
   // Preferences: server wins at hydrate. See the merge-policy note in the header.
-  if (typeof remote.persona === "string") savePersona(remote.persona as PersonaId, addr);
-  if (typeof remote.customPrompt === "string") saveCustomPrompt(remote.customPrompt, addr);
   if (remote.integrations && typeof remote.integrations === "object") {
     setIntegration("baseMcp",  !!remote.integrations.baseMcp);
     setIntegration("coinbase", !!remote.integrations.coinbase);

@@ -36,8 +36,6 @@ export const WORKSPACE_VERSION = 1;
 export const WORKSPACE_SECTIONS = [
   "tasks",         // ChatTask[]        — conversations
   "crons",         // CronTask[]        — scheduled prompts
-  "persona",       // PersonaId
-  "customPrompt",  // string
   "memory",        // UserMemory
   "chunks",        // MemoryChunk[]
   "skills",        // Skill[]           — prompt text only, no secrets
