@@ -136,6 +136,7 @@ export const en = {
     docs: "Docs",
     home: "Home",
     // AgentOS Control pages (promoted from Blue Chat tabs).
+    models: "Models",
     skills: "Skills",
     connectors: "Connectors",
     cron: "Scheduled",

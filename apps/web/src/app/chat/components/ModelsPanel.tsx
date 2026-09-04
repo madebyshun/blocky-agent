@@ -37,12 +37,17 @@ const PRESET_META: Record<VirtualsPresetV1["id"], { color: string; bestFor: stri
   search:   { color: "#22D3EE", bestFor: "Questions that need the live web — Grok 4.3 on Venice with real-time search." },
 };
 
-export default function ModelsPanel({ onPick }: { onPick?: () => void }) {
+// `onPick` receives the preset id because the two mounts mean different things
+// by "pick". Inside chat the tier set above is the live one, so the callback
+// only closes the tab. On /app/models the surrounding ChatProvider is a
+// different instance, so the caller routes to /chat?preset=<id> to make the
+// choice actually land.
+export default function ModelsPanel({ onPick }: { onPick?: (id: string) => void }) {
   const { chatTier, setChatTier } = useChat();
 
   function pick(id: string) {
     setChatTier(id);
-    onPick?.();
+    onPick?.(id);
   }
 
   return (

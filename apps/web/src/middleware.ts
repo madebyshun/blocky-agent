@@ -41,6 +41,15 @@ const APP_SEGMENTS = new Set([
   // `skills` is unambiguous — the marketing SOUL.md page that used to own
   // /skills moved to /soul, and /skills 301s there on the main host.
   "skills",       // installed agent-skills catalog (SkillsPanel)
+  // `models` is the one promoted panel that is NOT one-way: it stays a chat tab
+  // too, because picking a model is a per-conversation setting (`chatTier` is
+  // in-memory ChatContext state) and not just a catalog to browse. The page
+  // routes its pick through /chat?preset=<id> for that reason.
+  //
+  // ⚠️ This segment collides with `public/models/*.svg` (the provider marks).
+  // Both rewrite branches below must skip paths containing a dot, or every
+  // mark 404s. See the guard in the off-prod branch.
+  "models",       // model catalog (ModelsPanel)
   "connectors",   // MCP servers / integrations gallery (ConnectorsPanel)
   "cron",         // the wallet's scheduled tasks (CronPanel)
   "usage",        // credit balance + ledger activity (getBalance)
@@ -310,15 +319,19 @@ export function middleware(request: NextRequest) {
     // segment above fixes both hosts at once. /skills is unambiguous now that
     // the marketing page moved to /soul.
     //
-    // API routes, framework internals and static files are never rewritten:
-    // their first segment isn't in APP_SEGMENTS, so they fall through.
+    // API routes and framework internals fall through on their own — their
+    // first segment isn't in APP_SEGMENTS. Static files under public/ do NOT:
+    // this matcher covers them, and `public/models/*.svg` (the provider marks)
+    // sits under the `models` app segment. So skip anything with a dot, the
+    // same guard the app-host branch below already applies. Without it every
+    // provider mark 404s on localhost and on every Vercel preview URL.
     //
     // Waitlist gate (env-flagged; see appWaitlistGate). Runs before the rewrite
     // so a gated segment bounces to /waitlist instead of rendering.
     const wl = appWaitlistGate(request, firstSeg);
     if (wl) return wl;
 
-    if (APP_SEGMENTS.has(firstSeg)) {
+    if (APP_SEGMENTS.has(firstSeg) && !pathname.includes(".")) {
       const url = request.nextUrl.clone();
       url.pathname = `/app${pathname}`;
       return NextResponse.rewrite(url);

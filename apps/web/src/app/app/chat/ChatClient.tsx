@@ -148,13 +148,12 @@ function ChatShell() {
         </div>
       </div>
 
-      {/* ⚙️ Settings — modal opened from the sidebar account chip. onJumpTab
-          lets the mobile-only quick links (Models/Tools/Skills) jump to a chat
-          tab and close the modal. */}
+      {/* ⚙️ Settings — modal opened from the sidebar account chip. Its
+          mobile-only quick links are all routes now (Models/Skills/Docs), so
+          the modal no longer needs to drive this surface's tab state. */}
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        onJumpTab={(tab) => { setActiveTab(tab); setSettingsOpen(false); }}
       />
 
     </>

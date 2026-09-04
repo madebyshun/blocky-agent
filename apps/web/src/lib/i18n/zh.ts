@@ -133,6 +133,7 @@ export const zh: Dict = {
     docs: "文档",
     home: "首页",
     // AgentOS 控制页（从 Blue Chat 标签页提升而来）。
+    models: "模型",
     skills: "技能",
     connectors: "连接器",
     cron: "定时任务",
