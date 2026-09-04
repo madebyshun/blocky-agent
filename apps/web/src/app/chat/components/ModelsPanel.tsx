@@ -20,6 +20,7 @@ import { VIRTUALS_PRESETS_V1, formatContextTokens, type VirtualsPresetV1 } from 
 // carries the model facts (id, model, credits, context); this map only adds the
 // display trim, so we never duplicate a model claim.
 const PRESET_META: Record<VirtualsPresetV1["id"], { icon: string; color: string; bestFor: string }> = {
+  free:     { icon: "🎁", color: "#34D399", bestFor: "Zero-credit chat on Qwen 3.5 9B. Chat-only — no Hub tools — so a free message can never spend a paid tool. Great for casual Q&A." },
   fast:     { icon: "⚡", color: "#34D399", bestFor: "High-volume or long-context work where speed and cost matter more than depth. 1M-token context." },
   balanced: { icon: "💬", color: "#4FC3F7", bestFor: "Everyday building, brainstorming, and the 5 blue commands. The balanced default." },
   deep:     { icon: "🔬", color: "#A78BFA", bestFor: "Hard reasoning: audits, architecture, tricky debugging, multi-step analysis." },
@@ -112,7 +113,7 @@ export default function ModelsPanel({ onPick }: { onPick?: () => void }) {
                     {formatContextTokens(preset.contextTokens)} ctx
                   </span>
                   <span className="font-mono text-[9px] px-2 py-0.5 rounded-md bg-[#1A1A2E] text-slate-300 ml-auto">
-                    ~{preset.credits} cr/msg
+                    {preset.credits === 0 ? "Free · no credits" : `~${preset.credits} cr/msg`}
                   </span>
                 </div>
               </button>

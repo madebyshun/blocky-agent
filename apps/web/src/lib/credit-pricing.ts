@@ -35,6 +35,9 @@ export const CREDITS_PER_USDC = Math.round(1 / CREDIT_USD); // 2000
  * Venice models are slotted by capability tier.
  */
 export const CHAT_BASE_COST: Record<string, number> = {
+  // Free tier — qwen3-5-9b on Venice, chat-only. 0 = server skips the ledger
+  // debit entirely (see `debitChatCredits` zero-cost-tier short-circuit).
+  free:      0,
   // Bankr (Anthropic + Google + Moonshot)
   fast:     10,
   pro:      50,
@@ -69,6 +72,11 @@ function applyDiscount(base: number, tier: TierInfo): number {
 /** Credits to charge for a single chat message, after tier discount. */
 export function chatCreditCost(modelKey: string, tier: TierInfo): number {
   const base = CHAT_BASE_COST[modelKey] ?? CHAT_BASE_COST.pro;
+  // A genuinely free tier (base 0) resolves to 0, not the Math.max(1,…) floor
+  // in applyDiscount — that floor guards a discounted PAID tier from rounding
+  // to free, the opposite concern. Only an explicit 0 base is free. Mirrors the
+  // same guard in `creditCost` (credits.ts).
+  if (base <= 0) return 0;
   return applyDiscount(base, tier);
 }
 

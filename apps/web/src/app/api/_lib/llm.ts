@@ -315,7 +315,7 @@ export async function probeVirtuals(timeoutMs = 4000): Promise<VirtualsProbe> {
 // Calling: true" was not accepted as sufficient for any entry here.
 export interface VirtualsPreset {
   /** Stable UI id — never a provider model id. */
-  id: "fast" | "balanced" | "deep" | "private" | "grok" | "flash" | "search";
+  id: "free" | "fast" | "balanced" | "deep" | "private" | "grok" | "flash" | "search";
   /**
    * Which upstream this preset dispatches to. Decides the endpoint, the auth
    * header, and whether `venice_parameters` is sent — see `veniceCfg` /
@@ -347,6 +347,14 @@ export interface VirtualsPreset {
    * when it cannot. Guarded in `getAvailablePresets()`.
    */
   webSearch?: boolean;
+  /**
+   * Chat-only: this preset never registers Hub tools. Set on the free tier so a
+   * 0-credit message can't trigger a paid tool call. `/api/chat` enforces it
+   * from THIS server-side copy (keyed on `tier`), so it is a real gate, not a
+   * client-trusted hint — a crafted request can neither turn it off nor pair a
+   * free tier's price with a paid model (the model is pinned here too).
+   */
+  noTools?: boolean;
 }
 
 // CONTEXT-WINDOW CAVEAT: `contextTokens` is a VENDOR-PUBLISHED figure, not a
@@ -357,6 +365,16 @@ export interface VirtualsPreset {
 // load-bearing, but don't quote it as verified.
 export const VIRTUALS_PRESETS: VirtualsPreset[] = [
   { id: "fast",     provider: "virtuals", model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_000_000, credits: 10 },
+  // NEW — Free. The only 0-credit preset, and deliberately chat-only
+  // (`noTools`): a message that costs nothing must not be able to spend a paid
+  // Hub tool. Model measured in the live Venice catalog 2026-09-03 —
+  // `qwen3-5-9b`, 256k ctx, function-calling capable (we don't use it here; the
+  // route pins the model AND drops the tool schema for this tier). This row is
+  // the SERVER source of truth the route reads to pin the free model server-
+  // side, so the client can't swap in a paid model at zero cost. Order mirrors
+  // VIRTUALS_PRESETS_V1 (fast, then free) so the picker renders identically
+  // before and after the /api/chat/presets fetch resolves.
+  { id: "free",     provider: "venice",   model: "qwen3-5-9b",                 label: "Free",     desc: "Qwen 3.5 9B · no credits · chat only",   cost: "●",   contextTokens: 256_000,   credits: 0,   noTools: true },
   { id: "balanced", provider: "virtuals", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 200_000,   credits: 50 },
   { id: "deep",     provider: "virtuals", model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 200_000,   credits: 200 },
   { id: "private",  provider: "virtuals", model: "e2ee-deepseek-v4-flash",     label: "Private",  desc: "E2EE · no logs · DeepSeek V4",            cost: "●",   contextTokens: 1_000_000, credits: 30,  privacy: true },
