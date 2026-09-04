@@ -6,18 +6,16 @@ import {
 } from "react";
 import {
   type Message, type ChatTask, type Artifact,
-  type CronTask, type PersonaId, type SidebarTab, type Attachment,
+  type CronTask, type SidebarTab, type Attachment,
 } from "./types";
 import type { TierInfo } from "@/lib/credits";
 import {
   loadTasks, saveTasks, createTask, migrateOldChat, mergeTaskLists, clearGuestTasks,
   loadCrons, saveCrons, isDue,
-  loadPersona, savePersona, loadCustomPrompt, saveCustomPrompt,
 } from "./storage";
 import { extractArtifacts } from "./artifacts";
 import { enabledSkillsPrompt, loadIntegrations, runSkillCommand } from "./integrations";
 import { enabledConnectorsForChat } from "./connectors";
-import { getPersona } from "./personas";
 import { resolvePresetDispatch, VIRTUALS_PRESETS_V1 } from "./components/presets";
 import { useWorkspaceSync, WORKSPACE_HYDRATED_EVENT, type UseWorkspaceSync } from "./workspace-sync";
 import { useSiweSignIn } from "./use-siwe-signin";
@@ -54,12 +52,6 @@ interface ChatContextValue {
   // Model
   chatTier:           string;
   setChatTier:        (t: string) => void;
-
-  // Persona
-  personaId:          PersonaId;
-  setPersonaId:       (id: PersonaId) => void;
-  customPersonaPrompt: string;
-  setCustomPersonaPrompt: (s: string) => void;
 
   // Artifacts
   artifacts:          Artifact[];
@@ -200,25 +192,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setWalletReady(true); // wallet detection completed — safe to evaluate outOfCredits
   }, []);
 
-  // ── Persona ───────────────────────────────────────────────────────────────
-  const [personaId,    setPersonaIdState]    = useState<PersonaId>("blue-agent");
-  const [customPersonaPrompt, setCustomPersonaPromptState] = useState("");
-
-  useEffect(() => {
-    setPersonaIdState(loadPersona(walletAddr));
-    setCustomPersonaPromptState(loadCustomPrompt(walletAddr));
-  }, [walletAddr]);
-
-  const setPersonaId = useCallback((id: PersonaId) => {
-    setPersonaIdState(id);
-    savePersona(id, walletAddr);
-  }, [walletAddr]);
-
-  const setCustomPersonaPrompt = useCallback((s: string) => {
-    setCustomPersonaPromptState(s);
-    saveCustomPrompt(s, walletAddr);
-  }, [walletAddr]);
-
   // ── Tasks ─────────────────────────────────────────────────────────────────
   const [tasks,        setTasksState]  = useState<ChatTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -283,7 +256,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       .sort((a, b) => b.updatedAt - a.updatedAt);
     // Fresh in-memory draft (not persisted until first send) so the New Chat
     // screen is always one array slot away.
-    const fresh = createTask(chatTier, personaId);
+    const fresh = createTask(chatTier);
     setTasksState([fresh, ...sorted]);
     // (A) On sign-in with existing history, stay on the most-recent conversation
     // so it doesn't look like the chat was wiped; otherwise open on New Chat.
@@ -305,12 +278,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // In-memory only — an empty draft is not persisted to storage, so it never
     // shows up as a blank entry in the sidebar history. send() saves it on the
     // first message.
-    const t = createTask(chatTier, personaId);
+    const t = createTask(chatTier);
     setTasksState(prev => [t, ...prev.filter(p => p.messages.length > 0)]);
     setActiveTaskId(t.id);
     setInput("");
     setError(null);
-  }, [chatTier, personaId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chatTier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectTask = useCallback((id: string) => {
     setActiveTaskId(id);
@@ -389,8 +362,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         .sort((a, b) => b.updatedAt - a.updatedAt);
       setTasksState(prev => [...prev.filter(t => t.messages.length === 0), ...sorted]);
       setCreonsState(loadCrons(walletAddr));
-      setPersonaIdState(loadPersona(walletAddr));
-      setCustomPersonaPromptState(loadCustomPrompt(walletAddr));
     }
     window.addEventListener(WORKSPACE_HYDRATED_EVENT, onHydrated);
     return () => window.removeEventListener(WORKSPACE_HYDRATED_EVENT, onHydrated);
@@ -478,7 +449,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       let stid = activeTaskId;
       let sbase: Message[] = activeTask?.messages ?? [];
       if (!stid) {
-        const ft = createTask(chatTier, personaId);
+        const ft = createTask(chatTier);
         stid = ft.id;
         setTasksState(prev => { const u = [ft, ...prev]; saveTasks(u, walletAddr); return u; });
         setActiveTaskId(stid);
@@ -520,7 +491,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     let baseMessages: Message[] = activeTask?.messages ?? [];
 
     if (!tid) {
-      const freshTask = createTask(chatTier, personaId);
+      const freshTask = createTask(chatTier);
       tid = freshTask.id;
       // Add to state AND persist immediately so it survives a refresh
       setTasksState(prev => {
@@ -564,10 +535,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     streamStartRef.current = Date.now();
 
     abortRef.current = new AbortController();
-
-    // Build persona system prompt
-    const persona = getPersona(personaId);
-    const personaPrompt = personaId === "custom" ? customPersonaPrompt : persona.systemPrompt;
 
     // Conversation memory: the 3 most recent chunks, read from localStorage.
     //
@@ -614,7 +581,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           ...(walletAddr        ? { address: walletAddr } : {}),
           ...(dispatch.modelId  ? { modelId: dispatch.modelId } : {}),
           ...(memoryContext     ? { memoryContext }  : {}),
-          ...(personaPrompt     ? { persona: personaPrompt } : {}),
           // Preset-carried web search (the Search preset) OR the manual toggle.
           ...((dispatch.webSearch || webSearch) ? { webSearch: true } : {}),
           ...(files.length  ? { attachments: files } : {}),
@@ -879,7 +845,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [
     streaming, activeTask, activeTaskId, chatTier, walletAddr, cost, credits,
-    isUnlimited, personaId, customPersonaPrompt,
+    isUnlimited,
     webSearch, pendingFiles,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -890,7 +856,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     tasks, activeTaskId, activeTask, createNewTask, selectTask, deleteTask,
     streaming, error, setError, input, setInput, send, stop,
     chatTier, setChatTier,
-    personaId, setPersonaId, customPersonaPrompt, setCustomPersonaPrompt,
     artifacts, artifactsPanelOpen, setArtifactsPanelOpen,
     crons, addCron, updateCron, deleteCron, runCron, cronRunning,
     sidebarTab, setSidebarTab,

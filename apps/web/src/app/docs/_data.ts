@@ -44,7 +44,6 @@ export const CHAT_MODELS = [
 export const CHAT_CAPABILITIES = [
   { t: "Slash commands", d: "/idea /build /audit /ship /raise · /pick /scan /wallet — same power as the CLI, inline." },
   { t: "Hub tools",      d: "Live token prices, whale flow, risk gate, wallet PnL — the Hub tools the model calls for you." },
-  { t: "Personas",       d: "Swap the agent's expert role (Trader · Cipher · Oracle · Custom) without changing the model." },
   { t: "Web search",     d: "Toggle on to let the model pull live web data and cite sources (the Grok preset is built for live web)." },
 ];
 

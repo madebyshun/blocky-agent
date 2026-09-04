@@ -1,7 +1,6 @@
 "use client";
 import { useRef, useCallback, useState, useEffect } from "react";
 import { useChat } from "../ChatContext";
-import { PERSONAS } from "../personas";
 import { creditCost } from "@/lib/credits";
 import { useLang } from "@/lib/i18n/context";
 import type { Attachment } from "../types";
@@ -139,7 +138,6 @@ export default function ChatInput() {
     // that used them is removed (see the comment where it stood). They remain on
     // the context and in the request payload so re-enabling is a small revert.
     pendingFiles, setPendingFiles,
-    personaId, setPersonaId,
   } = useChat();
   const { t } = useLang();
 
@@ -147,7 +145,6 @@ export default function ChatInput() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [modelOpen,   setModelOpen]   = useState(false);
   const [cmdOpen,     setCmdOpen]     = useState(false);
-  const [personaOpen, setPersonaOpen] = useState(false);
 
   // Catalog-driven V1 preset list. Starts as the static fallback so the
   // picker renders instantly; the /api/chat/presets fetch then trims
@@ -168,8 +165,6 @@ export default function ChatInput() {
       .catch(() => { /* fail-open — keep the static fallback */ });
     return () => { cancelled = true; };
   }, []);
-
-  const activePersona = PERSONAS.find(p => p.id === personaId) ?? PERSONAS[0];
 
   // Active preset — highlighted in the picker when chatTier === preset.id.
   // V1 preset ids ARE the chatTier values (fast, balanced, deep, private,
@@ -223,7 +218,7 @@ export default function ChatInput() {
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Escape") { setCmdMenu(false); setCmdOpen(false); setModelOpen(false); setPersonaOpen(false); return; }
+    if (e.key === "Escape") { setCmdMenu(false); setCmdOpen(false); setModelOpen(false); return; }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
   }
 
@@ -294,41 +289,6 @@ export default function ChatInput() {
                 </div>
               </button>
             ))}
-          </div>
-        )}
-
-        {/* ── Persona selector popover ─────────────────────────────────────── */}
-        {personaOpen && (
-          <div className="absolute bottom-full mb-2 left-0 bg-[#0D0D14] border border-[#2A2A4E] rounded-xl overflow-hidden shadow-2xl z-20 w-80 max-h-[420px] overflow-y-auto">
-            <div className="px-3 pt-2.5 pb-1.5 border-b border-[#1A1A2E] sticky top-0 bg-[#0D0D14] z-10">
-              <span className="font-mono text-[10px] text-slate-600 tracking-widest">PERSONA · EXPERT ROLE</span>
-            </div>
-            <div className="py-1.5">
-              {PERSONAS.map(p => {
-                const isActive = personaId === p.id;
-                return (
-                  <button key={p.id}
-                    onClick={() => { setPersonaId(p.id); setPersonaOpen(false); textareaRef.current?.focus(); }}
-                    className="w-full text-left flex items-center gap-2.5 px-3 py-2 hover:bg-white/[0.02] transition-colors relative"
-                    style={isActive ? { background: `${p.color}0a` } : undefined}>
-                    {isActive && (
-                      <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r"
-                            style={{ background: p.color, boxShadow: `0 0 8px ${p.color}80` }} />
-                    )}
-                    <span className="text-base shrink-0 w-5 text-center">{p.icon}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="font-mono text-[12px] font-bold" style={{ color: isActive ? p.color : "#e2e8f0" }}>
-                          {p.label}
-                        </span>
-                        {isActive && <span className="font-mono text-[9px]" style={{ color: p.color }}>✓</span>}
-                      </div>
-                      <p className="font-mono text-[10px] text-slate-500 leading-snug truncate">{p.desc}</p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
           </div>
         )}
 
@@ -541,25 +501,9 @@ export default function ChatInput() {
               </svg>
             </label>
 
-            {/* Persona selector pill — surfaces the active expert role so it's
-                visible in the chat tab (not just buried in Settings) and lets
-                the user switch inline. Mirrors the model pill pattern. */}
-            <button
-              onMouseDown={(e) => { e.preventDefault(); setPersonaOpen(!personaOpen); setModelOpen(false); setCmdOpen(false); }}
-              className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] font-medium transition-all"
-              style={{ color: activePersona.color, background: `${activePersona.color}10`, borderColor: `${activePersona.color}30` }}
-              title={`Persona: ${activePersona.label}`}
-            >
-              <span className="text-[11px] leading-none">{activePersona.icon}</span>
-              <span className="hidden sm:inline">{activePersona.label}</span>
-              <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-
             {/* Model selector pill */}
             <button
-              onMouseDown={(e) => { e.preventDefault(); setModelOpen(!modelOpen); setCmdOpen(false); setPersonaOpen(false); }}
+              onMouseDown={(e) => { e.preventDefault(); setModelOpen(!modelOpen); setCmdOpen(false); }}
               className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] font-medium transition-all"
               style={{ color: activeTier.color, background: `${activeTier.color}10`, borderColor: `${activeTier.color}30` }}
             >
@@ -578,7 +522,7 @@ export default function ChatInput() {
 
             {/* Commands button */}
             <button
-              onMouseDown={(e) => { e.preventDefault(); setCmdOpen(!cmdOpen); setModelOpen(false); setPersonaOpen(false); }}
+              onMouseDown={(e) => { e.preventDefault(); setCmdOpen(!cmdOpen); setModelOpen(false); }}
               className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] transition-all"
               style={cmdOpen
                 ? { color: "#4FC3F7", background: "#4FC3F710", borderColor: "#4FC3F730" }

@@ -528,6 +528,36 @@ const HUB_TOOLS = [
       required: ["action", "to"],
     },
   },
+  // These two are named in the system prompt's audit recipe above ("an audit
+  // request = hub_risk_gate + hub_honeypot + hub_contract_trust +
+  // hub_key_exposure") but were never declared here, so the model could not
+  // call them: an audit silently ran two of the four tools the prompt asked
+  // for. Both have live, priced x402 handlers (contract-trust $0.15,
+  // key-exposure $0.50), so the fix is to declare them rather than to shrink
+  // the prompt. Same family as #166 — chat naming a tool it cannot reach.
+  {
+    name: "hub_contract_trust",
+    description: "Audit a Base CONTRACT before interacting with it — Basescan verification + security scan + community trust signal. Verdict: SAFE / CAUTION / RED_FLAG. USE WHEN: the user asks whether a contract or protocol is trustworthy, or safe to approve. NOT FOR: plain wallets (use hub_key_exposure) or token sellability (use hub_honeypot).",
+    input_schema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "Contract address on Base 0x..." },
+        context: { type: "string", description: "What the user believes this contract is (optional)" },
+      },
+      required: ["address"],
+    },
+  },
+  {
+    name: "hub_key_exposure",
+    description: "Check whether a WALLET's public key is exposed on-chain, computed from the real Base RPC nonce. Verdict EXPOSED (the wallet has sent a tx) or SAFE (nonce 0). USE WHEN: the user asks about quantum risk, key exposure, or cold-storage hygiene for an address. NOTE: EXPOSED means the public key is visible, NOT that funds are at immediate risk — the risk is theoretical and forward-looking.",
+    input_schema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "Wallet address to check 0x..." },
+      },
+      required: ["address"],
+    },
+  },
   {
     name: "hub_market_fit",
     description: "Market-fit analysis for a project — problem clarity, timing, competition, demand signals. USE WHEN: the user asks to VALIDATE / SCORE market fit or demand for a described product, or when the user asks for an idea brief. NOT FOR: writing code, building an app/game/frontend, explaining concepts, designing architecture, or debugging — answer those directly without a tool.",
@@ -963,6 +993,8 @@ const TOOL_ENDPOINT: Record<string, string> = {
   hub_deep_analysis:    "deep-analysis",
   hub_honeypot:         "honeypot-check",
   hub_risk_gate:        "risk-gate",
+  hub_contract_trust:   "contract-trust",
+  hub_key_exposure:     "key-exposure",
   hub_market_fit:       "market-fit",
   hub_competitor_scan:  "competitor-scan",
   hub_investor_memo:    "investor-memo",
@@ -2331,10 +2363,20 @@ export async function POST(req: NextRequest) {
   }
   void remaining;
 
-  const apiKey = process.env.BANKR_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "BANKR_API_KEY not configured." }, { status: 500 });
-  }
+  // NO provider-key gate here, deliberately. Each provider branch below checks
+  // its OWN key and fails with a message naming that key:
+  //   - Venice   → VENICE_INFERENCE_KEY ?? VENICE_API_KEY  (the `venice` branch)
+  //   - Virtuals → VIRTUALS_API_KEY                        (the default branch)
+  //
+  // Until 2026-09-03 this spot read `process.env.BANKR_API_KEY` and 500'd the
+  // WHOLE endpoint when it was missing — while never using its value: both
+  // branches shadow it with their own key. So Blue Chat's availability was
+  // wired to a Bankr credential that Bankr has 403-banned since 2026-07-20 and
+  // that CLAUDE.md lists as a dead env var. Anyone following that doc and
+  // unsetting it in Vercel would have taken chat down with a 500 naming a
+  // vendor this codebase no longer calls. Measured live before removal: prod
+  // chat answered 200, so the var was set — the outage was one env edit away.
+  // Do not reintroduce a gate here; gate on the key you are about to USE.
 
   let body: {
     messages?:    LLMMessage[];

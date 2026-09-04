@@ -393,98 +393,32 @@ const MODEL_COLORS: Record<string, string> = {
 };
 
 // ── Starters ──────────────────────────────────────────────────────────────────
-// Empty-state content is keyed by the active persona so that picking a role in
-// Settings (or via the composer pill) immediately changes "what to do next" —
-// the heading + 4 starter cards all reflect that expert role.
-
 // `label` = compact display; `text` = the natural language prompt sent on click.
 // Cards send immediately — they are plain English questions, not slash commands.
 interface Starter { icon: string; label: string; text: string; color: string; }
 interface EmptyState { heading: string; sub: string; starters: Starter[]; examples: string[]; }
 
-const PERSONA_EMPTY: Record<string, EmptyState> = {
-  "blue-agent": {
-    heading: "What are you building?",
-    sub:     "Build anything on Base",
-    examples: [
-      "build me a DeFi app on Base",
-      "launch a token called BlueBot",
-      "what's trending on Base today?",
-    ],
-    starters: [
-      { icon: "💡", label: "Idea",   text: "idea brief: USDC payroll app for freelancers on Base", color: "#4FC3F7" },
-      { icon: "🛠️", label: "Build",  text: "build an ERC-4337 agent wallet on Base",               color: "#A78BFA" },
-      { icon: "🛡️", label: "Audit",  text: "audit my token launch plan for risks",                 color: "#F87171" },
-      { icon: "🚀", label: "Launch", text: "launch a token called BlueBot on Base",                color: "#34D399" },
-    ],
-  },
-  "blue-trader": {
-    heading: "What's the trade?",
-    sub:     "Live alpha, smart money flow, safety checks — Base-native.",
-    examples: [
-      "best APY on Base right now?",
-      "is this token a honeypot: 0x...",
-      "show me whale activity for AERO",
-    ],
-    starters: [
-      { icon: "🎯", label: "Pick",      text: "what's the best token to buy on Base right now?", color: "#34D399" },
-      { icon: "🐋", label: "Whale",     text: "show me whale activity for AERO",                 color: "#4FC3F7" },
-      { icon: "🔍", label: "Scan",      text: "is this token a honeypot: 0x…",                   color: "#FB923C" },
-      { icon: "📊", label: "Yield",     text: "what's the best APY on Base right now?",          color: "#A78BFA" },
-    ],
-  },
-  "blue-auditor": {
-    heading: "What should I audit?",
-    sub:     "Vulnerabilities, severity ratings, Solidity fixes, and a go/no-go call.",
-    examples: [
-      "audit this smart contract for vulnerabilities",
-      "check if this token is safe: 0x...",
-      "screen this wallet for AML risks: 0x...",
-    ],
-    starters: [
-      { icon: "🛡️", label: "Audit",     text: "audit this smart contract for vulnerabilities",   color: "#F87171" },
-      { icon: "🔍", label: "Scan",      text: "check if this token is safe: 0x…",                color: "#4FC3F7" },
-      { icon: "⚠️", label: "Reentrancy",text: "audit for reentrancy risks",                       color: "#FB923C" },
-      { icon: "🧾", label: "AML",       text: "screen this wallet for AML risks: 0x…",            color: "#A78BFA" },
-    ],
-  },
-  "blue-researcher": {
-    heading: "What should I research?",
-    sub:     "Evidence-backed DD, on-chain data, and contrarian takes.",
-    examples: [
-      "deep DD on Aerodrome",
-      "what's the top narrative on Base now?",
-      "analyze my wallet strategy: 0x...",
-    ],
-    starters: [
-      { icon: "🔬", label: "Deep DD",   text: "deep DD on Aerodrome",                color: "#A78BFA" },
-      { icon: "🐋", label: "Whale",     text: "show me whale activity for AERO",     color: "#4FC3F7" },
-      { icon: "📡", label: "Narrative", text: "what's the top narrative on Base now?", color: "#E879F9" },
-      { icon: "📊", label: "Wallet",    text: "analyze my wallet strategy: 0x…",     color: "#34D399" },
-    ],
-  },
-  "custom": {
-    heading: "How can I help?",
-    sub:     "Your custom system prompt is active — ask anything.",
-    examples: [
-      "build me a DeFi app on Base",
-      "best APY on Base right now?",
-      "what's trending on Base today?",
-    ],
-    starters: [
-      { icon: "💡", label: "Idea",   text: "idea brief: USDC payroll app for freelancers on Base", color: "#4FC3F7" },
-      { icon: "🛠️", label: "Build",  text: "build an ERC-4337 agent wallet on Base",               color: "#A78BFA" },
-      { icon: "🛡️", label: "Audit",  text: "audit my token launch plan for risks",                 color: "#F87171" },
-      { icon: "🚀", label: "Launch", text: "launch a token called BlueBot on Base",                color: "#34D399" },
-    ],
-  },
+const EMPTY_STATE: EmptyState = {
+  heading: "What are you building?",
+  sub:     "Build anything on Base",
+  examples: [
+    "build me a DeFi app on Base",
+    "launch a token called BlueBot",
+    "what's trending on Base today?",
+  ],
+  starters: [
+    { icon: "💡", label: "Idea",   text: "idea brief: USDC payroll app for freelancers on Base", color: "#4FC3F7" },
+    { icon: "🛠️", label: "Build",  text: "build an ERC-4337 agent wallet on Base",               color: "#A78BFA" },
+    { icon: "🛡️", label: "Audit",  text: "audit my token launch plan for risks",                 color: "#F87171" },
+    { icon: "🚀", label: "Launch", text: "launch a token called BlueBot on Base",                color: "#34D399" },
+  ],
 };
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function ChatMessages() {
   const {
-    activeTask, streaming, outOfCredits, send, setInput, chatTier, personaId,
+    activeTask, streaming, outOfCredits, send, setInput, chatTier,
     triggerWalletRefresh,
   } = useChat();
 
@@ -497,7 +431,7 @@ export default function ChatMessages() {
   const messages   = activeTask?.messages ?? [];
   const isEmpty    = messages.length === 0;
   const tierColor  = MODEL_COLORS[chatTier] ?? "#4FC3F7";
-  const empty      = PERSONA_EMPTY[personaId] ?? PERSONA_EMPTY["blue-agent"];
+  const empty      = EMPTY_STATE;
   const { lang }   = useLang();
 
   // ── Share conversation ────────────────────────────────────────────────────
@@ -562,7 +496,7 @@ export default function ChatMessages() {
             </span>
           </div>
 
-          {/* Heading — persona-aware */}
+          {/* Heading */}
           <h2 className="font-mono text-2xl sm:text-3xl font-bold text-white tracking-tight mb-2">
             {empty.heading}
           </h2>
@@ -570,7 +504,7 @@ export default function ChatMessages() {
             {empty.sub}
           </p>
 
-          {/* NL example starters — 3 per persona */}
+          {/* NL example starters */}
           <div className="w-full max-w-sm space-y-2 mb-6">
             {empty.examples.map(q => (
               <div
