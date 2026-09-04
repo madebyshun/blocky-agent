@@ -2,6 +2,8 @@
 
 import { useChat } from "../ChatContext";
 import { VIRTUALS_PRESETS_V1, formatContextTokens, type VirtualsPresetV1 } from "./ChatInput";
+import ProviderMark from "./ProviderMark";
+import { resolveProvider } from "@/lib/model-providers";
 
 /**
  * Models page — a readable catalog of every model Blue Chat can run, so users
@@ -16,18 +18,23 @@ import { VIRTUALS_PRESETS_V1, formatContextTokens, type VirtualsPresetV1 } from 
  * is no per-model funding story and no token.
  */
 
-// Per-preset accent + icon + longer "best for" guidance. VIRTUALS_PRESETS_V1
-// carries the model facts (id, model, credits, context); this map only adds the
-// display trim, so we never duplicate a model claim.
-const PRESET_META: Record<VirtualsPresetV1["id"], { icon: string; color: string; bestFor: string }> = {
-  free:     { icon: "🎁", color: "#34D399", bestFor: "Zero-credit chat on Qwen 3.5 9B. Chat-only — no Hub tools — so a free message can never spend a paid tool. Great for casual Q&A." },
-  fast:     { icon: "⚡", color: "#34D399", bestFor: "High-volume or long-context work where speed and cost matter more than depth. 1M-token context." },
-  balanced: { icon: "💬", color: "#4FC3F7", bestFor: "Everyday building, brainstorming, and the 5 blue commands. The balanced default." },
-  deep:     { icon: "🔬", color: "#A78BFA", bestFor: "Hard reasoning: audits, architecture, tricky debugging, multi-step analysis." },
-  private:  { icon: "🔒", color: "#6EE7B7", bestFor: "Sensitive prompts — runs end-to-end encrypted with no logs retained." },
-  flash:    { icon: "🚀", color: "#FBBF24", bestFor: "Snappy back-and-forth — Gemini 2.5 Flash for the fastest first token. 1M-token context." },
-  grok:     { icon: "🧠", color: "#E879F9", bestFor: "Live-data and huge-context tasks — Grok 4 with a 2M-token window." },
-  search:   { icon: "🌐", color: "#22D3EE", bestFor: "Questions that need the live web — Grok 4.3 on Venice with real-time search. 1M-token context." },
+// Per-preset accent + longer "best for" guidance. VIRTUALS_PRESETS_V1 carries the
+// model facts (id, model, credits, context); this map only adds the display trim,
+// so we never duplicate a model claim.
+//
+// There is no `icon` here any more. These cards used to show an emoji chosen for
+// the *use case* (🔬 for deep, 🌐 for search), which told a reader nothing about
+// who built the model. `ProviderMark` derives the publisher from the model id, so
+// the card shows Anthropic's mark on a Claude row because it IS a Claude row.
+const PRESET_META: Record<VirtualsPresetV1["id"], { color: string; bestFor: string }> = {
+  free:     { color: "#34D399", bestFor: "Zero-credit chat on Qwen 3.5 9B. Chat-only — no Hub tools — so a free message can never spend a paid tool. Great for casual Q&A." },
+  fast:     { color: "#34D399", bestFor: "High-volume or long-context work where speed and cost matter more than depth." },
+  balanced: { color: "#4FC3F7", bestFor: "Everyday building, brainstorming, and the 5 blue commands. The balanced default." },
+  deep:     { color: "#A78BFA", bestFor: "Hard reasoning: audits, architecture, tricky debugging, multi-step analysis." },
+  private:  { color: "#6EE7B7", bestFor: "Sensitive prompts — runs end-to-end encrypted with no logs retained." },
+  flash:    { color: "#FBBF24", bestFor: "Snappy back-and-forth — Gemini 2.5 Flash for the fastest first token." },
+  grok:     { color: "#E879F9", bestFor: "Live-data and huge-context tasks — Grok 4 with a very large context window." },
+  search:   { color: "#22D3EE", bestFor: "Questions that need the live web — Grok 4.3 on Venice with real-time search." },
 };
 
 export default function ModelsPanel({ onPick }: { onPick?: () => void }) {
@@ -74,12 +81,7 @@ export default function ModelsPanel({ onPick }: { onPick?: () => void }) {
               >
                 {/* Title row */}
                 <div className="flex items-center gap-2.5 mb-2">
-                  <span
-                    className="w-9 h-9 rounded-xl flex items-center justify-center text-lg shrink-0"
-                    style={{ background: `${meta.color}14` }}
-                  >
-                    {meta.icon}
-                  </span>
+                  <ProviderMark modelId={preset.model} size={36} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-sm font-semibold text-white truncate">{preset.label}</span>
@@ -92,7 +94,9 @@ export default function ModelsPanel({ onPick }: { onPick?: () => void }) {
                         </span>
                       )}
                     </div>
-                    <span className="font-mono text-[11px] text-slate-500 truncate block">{preset.model}</span>
+                    <span className="font-mono text-[11px] text-slate-500 truncate block">
+                      {resolveProvider(preset.model).label} · {preset.model}
+                    </span>
                   </div>
                 </div>
 
