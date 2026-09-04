@@ -6,23 +6,16 @@ import { ChatProvider, useChat } from "@/app/chat/ChatContext";
 import { useAppChrome, type DrawerNavItem, type DrawerRecent } from "@/app/app/AppChrome";
 
 import AppSidebar    from "@/app/chat/components/AppSidebar";
-import ModelsPanel   from "@/app/chat/components/ModelsPanel";
 import SettingsModal from "@/app/chat/components/SettingsModal";
 import ChatMessages  from "@/app/chat/components/ChatMessages";
 import ChatInput     from "@/app/chat/components/ChatInput";
 import ClaimBanner   from "@/app/chat/components/ClaimBanner";
 import ArtifactsPanel from "@/app/chat/components/ArtifactsPanel";
-import type { ActiveTab } from "@/app/chat/types";
-
-// ── Tab metadata ───────────────────────────────────────────────────────────────
-// Settings is intentionally absent — it opens as a modal from the account chip,
-// not as a content tab. Skills + Connectors are gone too: they're shell pages
-// (/skills, /connectors) now, so chat no longer duplicates their catalogs.
-const TAB_META: Record<Exclude<ActiveTab, "chat" | "settings">, { title: string; subtitle: string }> = {
-  models: { title: "Models", subtitle: "AI engines behind Blue Chat · pick by use-case" },
-};
 
 // ── Shell ──────────────────────────────────────────────────────────────────────
+// One surface, no tabs. Models was the last content tab and moved to /models
+// (2026-09), following Skills and Connectors; see the note in chat/types.ts.
+// Settings is a modal from the account chip, never a tab.
 function ChatShell() {
   const {
     artifactsPanelOpen,
@@ -30,7 +23,6 @@ function ChatShell() {
     createNewTask, tasks, selectTask, activeTaskId,
     setInput,
   } = useChat();
-  const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { setContextual } = useAppChrome();
 
@@ -44,19 +36,15 @@ function ChatShell() {
     const prefill = url.searchParams.get("prefill");
     if (prefill) {
       setInput(prefill);
-      setActiveTab("chat");
       url.searchParams.delete("prefill");
       window.history.replaceState({}, "", url.pathname + url.search);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isChat = activeTab === "chat";
-  const meta   = activeTab !== "chat" && activeTab !== "settings" ? TAB_META[activeTab] : null;
-
   // Register Blue Chat's sub-nav + recents into the global mobile drawer.
-  // Re-runs when the active tab or conversation list changes so highlights and
-  // the recents list stay current; cleared on unmount (when leaving /app/chat).
+  // Re-runs when the conversation list changes so highlights and the recents
+  // list stay current; cleared on unmount (when leaving /app/chat).
   useEffect(() => {
     // New chat = primary action (compose button in top bar + prominent in
     // drawer). Models/Tools/Skills moved into Settings (mobile); the redundant
@@ -71,19 +59,19 @@ function ChatShell() {
       .map(t => ({
         id: t.id,
         title: t.title || "New conversation",
-        active: t.id === activeTaskId && activeTab === "chat",
-        onSelect: () => { selectTask(t.id); setActiveTab("chat"); },
+        active: t.id === activeTaskId,
+        onSelect: () => selectTask(t.id),
       }));
     setContextual({
-      barTitle:   isChat ? "Blue Chat" : (meta?.title ?? "Blue Chat"),
+      barTitle:   "Blue Chat",
       groupTitle: "Blue Chat",
-      newChat:    () => { createNewTask(); setActiveTab("chat"); },
+      newChat:    createNewTask,
       items,
       recents,
     });
     return () => setContextual(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, tasks, activeTaskId]);
+  }, [tasks, activeTaskId]);
 
   return (
     <>
@@ -97,50 +85,23 @@ function ChatShell() {
       <div className="flex bg-[#050508] font-mono h-full overflow-hidden">
 
         {/* ── Sidebar (desktop) ── */}
-        <AppSidebar activeTab={activeTab} onSelect={setActiveTab} onOpenSettings={() => setSettingsOpen(true)} />
+        <AppSidebar onOpenSettings={() => setSettingsOpen(true)} />
 
         {/* ── Main content area ──
             The global mobile top bar + nav drawer (see /app/layout.tsx) own
             mobile navigation now, so there's no in-page mobile tab bar and no
             bottom-bar padding to clear. */}
         <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-
-          {/* Tab header (non-chat, desktop) */}
-          {!isChat && meta && (
-            <div className="hidden lg:flex items-center px-6 h-14 border-b border-[#1A1A2E] flex-shrink-0">
-              <div>
-                <p className="font-mono text-xs text-[#4FC3F7] tracking-widest">
-                  // {meta.title.toUpperCase()}
-                </p>
-                <p className="font-mono text-[10px] text-slate-700 mt-1">{meta.subtitle}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Content area */}
           <div className="flex-1 flex min-h-0 overflow-hidden">
 
-            {/* 💬 Chat */}
-            {isChat && (
-              <>
-                <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-                  <ClaimBanner />
-                  <ChatMessages />
-                  <ChatInput />
-                </div>
-                {artifactsPanelOpen && (
-                  <div className="hidden lg:flex flex-col w-96 shrink-0 border-l border-[#1A1A2E] h-full overflow-hidden">
-                    <ArtifactsPanel />
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* 🤖 Models — the only non-chat tab left. Skills + Connectors moved
-                out to /skills and /connectors in the shell's Control group. */}
-            {activeTab === "models" && (
-              <div className="flex-1 h-full overflow-hidden">
-                <ModelsPanel onPick={() => setActiveTab("chat")} />
+            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+              <ClaimBanner />
+              <ChatMessages />
+              <ChatInput />
+            </div>
+            {artifactsPanelOpen && (
+              <div className="hidden lg:flex flex-col w-96 shrink-0 border-l border-[#1A1A2E] h-full overflow-hidden">
+                <ArtifactsPanel />
               </div>
             )}
 

@@ -1,16 +1,12 @@
 // Blue Chat v2 — Shared Types
 
-// "tools" tab retired from chat — the Hub tool catalog now lives only on the Hub
-// (/hub). Tools still run inside chat (the model auto-calls them); they're just
-// not a browsable surface users must learn. Skills are the user-facing unit.
-//
-// "skills" + "connectors" retired 2026-08 (AgentOS Control): both were promoted
-// to first-class shell pages (/skills, /connectors) rendering the SAME panels.
-// Keeping them as chat tabs too meant the identical catalog was reachable from
-// two navs — so the chat sub-nav no longer owns them. "models" stays because it
-// is a per-conversation setting, not a catalog (the composer dropdown in
-// ChatInput is its primary control; this tab is the expanded comparison view).
-export type ActiveTab = "chat" | "models" | "settings";
+// The chat sub-nav has no tabs left, so there is no `ActiveTab` union any more.
+// Each tab left the same way — promoted to a shell page, then deleted here once
+// keeping both meant one surface behind two navs: "tools" → /hub, then "skills"
+// + "connectors" → /skills, /connectors (2026-08), then "models" → /models
+// (2026-09). Tools still run inside chat and a model is still picked per
+// conversation; the composer dropdown in ChatInput is that control. Settings
+// was never a tab — it opens as a modal from the sidebar account chip.
 
 export type ToolLog = {
   tool:    string;
