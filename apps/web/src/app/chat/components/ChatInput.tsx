@@ -13,6 +13,7 @@ import type { Attachment } from "../types";
 import { VIRTUALS_PRESETS_V1, formatContextTokens, type VirtualsPresetV1 } from "./presets";
 export { VIRTUALS_PRESETS_V1, resolvePresetDispatch, formatContextTokens } from "./presets";
 export type { VirtualsPresetV1 } from "./presets";
+import ProviderMark from "./ProviderMark";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -317,10 +318,6 @@ export default function ChatInput() {
                 const accent = p.privacy ? "#6EE7B7" : accentByCost[p.cost];
                 const prevOptional = virtualsPresets[idx - 1]?.optional === true;
                 const showDividerBefore = p.optional && !prevOptional;
-                const iconMap: Record<VirtualsPresetV1["id"], string> = {
-                  free: "🎁", fast: "⚡", balanced: "💬", deep: "🔬", private: "🔒", grok: "🧠",
-                  flash: "🚀", search: "🌐",
-                };
                 return (
                   <div key={p.id}>
                     {showDividerBefore && (
@@ -342,7 +339,7 @@ export default function ChatInput() {
                         <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r"
                               style={{ background: accent, boxShadow: `0 0 8px ${accent}80` }} />
                       )}
-                      <span className="text-base shrink-0 w-5 text-center">{iconMap[p.id]}</span>
+                      <ProviderMark modelId={p.model} size={22} className="!rounded-lg" />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline gap-2">
                           <span className="font-mono text-[12px] font-bold" style={{ color: isActive ? accent : "#e2e8f0" }}>
@@ -509,7 +506,9 @@ export default function ChatInput() {
               className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] font-medium transition-all"
               style={{ color: activeTier.color, background: `${activeTier.color}10`, borderColor: `${activeTier.color}30` }}
             >
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: activeTier.color }} />
+              {activeVirtualsPreset
+                ? <ProviderMark modelId={activeVirtualsPreset.model} size={16} className="!rounded-md !border-0 !bg-transparent" />
+                : <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: activeTier.color }} />}
               {/* Show the V1 preset label (Fast / Balanced / Deep / Private / Grok)
                   with its cost dots. Fall back to the legacy static preset
                   or tier label so the collapsed button never shows raw ids. */}
