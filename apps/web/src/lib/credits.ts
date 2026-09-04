@@ -12,6 +12,8 @@
  * Hub tools stay pay-per-call in USDC; there is no token discount anymore.
  */
 
+import { VIRTUALS_PRESETS_V1 } from "@/app/chat/components/presets";
+
 export const BLUE_TOKEN     = "0xf895783b2931c919955e18b5e3343e7c7c456ba3";
 export const BASE_RPC       = "https://mainnet.base.org";
 // `STAKING_ADDRESS` was exported here for a stake→credits reader that this file
@@ -69,21 +71,8 @@ export function getDailyCr(tier: TierInfo, hasWallet: boolean): number {
 // ── Credit costs ──────────────────────────────────────────────────────────────
 
 export const BASE_COST: Record<string, number> = {
-  // V1 Virtuals catalog-driven presets (2026-07-24 spec). These are the
-  // stable ids saved to localStorage; server resolves them → Virtuals
-  // model ids via `VIRTUALS_PRESETS` in `_lib/llm.ts`. Cost per preset
-  // matches the "chốt preset" chart shared in chat.
-  free:                    0,  // qwen3-5-9b · Venice · chat-only · no credits
-  balanced:               50,  // anthropic-claude-sonnet-5 · 200k ctx
-  deep:                  200,  // anthropic-claude-opus-4-8 · 200k ctx · heavy reason
-  private:                30,  // e2ee-deepseek-v4-flash · E2EE, no logs
-  flash:                  10,  // google-gemini-2-5-flash · 1M ctx · fastest first token
-  grok:                   60,  // x-ai-grok-4-20 · 2M ctx · optional
-  search:                 60,  // venice grok-4-3 · live web search · 1M ctx · optional
-  // Bankr-legacy tier ids kept for localStorage compatibility. `fast`
-  // in the V1 spec (deepseek-flash) shares an id with the legacy fast
-  // tier — happy coincidence, no rename needed.
-  fast:                   10,
+  // Bankr-legacy tier ids, kept for localStorage compatibility with builds
+  // that persisted them before the V1 preset spec existed.
   pro:                    50,
   max:                   200,
   deepseek:               10,
@@ -101,6 +90,14 @@ export const BASE_COST: Record<string, number> = {
   "venice-e2ee-venice":   30,
   "venice-e2ee-gemma":    30,
   "venice-e2ee-qwen":     40,
+
+  // Live presets, spread LAST so the spec wins any id collision (`fast` is
+  // both a preset id and a legacy Bankr tier). This table used to retype the
+  // preset prices; its server-side twin `CHAT_BASE_COST` retyped them too and
+  // omitted four, which is how Private came to quote 30 and debit 50. Both
+  // now derive from the same list, so the price the composer shows and the
+  // price the ledger takes cannot disagree.
+  ...Object.fromEntries(VIRTUALS_PRESETS_V1.map((p) => [p.id, p.credits])),
 };
 
 export function creditCost(chatTier: string, holderTier: TierInfo): number {
