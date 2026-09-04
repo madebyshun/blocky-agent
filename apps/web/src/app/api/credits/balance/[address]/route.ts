@@ -3,10 +3,17 @@
  *
  * Returns the wallet's claimable credit balance:
  *
- *   topup    — off-chain credits added via USDC top-up
- *   spent    — off-chain credits debited via chat / tool runs
- *   balance  — max(0, topup - spent)
- *   recent   — last 10 ledger events
+ *   topup     — off-chain credits added via USDC top-up
+ *   spent     — credits debited from the PAID pool only. NOT total usage: a
+ *               debit drains the free daily bucket first and only the overflow
+ *               lands here, so a wallet that never tops up reports 0 for ever.
+ *   freeSpent — the other half, cumulative across days. May be absent (never
+ *               measured, on rows written before the field existed) — and
+ *               absent is not zero.
+ *   pool      — max(0, topup - spent)
+ *   balance   — pool + dailyRemaining, i.e. BOTH buckets. This line used to
+ *               read `max(0, topup - spent)`, which is the pool alone.
+ *   recent    — last 10 ledger events
  *
  * `accrued` is still present in the payload but is permanently 0: it used to be
  * an on-chain read of BlueMarketStaking.totalCreditsAccrued, and staking stopped
