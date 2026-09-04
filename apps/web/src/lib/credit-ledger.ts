@@ -91,10 +91,28 @@ interface LedgerRow {
 
 export interface LedgerEvent {
   ts:        number;            // ms epoch
-  kind:      "spend" | "topup";
+  kind:      "spend" | "topup" | "refund";
   amount:    number;            // credits (positive)
   reason:    string;            // human label: "chat:pro", "tool:honeypot-check", "topup:big"
   ref?:      string;            // optional ref (tx hash, message id, etc.)
+
+  /**
+   * Which bucket(s) a SPEND actually came out of. Recorded because the two
+   * buckets are not interchangeable: the daily allowance expires at UTC
+   * midnight, the pool is money the user paid for. A refund that can't tell
+   * them apart either destroys a paid credit or mints a permanent one out of
+   * an expiring one — see `refund()`.
+   *
+   * `undefined` on any event written before this field existed. That means
+   * NOT RECORDED, and `refund()` refuses those rather than guessing a split.
+   */
+  fromDaily?: number;
+  fromPool?:  number;
+  /** UTC day key the `fromDaily` portion was taken from (`YYYY-MM-DD`). */
+  day?:       string;
+
+  /** On a REFUND event: the `ref` of the spend it reverses. */
+  refundOf?:  string;
 }
 
 const key = (addr: string) => `ledger:${addr.toLowerCase()}`;
@@ -246,6 +264,16 @@ export async function getLedgerActivity(): Promise<LedgerActivity> {
       for (const e of spends) {
         creditsSpent += e.amount || 0;
         if (typeof e.reason === "string" && e.reason.startsWith("chat:")) chatMessages += 1;
+      }
+      // Net out reversals. A refunded chat turn is one the model never produced
+      // (#193) — counting it inflates "messages" with failures and "credits
+      // spent" with credits the user got back. Subtract what was RETURNED, not
+      // the original amount: a refund whose daily half had already expired only
+      // gave back the pool half, and the rest really was spent.
+      for (const e of row.history) {
+        if (e.kind !== "refund") continue;
+        creditsSpent -= e.amount || 0;
+        if (typeof e.reason === "string" && e.reason.startsWith("chat:")) chatMessages -= 1;
       }
     }
     return { activeUsers, creditsSpent, chatMessages };
@@ -434,12 +462,138 @@ export async function spend(
 
     ledger.dailyDay   = today;
     ledger.dailySpent = dailySpent;
-    ledger.history.push({ ts: Date.now(), kind: "spend", amount, reason, ref });
+    // Record WHICH bucket paid, not just the total. `refund()` is the only
+    // reader and it cannot reconstruct this afterwards: by the time a refund
+    // fires, `dailySpent` has moved on and the UTC day may have rolled.
+    ledger.history.push({
+      ts: Date.now(), kind: "spend", amount, reason, ref,
+      fromDaily: fromDaily, fromPool: amount - fromDaily, day: today,
+    });
     await saveLedger(addr, ledger);
 
     // `ledger` now carries the post-debit dailyDay/dailySpent, so the shared
     // builder recomputes the same numbers this block just wrote.
     return summarize(addr, accrued, dailyCr, ledger);
+  });
+}
+
+/** Outcome of a `refund()` attempt. Every branch is a distinct fact. */
+export interface RefundResult {
+  status:
+    | "refunded"      // credits returned (possibly only the pool half — see `expired`)
+    | "not-found"     // no spend event carries that ref (nothing was charged)
+    | "already"       // this ref was already refunded; no-op, safe to retry
+    | "unsplittable"; // pre-split event: we don't know which bucket paid, so we refuse
+  /** Credits actually returned to a bucket. 0 for every non-"refunded" status. */
+  returned:      number;
+  returnedDaily: number;
+  returnedPool:  number;
+  /**
+   * Daily-allowance credits that could NOT be returned because their UTC day
+   * has ended. They are gone by design, not by bug — see the comment in the
+   * body. The user still paid them; this is the honest count of that.
+   */
+  expiredDaily:  number;
+  balance?:      BalanceSummary;
+}
+
+/**
+ * Reverse ONE recorded spend, identified by its `ref`.
+ *
+ * Exists because `/api/chat` debits BEFORE calling the model (the right shape —
+ * it stops a failed call from serving free compute) and had no way back when the
+ * upstream then returned nothing. Over a gateway outage that quietly drained
+ * every user's allowance in exchange for an error string (#193).
+ *
+ * Three properties this deliberately has, each of which is the reason for a
+ * chunk of the code below:
+ *
+ * 1. **A caller cannot invent an amount.** There is no `amount` parameter. The
+ *    figure comes from the recorded spend event, so the worst a compromised
+ *    internal caller can do is un-charge a real debit that already happened. It
+ *    can never mint credits.
+ * 2. **It is idempotent.** A second call with the same ref is a no-op
+ *    (`already`), so a retried request or a double-fired failure path can't pay
+ *    the user twice.
+ * 3. **Credits go back to the bucket they came from.** The daily allowance is
+ *    use-it-or-lose-it; the pool is money. Returning a daily credit into the
+ *    pool would silently convert an expiring credit into a permanent one — a
+ *    slow mint, one failed message at a time. So the daily half is only
+ *    returned while its own UTC day is still running, and is otherwise reported
+ *    as `expiredDaily` rather than quietly re-homed.
+ */
+export async function refund(address: string, ref: string): Promise<RefundResult> {
+  const nil = (status: RefundResult["status"]): RefundResult => ({
+    status, returned: 0, returnedDaily: 0, returnedPool: 0, expiredDaily: 0,
+  });
+  if (!ref) return nil("not-found");
+  const addr = address.toLowerCase();
+
+  const [accrued, blueBalance] = await Promise.all([
+    readAccruedCredits(addr),
+    fetchBlueBalance(addr),
+  ]);
+  const dailyCr = getTierInfo(blueBalance).dailyCr;
+
+  return withLedgerLock(addr, async () => {
+    const ledger = await loadLedger(addr);
+
+    // Idempotency first: an already-refunded ref must not be re-read as a fresh
+    // spend. Checked before the spend lookup so the answer doesn't depend on
+    // whether the original event has since been pushed out by the history cap.
+    if (ledger.history.some((e) => e.kind === "refund" && e.refundOf === ref)) {
+      return { ...nil("already"), balance: summarize(addr, accrued, dailyCr, ledger) };
+    }
+
+    const ev = ledger.history.find((e) => e.kind === "spend" && e.ref === ref);
+    if (!ev) return { ...nil("not-found"), balance: summarize(addr, accrued, dailyCr, ledger) };
+
+    // An event from before the split was recorded. We know the total but not
+    // which bucket paid it, and both wrong answers cost someone real credits.
+    // "Cannot assess" is the correct output here, not a 50/50 guess.
+    if (typeof ev.fromDaily !== "number" || typeof ev.fromPool !== "number") {
+      return { ...nil("unsplittable"), balance: summarize(addr, accrued, dailyCr, ledger) };
+    }
+
+    const today = utcDay();
+    // The daily half is returnable only if BOTH the event's day and the row's
+    // current window are still today. If the day rolled over, that allowance
+    // has already been re-granted fresh; handing it back now would be a second
+    // grant on top.
+    const dayStillOpen  = ev.day === today && ledger.dailyDay === today;
+    const returnedDaily = dayStillOpen
+      ? Math.min(ev.fromDaily, ledger.dailySpent ?? 0)
+      : 0;
+    const expiredDaily  = ev.fromDaily - returnedDaily;
+    const returnedPool  = Math.min(ev.fromPool, ledger.spent);
+
+    ledger.dailySpent = Math.max(0, (ledger.dailySpent ?? 0) - returnedDaily);
+    ledger.spent      = Math.max(0, ledger.spent - returnedPool);
+    // `freeSpent` counts lifetime draw on the free bucket, so it unwinds with
+    // the daily half only — never with the pool half.
+    if (returnedDaily > 0 && typeof ledger.freeSpent === "number") {
+      ledger.freeSpent = Math.max(0, ledger.freeSpent - returnedDaily);
+    }
+
+    const returned = returnedDaily + returnedPool;
+    ledger.history.push({
+      ts: Date.now(),
+      kind: "refund",
+      amount: returned,
+      reason: ev.reason,
+      ref: `refund:${ref}`,
+      refundOf: ref,
+      fromDaily: returnedDaily,
+      fromPool:  returnedPool,
+      day: today,
+    });
+    await saveLedger(addr, ledger);
+
+    return {
+      status: "refunded" as const,
+      returned, returnedDaily, returnedPool, expiredDaily,
+      balance: summarize(addr, accrued, dailyCr, ledger),
+    };
   });
 }
 

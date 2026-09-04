@@ -45,18 +45,27 @@ function StatCard({ label, value, sub, accent }: {
 }
 
 function EventRow({ ev }: { ev: LedgerEvent }) {
-  const isTopup = ev.kind === "topup";
+  // Refunds move credits back IN, so they read like a top-up in the ledger —
+  // but they are not one, and labelling them "chat:private" alone would show a
+  // green line the user can't account for. Say what it was: a charge reversed.
+  const isRefund   = ev.kind === "refund";
+  const isIncoming = isRefund || ev.kind === "topup";
   return (
     <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#141420] last:border-0">
       <div className="min-w-0">
-        <p className="font-mono text-[11px] text-slate-300 truncate">{ev.reason || ev.kind}</p>
-        <p className="font-mono text-[9px] text-slate-600 mt-0.5">{ago(ev.ts)} ago</p>
+        <p className="font-mono text-[11px] text-slate-300 truncate">
+          {isRefund && <span className="text-slate-500">refund · </span>}
+          {ev.reason || ev.kind}
+        </p>
+        <p className="font-mono text-[9px] text-slate-600 mt-0.5">
+          {ago(ev.ts)} ago{isRefund ? " · no answer was returned" : ""}
+        </p>
       </div>
       <p
         className="font-mono text-[12px] font-bold flex-shrink-0 ml-3"
-        style={{ color: isTopup ? "#34D399" : "#F87171" }}
+        style={{ color: isIncoming ? "#34D399" : "#F87171" }}
       >
-        {isTopup ? "+" : "−"}{ev.amount.toLocaleString()}
+        {isIncoming ? "+" : "−"}{ev.amount.toLocaleString()}
       </p>
     </div>
   );
