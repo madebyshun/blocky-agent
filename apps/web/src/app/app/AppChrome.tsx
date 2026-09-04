@@ -3,12 +3,14 @@
 /**
  * App chrome context — shared between the /app layout and individual pages.
  *
- * The mobile navigation drawer lives in the layout, but some pages (notably
- * Blue Chat) need to inject their OWN contextual sub-navigation into that
- * drawer (Models / Tools / Skills / Scheduled, plus recent conversations).
- * A page registers its contextual nav via `setContextual(...)` on mount and
- * clears it on unmount, so the layout's drawer can render it without the
- * layout knowing anything about chat internals.
+ * Some pages (notably Blue Chat) need to inject their OWN sub-navigation into
+ * the shell: recent conversations, a New chat action, a credits chip. A page
+ * registers it via `setContextual(...)` on mount and clears it on unmount, so
+ * the shell renders it without knowing anything about chat internals.
+ *
+ * This drives BOTH the mobile drawer and the desktop sidebar. Blue Chat used to
+ * own a second 288px aside of its own next to the shell's 212px one; folding it
+ * in here is what let that go (see AppSideNav).
  */
 import { createContext, useContext, useState, type ReactNode } from "react";
 
@@ -25,6 +27,11 @@ export interface DrawerRecent {
   title: string;
   active?: boolean;
   onSelect: () => void;
+  /** Short trailing label on desktop, e.g. a relative time ("18m"). Hidden on
+   *  hover to make room for the delete control. */
+  meta?: string;
+  /** Omit to render the row as non-deletable. */
+  onDelete?: () => void;
 }
 
 export interface ContextualNav {
@@ -37,6 +44,10 @@ export interface ContextualNav {
   newChat?: () => void;
   items: DrawerNavItem[];
   recents?: DrawerRecent[];
+  /** Rendered above the sidebar's own footer. The page supplies a node rather
+   *  than data because AppShell mounts OUTSIDE ChatProvider and so cannot call
+   *  useChat() to read the credit balance itself. */
+  footer?: ReactNode;
 }
 
 interface AppChromeValue {
