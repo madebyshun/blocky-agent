@@ -9,8 +9,13 @@
 // when the wallet is on 84532. The per-row quick-sell (25/50/100%) only shows on
 // Base mainnet (0x has no testnet liquidity) — it just pre-fills + opens the
 // Convert panel via onQuickSell; the user still reviews and signs there.
-// Robinhood-Chain tokens and a PnL column are deliberate follow-ups (Moralis is
-// Base-only, and PnL needs a real cost-basis source).
+//
+// This table is Base-ONLY and its header chip says so, because Moralis does not
+// index Robinhood Chain. RH crypto is a separate table (`RhTokenTable`, via
+// Blockscout) rather than extra rows here: quick-sell is 0x-on-Base and the
+// trust verdict is computed against Base's address book, so an RH row folded in
+// would inherit a Sell button that cannot fill. A PnL column is still a
+// follow-up — it needs a real cost-basis source, not a UI change.
 //
 // TRUST: every row also carries `h.trust`, derived in holdings.ts from the token
 // ADDRESS (see lib/wallet/token-trust.ts). This table used to render whatever
