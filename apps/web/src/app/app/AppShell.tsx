@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { usePolling } from "@/hooks/usePolling";
 import { AppChromeProvider, useAppChrome } from "./AppChrome";
 import LanguageToggle from "@/components/LanguageToggle";
+import AccountMenu from "@/components/AccountMenu";
 import { useLang } from "@/lib/i18n/context";
 
 // T-D D1 — small self-contained client component. Polls
@@ -371,8 +372,16 @@ function AppSideNav() {
         </div>
       )}
 
-      {/* Footer — Home · language · collapse toggle */}
+      {/* Footer — account · Home · language · collapse toggle */}
       <div className="border-t border-[#1A1A2E] shrink-0 flex flex-col gap-1 py-2 px-2">
+        {/* Who you are, first. The shell previously named a nav group "Account"
+            over Plans and Docs — a price list and a manual — with no route to
+            your own profile and no sign-out outside the wallet modal. This is
+            the actual account control; the group keeps its label for billing. */}
+        <AccountMenu collapsed={collapsed} />
+
+        <div className="h-px bg-[#1A1A2E] mx-1 my-1" />
+
         <a
           href="https://blueagent.dev"
           title={collapsed ? t("nav.home") : undefined}
@@ -597,6 +606,14 @@ function MobileDrawer() {
               <span className="font-mono text-[13px]">{t("nav.home")}</span>
             </a>
           </div>
+        </div>
+
+        {/* Account — same control as the desktop sidebar foot. It closes the
+            drawer via `onNavigate` rather than an enclosing onClick, because a
+            wrapper would fire on the click that OPENS the dropdown and the menu
+            could never be read at this breakpoint. */}
+        <div className="border-t border-[#1A1A2E] shrink-0 px-2 py-2">
+          <AccountMenu onNavigate={() => setDrawerOpen(false)} />
         </div>
 
         {/* Page-supplied footer (Blue Chat's credit chip). It doubles as the
