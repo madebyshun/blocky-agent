@@ -13,9 +13,12 @@ import { PRIVY_ENABLED, describeLoginMethods } from "@/lib/privy/config";
 import { formatUnits } from "viem";
 import { QRCodeSVG } from "qrcode.react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import { WALLET_CHAINS, WALLET_CHAIN_ORDER, type WalletChain } from "@/lib/wallet/chains";
+// ⚠️ EARN-ONLY import. The wallet's identity (chain, explorer, what counts as
+// cash) now comes from @/lib/wallet/chains; this line is what the Earn removal
+// deletes, along with the three lookups it feeds.
 import {
   YIELD_NETWORKS, ERC20_ABI, AAVE_POOL_ABI, ERC4626_ABI, VENUES, supplyApyPct,
-  type YieldNetwork,
 } from "@/lib/yield-execution";
 import { MoveToYieldCard, SendCard } from "@/app/chat/components/ToolCards";
 import { useBasename, shortAddr } from "@/lib/useBasename";
@@ -89,7 +92,7 @@ export default function BankPage() {
   // an effect — reading localStorage/searchParams during the first render would
   // hydration-mismatch, and the safe value (mainnet, locked) is the right first
   // paint anyway.
-  const [network, setNetwork] = useState<YieldNetwork>("base");
+  const [network, setNetwork] = useState<WalletChain>("base");
   const [testnetUnlocked, setTestnetUnlocked] = useState(false);
   useEffect(() => {
     try {
@@ -105,10 +108,17 @@ export default function BankPage() {
   // Hoisted above the onramp handlers on purpose: `addCash` / `cashOut` read
   // `isTestnet` to refuse a mainnet-only flow, so it has to be initialised
   // before the first render that can bind those handlers.
-  const net         = YIELD_NETWORKS[network];
+  const net         = WALLET_CHAINS[network];
   const chainId     = net.chainId;
-  const morphoVnet  = VENUES.morpho.nets[network];
   const isTestnet   = net.testnet;
+
+  // ⚠️ EARN-ONLY — the wallet's last dependency on the yield module, deliberately
+  // narrowed to these three lines so removing Earn is a delete, not a hunt.
+  // Lending markets exist on Base only; `earnNet` is undefined on any chain
+  // without one, and every read below is gated on it rather than assuming.
+  const earnKey     = network === "base" || network === "baseSepolia" ? network : null;
+  const earnNet     = earnKey ? YIELD_NETWORKS[earnKey] : undefined;
+  const morphoVnet  = earnKey ? VENUES.morpho.nets[earnKey] : undefined;
 
   // The wallet's OWN chain, which is not the same thing as the network this
   // dashboard is reading. Balances are read with an explicit `chainId`, so they
@@ -208,17 +218,17 @@ export default function BankPage() {
 
   // ── Live on-chain reads ──────────────────────────────────────────────────
   const { data: walletRaw } = useReadContract({
-    address: net.usdc, abi: ERC20_ABI, functionName: "balanceOf",
+    address: net.stable, abi: ERC20_ABI, functionName: "balanceOf",
     args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct },
   });
   const { data: ethRaw } = useBalance({ address: acct, chainId, query: { enabled: !!acct } });
   const { data: aaveRaw } = useReadContract({
-    address: net.aUsdc, abi: ERC20_ABI, functionName: "balanceOf",
-    args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct },
+    address: earnNet?.aUsdc, abi: ERC20_ABI, functionName: "balanceOf",
+    args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct && !!earnNet },
   });
   const { data: aaveReserve } = useReadContract({
-    address: net.pool, abi: AAVE_POOL_ABI, functionName: "getReserveData",
-    args: [net.usdc], chainId,
+    address: earnNet?.pool, abi: AAVE_POOL_ABI, functionName: "getReserveData",
+    args: earnNet ? [earnNet.usdc] : undefined, chainId, query: { enabled: !!earnNet },
   });
   const { data: morphoRaw } = useReadContract({
     address: morphoVnet?.target, abi: ERC4626_ABI, functionName: "maxWithdraw",
@@ -226,7 +236,7 @@ export default function BankPage() {
     query: { enabled: !!acct && !!morphoVnet },
   });
 
-  const walletUsdc = walletRaw != null ? Number(formatUnits(walletRaw as bigint, net.usdcDecimals)) : null;
+  const walletUsdc = walletRaw != null ? Number(formatUnits(walletRaw as bigint, net.stableDecimals)) : null;
   const ethBal     = ethRaw ? Number(formatUnits(ethRaw.value, ethRaw.decimals)) : null;
   const aavePos    = aaveRaw != null ? Number(formatUnits(aaveRaw as bigint, 6)) : null;
   const morphoPos  = morphoRaw != null ? Number(formatUnits(morphoRaw as bigint, 6)) : null;
@@ -689,15 +699,15 @@ export default function BankPage() {
           <div className="font-mono text-[9px] text-slate-600 mb-1.5">NETWORK</div>
           {testnetUnlocked ? (
             <div className="flex gap-1">
-              {(["base", "baseSepolia"] as const).map(nk => (
+              {WALLET_CHAIN_ORDER.map(nk => (
                 <button key={nk} onClick={() => setNetwork(nk)}
                   className="flex-1 font-mono text-[10px] py-1.5 rounded-md transition-colors"
                   style={network === nk
-                    ? YIELD_NETWORKS[nk].testnet
+                    ? WALLET_CHAINS[nk].testnet
                       ? { background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B30" }
                       : { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
                     : { color: "#64748b", border: "1px solid #1A1A2E" }}>
-                  {YIELD_NETWORKS[nk].testnet ? "Sepolia" : "Mainnet"}
+                  {WALLET_CHAINS[nk].short}
                 </button>
               ))}
             </div>
@@ -1227,7 +1237,16 @@ export default function BankPage() {
                     the buttons above is not enough on its own — the card ships
                     a Supply/Withdraw toggle, so without this prop a user who
                     reached the exit could flip straight back into a deposit. */}
-                {panel === "withdraw" && <MoveToYieldCard result={{ network, action: "withdraw" }} account={acct} withdrawOnly />}
+                {/* `earnKey`, not `network` — MoveToYieldCard takes `network` as a
+                    loose string and reads anything that isn't "base" as
+                    baseSepolia, so handing it a chain with no lending market
+                    would silently move the user onto a TESTNET withdraw form.
+                    Passing the narrowed key means the card can only ever be given
+                    a network it can actually represent. */}
+                {panel === "withdraw" && (earnKey
+                  ? <MoveToYieldCard result={{ network: earnKey, action: "withdraw" }} account={acct} withdrawOnly />
+                  : <p className="font-mono text-[11px] text-slate-500">Earn positions are on Base. Switch to Base to withdraw.</p>
+                )}
                 {/* Convert is a 0x-API flow that exists on Base mainnet only, and
                     SwapCard force-switches the wallet to mainnet before signing.
                     Rendering it while the dashboard is on testnet would move REAL
