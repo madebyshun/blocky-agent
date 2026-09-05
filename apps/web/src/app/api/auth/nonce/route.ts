@@ -1,11 +1,15 @@
 /**
  * GET /api/auth/nonce — mint a single-use, server-issued SIWE nonce.
  *
- * This endpoint exists because the alternative is what `api/hub/tools` still
- * does: trust a nonce the CLIENT invented. A client-invented nonce proves
- * nothing — the server never recorded issuing it, so it can never notice it
- * being replayed. Here the nonce is minted, stored, and spent exactly once by
- * `spendNonce`.
+ * This endpoint exists because the alternative is trusting a nonce the CLIENT
+ * invented. That proves nothing — the server never recorded issuing it, so it
+ * can never notice it being replayed. Here the nonce is minted, stored, and
+ * spent exactly once by `spendNonce`.
+ *
+ * Callers (all of them, as of #172): Blue Chat sign-in, Hub submit external,
+ * Hub submit hosted, Hub remove external, Hub remove hosted. The browser half
+ * is `lib/siwe-nonce.ts`; external agents call this endpoint directly, which is
+ * documented at /docs/list-a-tool.
  *
  * Rate-limited by IP: each call writes a KV key, so an unlimited endpoint is a
  * free way to burn this project's Upstash request budget — which has already

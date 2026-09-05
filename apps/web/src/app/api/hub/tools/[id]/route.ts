@@ -2,12 +2,22 @@
  * /api/hub/tools/[id]
  *   GET    — single registered (external) tool with live call/revenue stats.
  *   DELETE — remove the tool. Requires a SIWE signature over the canonical
- *            remove manifest, proving the requester owns tool.builderAddress.
+ *            remove manifest AND a server-issued nonce, proving the requester
+ *            owns tool.builderAddress and that this exact request is fresh.
  *            Non-custodial: no funds move, accrued earnings are preserved.
+ *
+ * ⚠ BREAKING, 2026-09-05 (#172). `nonce` must come from `GET /api/auth/nonce`.
+ * It used to be client-invented, which mattered more here than on the submit
+ * routes: a replayed submit is absorbed by the uniqueness check (409), but a
+ * replayed DELETE succeeds and destroys the listing again. The remove manifest
+ * is (registry, slug, owner, nonce) with no timestamp, so a captured body stayed
+ * valid indefinitely — the moment a builder re-registered the same slug, an old
+ * captured delete would take it down a second time.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyMessage } from "viem";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
+import { spendNonce, NONCE_SOURCE_HINT } from "@/lib/session";
 import { getRegisteredTool, removeTool, removeToolSiweMessage } from "@/lib/hub-registry";
 
 export const runtime = "nodejs";
@@ -49,6 +59,14 @@ export async function DELETE(
   }
   if (!/^0x[a-fA-F0-9]{40}$/.test(owner)) {
     return NextResponse.json({ error: "Invalid owner address" }, { status: 400 });
+  }
+
+  // Freshness gate, before any side effect. A remove is destructive and there is
+  // nothing to retry into — so unlike the submit routes there is no UX cost to
+  // spending early.
+  const spend = await spendNonce(nonce);
+  if (!spend.ok) {
+    return NextResponse.json({ error: `${spend.reason} ${NONCE_SOURCE_HINT}` }, { status: spend.status });
   }
 
   const tool = await getRegisteredTool(id);

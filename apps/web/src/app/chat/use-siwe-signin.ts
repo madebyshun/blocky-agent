@@ -8,11 +8,11 @@
  *   2. sign `sessionSiweMessage(host, address, nonce)` in the wallet
  *   3. POST /api/auth/session    → server verifies, sets an httpOnly cookie
  *
- * Step 1 is not optional and cannot be replaced with a locally generated nonce.
- * The existing Hub submit flow does exactly that (`SubmitTool.tsx` calls
- * `crypto.randomUUID()` and posts it alongside the signature), which means the
- * server never recorded issuing it and can never detect it being replayed. Here
- * the nonce round-trips so the server can spend it exactly once.
+ * Step 1 is not optional and cannot be replaced with a locally generated nonce:
+ * the server would never have recorded issuing it, so it could never detect the
+ * signed body being replayed. Since #172 the Hub submit and remove flows share
+ * this rule and the same `fetchServerNonce` helper — this was the first flow to
+ * get it right, not the only one that needs it.
  *
  * The message itself comes from the shared `lib/siwe-session-message` module —
  * imported, never re-typed, because the server verifies against the identical
@@ -22,6 +22,7 @@
 import { useCallback } from "react";
 import { useSignMessage } from "wagmi";
 import { sessionSiweMessage } from "@/lib/siwe-session-message";
+import { fetchServerNonce } from "@/lib/siwe-nonce";
 
 export function useSiweSignIn() {
   // Same hook the Hub's SubmitTool / DashboardView already sign with, so this
@@ -31,14 +32,7 @@ export function useSiweSignIn() {
 
   /** Resolves to the signed-in wallet, or throws with a message fit for the UI. */
   return useCallback(async (address: string): Promise<string> => {
-    const nonceRes = await fetch("/api/auth/nonce", { cache: "no-store" });
-    if (!nonceRes.ok) {
-      const body = await nonceRes.json().catch(() => ({}));
-      throw new Error(String(body?.error ?? "Could not start sign-in."));
-    }
-    const { nonce } = await nonceRes.json();
-    if (typeof nonce !== "string" || !nonce) throw new Error("Could not start sign-in.");
-
+    const nonce     = await fetchServerNonce();
     const message   = sessionSiweMessage(window.location.host.toLowerCase(), address, nonce);
     const signature = await signMessageAsync({ message });
 

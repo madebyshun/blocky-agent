@@ -2,11 +2,20 @@
  * /api/hub/tools — Builder Registry
  *
  * GET  → list all registered tools (community-submitted)
- * POST → submit a new tool (requires SIWE signature)
+ * POST → submit a new tool (requires SIWE signature over a SERVER-ISSUED nonce)
+ *
+ * ⚠ BREAKING, 2026-09-05 (#172). `nonce` must now come from
+ * `GET /api/auth/nonce`. Until this commit the route accepted whatever nonce the
+ * client invented, which made every signed submit replayable forever: nothing on
+ * our side ever recorded that the nonce was spent, so the same captured body
+ * verified on every retry. Documented at /docs/list-a-tool, which changed in the
+ * same commit — an external builder's script breaks here, so the error text has
+ * to say why.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyMessage } from "viem";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
+import { spendNonce, NONCE_SOURCE_HINT } from "@/lib/session";
 import {
   listRegisteredTools,
   getRegisteredTool,
@@ -98,13 +107,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "inputs must be a 1..12 array" }, { status: 400 });
   }
 
-  // ── 2. Uniqueness ─────────────────────────────────────────────────────────
+  // ── 2. Spend the nonce ────────────────────────────────────────────────────
+  // Placed AFTER the purely syntactic checks above (so a typo'd slug doesn't
+  // cost a wallet signature) and BEFORE everything with a side effect — the KV
+  // read, the signature verify, the outbound probe. Same order as
+  // api/auth/session, and deliberately not "spend last, just before the write":
+  // gating the whole handler is robust to a future edit that adds a side effect
+  // earlier, whereas gating only the write silently reopens this hole the first
+  // time someone inserts a step above it.
+  //
+  // Cost: a 422 from the probe below now needs a fresh nonce and a re-sign. That
+  // is a smaller change than it looks — the endpoint and the price are both
+  // inside the signed manifest, so the two common 422s already required one.
+  const spend = await spendNonce(body.nonce);
+  if (!spend.ok) {
+    return NextResponse.json({ error: `${spend.reason} ${NONCE_SOURCE_HINT}` }, { status: spend.status });
+  }
+
+  // ── 3. Uniqueness ─────────────────────────────────────────────────────────
   const existing = await getRegisteredTool(body.id);
   if (existing) {
     return NextResponse.json({ error: `Tool id "${body.id}" already registered.` }, { status: 409 });
   }
 
-  // ── 3. SIWE signature ─────────────────────────────────────────────────────
+  // ── 4. SIWE signature ─────────────────────────────────────────────────────
   const message = siweMessage(body, body.nonce);
   let valid = false;
   try {
@@ -120,7 +146,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid signature — does not match builderAddress." }, { status: 401 });
   }
 
-  // ── 4. Auto-live gate: strict x402 probe ──────────────────────────────────
+  // ── 5. Auto-live gate: strict x402 probe ──────────────────────────────────
   // agentic.market model — no human moderation. The endpoint must prove it is a
   // working Base x402 endpoint (402 + valid payTo/asset/network). Fail → reject
   // with the reason; pass → the tool is live immediately (status "live").
@@ -132,7 +158,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── 4b. Price must match the endpoint's advertised amount ──────────────────
+  // ── 5b. Price must match the endpoint's advertised amount ──────────────────
   // x402 scheme "exact" verifies the signed authorization `value` against the
   // endpoint's own maxAmountRequired byte-for-byte. If the listed price differs
   // from what the endpoint actually charges, EVERY paid call fails at verify
@@ -157,7 +183,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── 5. Save (live) ────────────────────────────────────────────────────────
+  // ── 6. Save (live) ────────────────────────────────────────────────────────
   const tool: RegisteredTool = {
     id:             body.id,
     name:           body.name.trim().slice(0, 80),
