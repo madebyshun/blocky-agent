@@ -214,12 +214,13 @@ function HomeView(props: HubHomeProps) {
         {/* ── Agent spend — only for a connected wallet ──────────────────────
             Mounted HERE, on the marketplace home, because this is where the
             money is actually spent: every row in it was paid for by clicking a
-            tool on this page. /wallet has the same panel, but a user browsing
-            tools should not have to leave to find out what the last ones cost.
+            tool on this page. /app/usage has the same panel, but a user
+            browsing tools should not have to leave to find out what the last
+            ones cost.
 
             Gated on `address`, not rendered-then-emptied: with no address there
             is no question to ask, and the component's own disconnected copy is
-            aimed at /wallet (where the page IS the wallet). On a marketplace
+            aimed at a page you visit to ask about YOUR spend. On a marketplace
             home an unconnected visitor gets no panel at all rather than a
             connect-prompt competing with the two CTAs above. */}
         {address && (

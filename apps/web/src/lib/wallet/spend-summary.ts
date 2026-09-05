@@ -8,8 +8,10 @@
  *   credits→ an off-chain metered balance, debited per call. `ledger:<addr>`.
  *
  * So "what did my agent spend" had two half-answers and no whole one. This file
- * is the whole one. It groups both rails by tool and by day so /wallet can show
- * the thing no block explorer can: not that money left, but what it bought.
+ * is the whole one. It groups both rails by tool and by day so /app/usage can
+ * show the thing no block explorer can: not that money left, but what it bought.
+ * (It rendered on /app/wallet until 2026-09 — same component, moved to sit with
+ * the credit balance it shares a ledger with.)
  *
  * ─── The one number this file refuses to compute ────────────────────────────
  *
