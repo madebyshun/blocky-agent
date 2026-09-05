@@ -677,6 +677,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // tool call hit a paid tool). The turn produced no answer, so we refund
       // the up-front message charge below and stamp the chip at 0 cr.
       let walletBlocked = false;
+      // Set when the LLM gateway refused or returned nothing. The server has
+      // already reversed the ledger debit for a connected wallet (#193); this
+      // is the display half of the same fact — the chip must not bill a turn
+      // whose credits were just handed back, and a guest (who is metered only
+      // in localStorage) gets that local charge returned below.
+      let upstreamFailed = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -794,6 +800,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Guest tool call hit a paid tool — the turn is just the
               // connect-wallet wall, no answer. Mark it so we don't charge.
               walletBlocked = true;
+            } else if (parsed.type === "upstream_error") {
+              // The gateway failed before producing a single token. What
+              // follows in the stream is an error notice, not an answer.
+              upstreamFailed = true;
             } else if (parsed.type === "insufficient_credits") {
               // Server signalled the wallet's credit ledger couldn't cover the
               // chat message or tool call. Attach the structured notice to the
@@ -845,9 +855,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Blocked turn (guest hit a paid tool) → refund the up-front message
-      // charge. The guest got the connect-wallet wall, not an answer.
-      if (walletBlocked && !walletAddr) {
+      // Turns that produced no answer → refund the up-front local charge.
+      //   - walletBlocked: the guest got the connect-wallet wall.
+      //   - upstreamFailed: the gateway refused or returned nothing (#193).
+      // Guests only; a connected wallet is metered in the server ledger, which
+      // has already reversed its own debit — double-crediting here would show
+      // a balance the ledger disagrees with.
+      if ((walletBlocked || upstreamFailed) && !walletAddr) {
         const refunded = addCredits(cost, walletAddr);
         setCredits(refunded);
       }
@@ -861,12 +875,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const lastIdx  = task.messages.length - 1;
         const last     = task.messages[lastIdx];
 
-        // Stamp model + timing on the completed assistant message
-        // Local dev (isUnlimited) is unmetered, and a blocked turn
-        // (connect-wallet wall) is refunded — both stamp the chip at 0 cr.
+        // Stamp model + timing on the completed assistant message.
+        // Three turns cost nothing and must not print a price: local dev
+        // (isUnlimited, unmetered), the connect-wallet wall, and a gateway
+        // failure that produced no answer — the last two were refunded, in the
+        // server ledger for a connected wallet and locally for a guest.
         const finalMsgs = task.messages.map((m, i) =>
           i === lastIdx && m.role === "assistant"
-            ? { ...m, modelUsed: chatTier, responseMs, creditsUsed: (isUnlimited || walletBlocked) ? 0 : cost, isThinking: false }
+            ? {
+                ...m,
+                modelUsed: chatTier,
+                responseMs,
+                creditsUsed: (isUnlimited || walletBlocked || upstreamFailed) ? 0 : cost,
+                isThinking: false,
+              }
             : m
         );
 

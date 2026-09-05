@@ -65,7 +65,7 @@ const INTERNAL_KEY    = process.env.INTERNAL_SERVICE_KEY ?? "";
 // ─── Credit ledger debit helpers (Week 2 of credit redesign) ─────────────────
 
 type DebitResult =
-  | { kind: "ok";           cost: number }
+  | { kind: "ok";           cost: number; ref: string }
   | { kind: "insufficient"; needed: number; balance: number }
   | { kind: "skipped";      reason: string };
 
@@ -78,6 +78,11 @@ type DebitResult =
  * Skipped (not an error) when:
  *   - INTERNAL_SERVICE_KEY isn't configured  → can't auth to the spend route
  *   - the spend route itself errors out      → degrade gracefully, don't block
+ *
+ * On `ok` this returns the `ref` it stamped on the ledger event, which is the
+ * ONLY handle `refundChatCredits` accepts. The debit deliberately still happens
+ * before the model call — that is what stops a failed request from serving free
+ * compute — so the refund is the other half of that trade, not a replacement.
  */
 async function debitChatCredits(address: string, tier: string): Promise<DebitResult> {
   // Lazy-import so we don't drag the lib into every other code path that
@@ -95,6 +100,11 @@ async function debitChatCredits(address: string, tier: string): Promise<DebitRes
 
   if (cost <= 0) return { kind: "skipped", reason: "zero-cost-tier" };
 
+  // One id per debit, generated here and never accepted from the client — it is
+  // the capability that lets THIS request (and only this request) reverse its
+  // own charge.
+  const ref = `chat:${crypto.randomUUID()}`;
+
   try {
     const res = await fetch(`${BASE_URL}/api/credits/spend`, {
       method: "POST",
@@ -102,7 +112,7 @@ async function debitChatCredits(address: string, tier: string): Promise<DebitRes
         "Content-Type":   "application/json",
         "X-Blue-Internal": INTERNAL_KEY,
       },
-      body: JSON.stringify({ address, amount: cost, reason: `chat:${tier}` }),
+      body: JSON.stringify({ address, amount: cost, reason: `chat:${tier}`, ref }),
       signal: AbortSignal.timeout(8_000),
     });
     if (res.status === 402) {
@@ -120,10 +130,52 @@ async function debitChatCredits(address: string, tier: string): Promise<DebitRes
       console.error("[chat] credit spend failed:", res.status);
       return { kind: "skipped", reason: `spend-${res.status}` };
     }
-    return { kind: "ok", cost };
+    return { kind: "ok", cost, ref };
   } catch (e) {
     console.error("[chat] credit spend error:", (e as Error).message);
     return { kind: "skipped", reason: "network" };
+  }
+}
+
+/**
+ * Give back a chat debit whose turn produced NOTHING.
+ *
+ * Fired only from the terminal-failure paths below, and only where zero
+ * assistant tokens reached the client. The rule is deliberately narrow:
+ *
+ *   - upstream refused the request (5xx/4xx/timeout) → refund
+ *   - upstream accepted but streamed no content      → refund
+ *   - upstream streamed anything at all              → NO refund, even if the
+ *     answer was bad. "The model was unhelpful" is not a billing question, and
+ *     making it one hands every user a free-retry lever.
+ *
+ * Tool turns (`veniceToolStream`) are excluded on the same principle: the tool
+ * cards already rendered, so the turn delivered output.
+ *
+ * Best-effort by design — a refund that fails is logged, never surfaced. The
+ * user is already looking at an error; a second one about the refund of the
+ * first helps nobody, and the ledger row is the record that matters.
+ */
+async function refundChatCredits(address: string, ref: string): Promise<void> {
+  if (!address || !ref || !INTERNAL_KEY) return;
+  try {
+    const res = await fetch(`${BASE_URL}/api/credits/refund`, {
+      method: "POST",
+      headers: {
+        "Content-Type":    "application/json",
+        "X-Blue-Internal": INTERNAL_KEY,
+      },
+      body: JSON.stringify({ address, ref }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) {
+      console.error("[chat] credit refund failed:", res.status, ref);
+      return;
+    }
+    const out = await res.json().catch(() => ({})) as { status?: string; returned?: number };
+    console.warn(`[chat] refunded empty turn: ${out.status} ${out.returned ?? 0}cr ${ref}`);
+  } catch (e) {
+    console.error("[chat] credit refund error:", (e as Error).message);
   }
 }
 
@@ -2007,6 +2059,12 @@ async function veniceToolStream(
           ...toolResults,
         ];
 
+        // Neither Phase-2 failure below refunds the chat credit, unlike the
+        // token-free failures in `callVeniceStream`. By the time we get here
+        // the tools have already run and their `tool_done` cards have already
+        // streamed — the turn delivered output, and those tool runs were real
+        // upstream calls. #193 is specifically about turns that produced
+        // NOTHING; this is not one of them.
         let streamRes: Response;
         try {
           const veniceParams = cfg.veniceExtras
@@ -2169,6 +2227,12 @@ async function callVeniceStream(
   maxTokens:       number,
   enableWebSearch: boolean = false,
   cfgOverride?:    OpenAIChatCfg,
+  // Called when this turn ends having streamed ZERO assistant tokens — the
+  // upstream refused, crashed, or returned an empty body. This is the single
+  // choke point for "the model never produced anything", which is exactly the
+  // condition the chat debit has to be undone under (#193). It fires at most
+  // once per request, and never once any content has been emitted.
+  onNoOutput?:     () => Promise<void>,
 ): Promise<Response> {
   const cfg = cfgOverride ?? veniceCfg(apiKey);
   let veniceRes: Response;
@@ -2190,7 +2254,11 @@ async function callVeniceStream(
     });
   } catch (e) {
     console.warn(`[chat] ${cfg.provider} stream fetch crashed: ${(e as Error).message}`);
-    return textToSSE("AI service temporarily unavailable. Try a different model.");
+    await onNoOutput?.();
+    return textToSSE(
+      "AI service temporarily unavailable. Try a different model.",
+      [{ type: "upstream_error", provider: cfg.provider, status: 0 }],
+    );
   }
 
   if (!veniceRes.ok) {
@@ -2201,7 +2269,13 @@ async function callVeniceStream(
       : veniceRes.status === 429
       ? `${label} rate limit hit. Try again in a moment.`
       : `${label} error ${veniceRes.status}: ${err.slice(0, 120)}`;
-    return textToSSE(`[${hint}]`);
+    // This is the exact line #193 was observed on: a Virtuals 500 became the
+    // assistant's message and the user was billed full price for it.
+    await onNoOutput?.();
+    return textToSSE(
+      `[${hint}]`,
+      [{ type: "upstream_error", provider: cfg.provider, status: veniceRes.status }],
+    );
   }
 
   // Transform OpenAI SSE → Blue SSE with <think> block extraction
@@ -2217,9 +2291,16 @@ async function callVeniceStream(
       let rawBuf  = "";
       let textBuf = "";
       let inThink = false;
+      // Did this turn deliver ANY assistant output? A 200 with an empty body is
+      // a real Virtuals failure mode and is just as unbilled-for as a 500 —
+      // but one visible token, even inside a <think> block, means the model ran
+      // and the charge stands.
+      let emittedOutput = false;
 
-      const emit = (obj: object) =>
+      const emit = (obj: object) => {
+        emittedOutput = true;
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
 
       // Flush textBuf through state machine — routes text to thinking vs content
       function flush(isFinal = false) {
@@ -2277,6 +2358,16 @@ async function callVeniceStream(
         }
         flush(true); // drain on stream end
       } finally {
+        // Upstream accepted the request and then said nothing. The user is
+        // looking at a blank reply, so the charge goes back — awaited BEFORE
+        // the close so the refund isn't racing a torn-down function instance.
+        if (!emittedOutput) {
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify({ type: "upstream_error", provider: cfg.provider, status: 204 })}\n\n`,
+          ));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          try { await onNoOutput?.(); } catch { /* best-effort, already logged */ }
+        }
         controller.close();
       }
     },
@@ -2512,12 +2603,23 @@ export async function POST(req: NextRequest) {
   // Server fetches BLUE balance + computes credit cost server-side (frontend
   // tier is not trusted). On insufficient balance, we return an SSE stream
   // with a structured event so the chat UI can render a top-up CTA in-line.
+  //
+  // The debit stays AHEAD of the model call on purpose — that is what stops a
+  // failing request from serving free compute. `undoDebit` is the other half of
+  // that bargain: the handle for giving it back if the turn then produces
+  // nothing at all (#193). It is a no-op for guests, zero-cost tiers, and any
+  // request whose spend was skipped, so every failure path can call it blindly.
+  let undoDebit: (() => Promise<void>) | undefined;
   if (address && INTERNAL_KEY && /^0x[a-fA-F0-9]{40}$/.test(address)) {
     const debit = await debitChatCredits(address, tier);
     if (debit.kind === "insufficient") {
       return creditErrorSSE(debit.needed, debit.balance);
     }
-    // debit.kind === "ok" | "skipped" → proceed normally
+    if (debit.kind === "ok") {
+      const ref = debit.ref;
+      undoDebit = () => refundChatCredits(address, ref);
+    }
+    // debit.kind === "skipped" → nothing was charged, nothing to undo
   }
 
   // ── Command injection ─────────────────────────────────────────────────────
@@ -2623,7 +2725,13 @@ export async function POST(req: NextRequest) {
   if (effProvider === "venice" && effModelId) {
     const apiKey = process.env.VENICE_INFERENCE_KEY ?? process.env.VENICE_API_KEY;
     if (!apiKey) {
-      return textToSSE("Please select a model: Fast · Chat · Deep Think · DeepSeek");
+      // Charged, then told to pick a different model — the same unpaid-for
+      // non-answer as an upstream 500, so it unwinds the same way.
+      await undoDebit?.();
+      return textToSSE(
+        "Please select a model: Fast · Chat · Deep Think · DeepSeek",
+        [{ type: "upstream_error", provider: "venice", status: 0 }],
+      );
     }
 
     const veniceMessages = injectAttachments(cleanMessages, attachments, "venice");
@@ -2669,7 +2777,7 @@ export async function POST(req: NextRequest) {
     }
 
     // No tools (or E2EE): direct stream
-    return callVeniceStream(apiKey, effModelId, openaiMsgs, maxTok, autoSearch);
+    return callVeniceStream(apiKey, effModelId, openaiMsgs, maxTok, autoSearch, undefined, undoDebit);
   }
 
 
@@ -2701,10 +2809,13 @@ export async function POST(req: NextRequest) {
 
   const virtualsKey = process.env.VIRTUALS_API_KEY ?? "";
   if (!virtualsKey) {
+    // Misconfigured server, zero output — the user must not carry the cost.
+    await undoDebit?.();
     return textToSSE(
       "[Chat unavailable: VIRTUALS_API_KEY not set on the server. " +
       "Ask an operator to configure it. Bankr provider has been " +
       "permanently removed from Blue Chat.]",
+      [{ type: "upstream_error", provider: "virtuals", status: 0 }],
     );
   }
   const cfg = virtualsCfg(virtualsKey);
@@ -2751,6 +2862,6 @@ export async function POST(req: NextRequest) {
     }
   }
   return callVeniceStream(
-    virtualsKey, virtualsModel, openaiMsgs, virtualsMax, virtualsAutoSearch, cfg,
+    virtualsKey, virtualsModel, openaiMsgs, virtualsMax, virtualsAutoSearch, cfg, undoDebit,
   );
 }
