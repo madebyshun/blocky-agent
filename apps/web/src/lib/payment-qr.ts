@@ -7,28 +7,35 @@
 //   • EIP-681 ETH transfer         ethereum:0xRecip@8453?value=1e18
 //   • EIP-681 token (USDC) transfer ethereum:<usdc>@8453/transfer?address=0xRecip&uint256=1000000
 //
-// All Base-only (chainId 8453 mainnet / 84532 Sepolia). USDC is classified by
-// matching the target contract against the verified USDC address per network.
+// Chains come from WALLET_CHAINS, so this follows whatever the wallet supports
+// rather than pinning its own list. USDC is classified by matching the target
+// contract against the verified USDC address for that chain — and only for
+// chains that actually settle in USDC (see `usdcFor`).
 
 import { formatUnits, parseUnits } from "viem";
-import { YIELD_NETWORKS, type YieldNetwork } from "./yield-execution";
+import { WALLET_CHAINS, walletChainByChainId, type WalletChain } from "./wallet/chains";
 
 export type ParsedPayment = {
   to?: string;                 // 0x address or name.base
   amount?: string;             // human units
   asset?: "USDC" | "ETH";
-  network?: YieldNetwork;
+  network?: WalletChain;
 };
-
-const CHAIN_TO_NET: Record<number, YieldNetwork> = { 8453: "base", 84532: "baseSepolia" };
-const NET_TO_CHAIN: Record<YieldNetwork, number> = { base: 8453, baseSepolia: 84532 };
 
 const isAddr = (s: string) => /^0x[a-fA-F0-9]{40}$/.test(s);
 const isName = (s: string) => /^[a-z0-9-]+(\.[a-z0-9-]+)*\.(base|eth)$/i.test(s);
 
+/**
+ * The USDC contract on `chainId`, or undefined if that chain doesn't settle in
+ * USDC. The `stableSymbol` guard is load-bearing: Robinhood Chain's stable is
+ * USDG, and without it a USDG transfer would come back tagged `asset: "USDC"` —
+ * a wrong token name on a payment prefill, which is the worst place to be wrong.
+ */
 function usdcFor(chainId: number): string | undefined {
-  const net = CHAIN_TO_NET[chainId];
-  return net ? YIELD_NETWORKS[net].usdc.toLowerCase() : undefined;
+  const net = walletChainByChainId(chainId);
+  if (!net) return undefined;
+  const cfg = WALLET_CHAINS[net];
+  return cfg.stableSymbol === "USDC" ? cfg.stable.toLowerCase() : undefined;
 }
 
 // EIP-681 number values may be integers ("1000000") or scientific ("1e18").
@@ -57,13 +64,13 @@ export function parsePaymentQr(raw: string): ParsedPayment | null {
     const chainId = m[2] ? parseInt(m[2], 10) : 8453;
     const fn = (m[3] || "").toLowerCase();
     const params = new URLSearchParams(m[4] || "");
-    const network = CHAIN_TO_NET[chainId];
+    const network = walletChainByChainId(chainId);
 
     if (fn === "transfer") {
       const recip = params.get("address") || params.get("recipient") || undefined;
       const rawAmt = params.get("uint256") || params.get("amount") || undefined;
       const isUsdc = target.toLowerCase() === usdcFor(chainId);
-      const decimals = isUsdc && network ? YIELD_NETWORKS[network].usdcDecimals : 6;
+      const decimals = isUsdc && network ? WALLET_CHAINS[network].stableDecimals : 6;
       // EIP-681 transfer recipient must be a real 0x address — reject anything
       // else (don't prefill a garbage "to"). undefined = no recipient parsed.
       return {
@@ -95,19 +102,22 @@ export function buildPaymentUri(opts: {
   to: string;
   amount?: string;
   asset?: "USDC" | "ETH";
-  network: YieldNetwork;
+  network: WalletChain;
 }): string {
   const { to, amount, asset = "USDC", network } = opts;
   const amt = parseFloat(amount ?? "");
   if (!to) return "";
   if (!(amt > 0)) return to; // plain address QR
 
-  const chainId = NET_TO_CHAIN[network];
+  // Read the chainId off the config rather than a second hand-maintained table.
+  // There used to be a NET_TO_CHAIN literal here that had to be edited in lockstep
+  // with the network list; a chain added to one and not the other would have
+  // built a QR pointing at the wrong network.
+  const cfg = WALLET_CHAINS[network];
   if (asset === "ETH") {
     const wei = parseUnits(String(amount), 18).toString();
-    return `ethereum:${to}@${chainId}?value=${wei}`;
+    return `ethereum:${to}@${cfg.chainId}?value=${wei}`;
   }
-  const usdc = YIELD_NETWORKS[network].usdc;
-  const units = parseUnits(String(amount), YIELD_NETWORKS[network].usdcDecimals).toString();
-  return `ethereum:${usdc}@${chainId}/transfer?address=${to}&uint256=${units}`;
+  const units = parseUnits(String(amount), cfg.stableDecimals).toString();
+  return `ethereum:${cfg.stable}@${cfg.chainId}/transfer?address=${to}&uint256=${units}`;
 }
