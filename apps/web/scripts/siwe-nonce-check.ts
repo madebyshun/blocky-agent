@@ -43,7 +43,7 @@ delete process.env.KV_REST_API_TOKEN;
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { issueNonce, spendNonce, NONCE_SOURCE_HINT } from "../src/lib/session";
 import { isKVEnabled } from "../src/lib/kv";
@@ -91,20 +91,21 @@ const CLIENT_SIGNERS: Record<string, string> = {
 };
 
 /**
- * The one flow that legitimately mints its nonce in the browser.
+ * THE EXCEPTION IS GONE — retired 2026-09-05 with the profile surface (#29, PR
+ * #405), and these two paths are kept only to assert that it stayed gone.
  *
- * It is NOT an oversight and must not be "unified" into spendNonce without
- * thought: the route burns the nonce itself via kvSetNX on a per-address key
- * AND bounds the message with a ±5-minute `issuedAt`, so a replay loses the
- * SET NX race and a stale capture falls outside the window. Different
- * mechanism, same guarantee.
+ * What it was: the profile route minted its nonce in the browser, which was
+ * sound only because it burned it itself via `kvSetNX` on a per-address key AND
+ * bounded the message with a ±5-minute `issuedAt` — a replay lost the SET NX
+ * race, a stale capture fell outside the window. Different mechanism, same
+ * guarantee, and group 5 used to assert every load-bearing part of it.
  *
- * Group 5 asserts every load-bearing part of that scheme, because each one
- * alone is insufficient: drop the kvSetNX and the nonce stops being single-use;
- * drop the issuedAt and a capture is valid forever; swap the CSPRNG for
- * Date.now() and it becomes predictable as well as replayable. This is listed
- * rather than skipped so the exception has to survive review, not just avoid
- * the sweep.
+ * Deleting the files silently would have been the wrong move twice over: the
+ * two discovery sweeps in groups 3 and 4 each carried a `f !== NONCE_EXCEPTION`
+ * carve-out, and a carve-out for a file that no longer exists is an unexploded
+ * exemption — reintroduce a route at that path and it is waved through a sweep
+ * whose entire job is to make you look at it. Both carve-outs are now removed,
+ * so a returning profile route is `unlisted` and has to argue for itself again.
  */
 const NONCE_EXCEPTION        = "src/app/api/profile/[address]/route.ts";
 const NONCE_EXCEPTION_CLIENT = "src/app/app/profile/ProfileClient.tsx";
@@ -212,7 +213,9 @@ function serverRoutes() {
     "src/app/api",
     /\b(siweMessage|hostedSiweMessage|removeToolSiweMessage|sessionSiweMessage)\s*\(/,
   );
-  const unlisted = found.filter((f) => !(f in SERVER_VERIFIERS) && f !== NONCE_EXCEPTION);
+  // No carve-out: the one exempt route was deleted with the profile surface, so
+  // anything appearing at that path again is a new decision, not the old one.
+  const unlisted = found.filter((f) => !(f in SERVER_VERIFIERS));
   check(
     "no SIWE-verifying route is missing from SERVER_VERIFIERS",
     unlisted.length === 0,
@@ -247,8 +250,10 @@ function clientSigners() {
   // #172 ticket, was not in the first draft of this list, and turned out to be
   // the browser half of the documented exception rather than a fifth hole.
   // Exactly the outcome the sweep is for: it does not decide, it makes you look.
+  // That component is now deleted and its carve-out with it, for the same reason
+  // as group 3's — an exemption must not outlive the thing it exempted.
   const signers = grepFiles("src/app", /\bsignMessageAsync\s*\(/);
-  const unlisted = signers.filter((f) => !(f in CLIENT_SIGNERS) && f !== NONCE_EXCEPTION_CLIENT);
+  const unlisted = signers.filter((f) => !(f in CLIENT_SIGNERS));
   check(
     "no wallet-signing component is missing from CLIENT_SIGNERS",
     unlisted.length === 0,
@@ -256,10 +261,10 @@ function clientSigners() {
   );
 }
 
-// ─── 5. Source: the public contract and the one exception ────────────────────
+// ─── 5. Source: the public contract, and the exception stays retired ─────────
 
 function contract() {
-  console.log("\n5. Public contract and the documented exception");
+  console.log("\n5. Public contract, and the retired exception stays retired");
 
   const session = read("src/lib/session.ts");
 
@@ -307,32 +312,24 @@ function contract() {
   );
   check("docs say the nonce is single-use", /single-use/i.test(docs));
 
-  // The deliberate exception, asserted rather than ignored — every load-bearing
-  // part of the scheme that makes it sound must still be present.
-  const profile = read(NONCE_EXCEPTION);
-  check(
-    `${NONCE_EXCEPTION} still burns its own nonce`,
-    /kvSetNX\s*\(/.test(profile),
-    "its client-supplied nonce is fine ONLY because it is claimed exactly once",
-  );
-  check(
-    `${NONCE_EXCEPTION} still bounds the message in time`,
-    /issuedAt/.test(profile),
-    "the ±5-minute window is the other half",
-  );
-
-  const profileClient = read(NONCE_EXCEPTION_CLIENT);
-  check(
-    `${NONCE_EXCEPTION_CLIENT} uses a CSPRNG, not a clock`,
-    /crypto\.getRandomValues/.test(profileClient) &&
-      !/\bnonce\w*\s*[:=][^;\n]*(Date\.now|Math\.random)/i.test(profileClient),
-    "a predictable nonce would be forgeable, not merely replayable",
-  );
-  check(
-    `${NONCE_EXCEPTION_CLIENT} sends issuedAt with the signature`,
-    /issuedAt/.test(profileClient),
-    "without it the server has no window to check and the capture never expires",
-  );
+  // THE EXCEPTION, now asserted by its ABSENCE. Both halves were deleted with
+  // the profile surface (#29, PR #405); this suite kept reading them and took
+  // `npm test` — and therefore CI on every PR — red on an ENOENT until 2026-09-06.
+  //
+  // The failure mode being closed is not the crash. It is that the two sweeps
+  // above exempted these exact paths by name: a file that comes back at a path
+  // with a standing carve-out is invisible to the check written to catch it. So
+  // rather than deleting the constants, they are asserted gone. If either
+  // returns, this fails FIRST and says what to do — either restore the four
+  // scheme checks or, better, use the server nonce like everything else.
+  for (const p of [NONCE_EXCEPTION, NONCE_EXCEPTION_CLIENT]) {
+    check(
+      `${p} is still gone — no exemption without a thing to exempt`,
+      !existsSync(join(ROOT, p)),
+      "if you reinstated this, give it fetchServerNonce; the old kvSetNX+issuedAt "
+      + "scheme was sound but bespoke, and its guard checks were removed with it",
+    );
+  }
 }
 
 // ─── File sweep ──────────────────────────────────────────────────────────────
