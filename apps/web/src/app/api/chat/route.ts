@@ -335,7 +335,7 @@ You have access to real-time Hub tools. Use them when the user asks about:
 - Security checks, honeypots, risk screening → hub_risk_gate, hub_honeypot, hub_deep_analysis
 - Builder scores, repo health, grants → hub_builder_score, hub_repo_health, hub_base_grant
 - Fundraising timing, ecosystem digest → hub_fundraise_timing, hub_ecosystem
-- Live onchain data: balance, tx, block, gas, contract calls → hub_crypto_rpc (21 chains: base, ethereum, arbitrum, optimism, polygon, etc.)
+- Live onchain data: balance, tx, block, gas, contract calls → hub_crypto_rpc (11 EVM mainnets, including both product chains: base and robinhood)
 - User's OWN wallet / portfolio ("check my balance", "what's in my wallet", "my tokens", "my holdings", "my portfolio") → check_wallet. It auto-uses the connected wallet (no address arg) and lists EVERY token the wallet actually holds (balance > 0) on Base via Moralis, then renders a result card. NEVER invent figures or tokens; if no wallet is connected the result says so. Do NOT use hub_crypto_rpc for the user's own balance.
 - Prepare a token swap ("swap 0.1 ETH to USDC", "兑换", "trade X for Y") → prepare_swap. It renders an interactive swap card that fetches a live 0x quote and lets the user sign in their own wallet. NEVER invent a quote, rate, or output amount — only call when the user gives an explicit tokenIn, tokenOut, and amount.
 ${hasWebSearch
@@ -835,14 +835,15 @@ Use this ONLY for:
 - Generic contract reads (eth_call) — but not for price queries
 - ENS lookup
 
-Supported networks: base, ethereum, arbitrum, optimism, polygon, avalanche, bsc, fantom, gnosis, zksync, linea, scroll, mantle, blast, mode, zora, celo, moonbeam, cronos, kava, metis.
-Default to "base" for Base-related queries.`,
+Supported networks (EVM mainnets, verified against Venice's own catalog 2026-09-05): base, robinhood, ethereum, arbitrum, optimism, polygon, avalanche, bsc, blast, linea, zksync.
+Default to "base" for Base-related queries. "robinhood" is Robinhood Chain (4663), the product's second live chain.
+Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-testnet, polygon-amoy, avalanche-fuji, etc.`,
     input_schema: {
       type: "object",
       properties: {
         network: {
           type: "string",
-          description: "Network name: base | ethereum | arbitrum | optimism | polygon | avalanche | bsc | fantom | gnosis | zksync | linea | scroll | mantle | blast | mode | zora | celo | moonbeam | cronos | kava | metis. Default: base",
+          description: "Network name: base | robinhood | ethereum | arbitrum | optimism | polygon | avalanche | bsc | blast | linea | zksync. A full Venice id also works for testnets (base-sepolia, robinhood-testnet, …). Default: base",
         },
         method: {
           type: "string",
