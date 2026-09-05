@@ -18,7 +18,7 @@
  */
 import crypto from "crypto";
 import webpush from "web-push";
-import { kvDel, kvGet, kvSet } from "@/lib/kv";
+import { kvDel, kvGet, kvGetProbe, kvSet, kvMutate } from "@/lib/kv";
 import { absoluteUrl } from "@/lib/site-url";
 import { KV_PUSH_SUB_INDEX, kvPushSub, TTL_PUSH_SUB } from "./kv-keys";
 import type { Arrow } from "./types";
@@ -58,14 +58,23 @@ export function publicVapidKey(): string | null {
 
 // ── Subscription CRUD ─────────────────────────────────────────────────────
 
+/**
+ * ⚠ `KV_PUSH_SUB_INDEX` is the only list of who is subscribed to push. It has
+ * no TTL and no backup, and losing it is SILENT in both directions: we stop
+ * notifying, while every browser still believes it is subscribed and shows no
+ * way to re-subscribe. Nobody reports it, because from the user's side nothing
+ * visibly breaks — the arrows just stop. That is why both mutations below go
+ * through `kvMutate` (skip on a failed read) rather than `kvGet ?? []`.
+ */
 export async function saveSubscription(sub: StoredPushSub): Promise<{ hash: string; created: boolean }> {
   const hash = endpointHash(sub.endpoint);
   const existed = (await kvGet<StoredPushSub>(kvPushSub(hash))) != null;
   await kvSet(kvPushSub(hash), sub, TTL_PUSH_SUB);
-  const index = (await kvGet<string[]>(KV_PUSH_SUB_INDEX)) ?? [];
-  if (!index.includes(hash)) {
-    index.push(hash);
-    await kvSet(KV_PUSH_SUB_INDEX, index);
+  const res = await kvMutate<string[]>(KV_PUSH_SUB_INDEX, [], (index) =>
+    index.includes(hash) ? null : [...index, hash],
+  );
+  if (res === "skipped") {
+    console.error(`[push] subscription ${hash} stored but NOT indexed — KV read failed; this device will not receive arrows until it re-subscribes`);
   }
   return { hash, created: !existed };
 }
@@ -74,9 +83,16 @@ export async function deleteSubscription(endpointOrHash: string): Promise<boolea
   const hash = endpointOrHash.startsWith("http") ? endpointHash(endpointOrHash) : endpointOrHash;
   const existed = (await kvGet<StoredPushSub>(kvPushSub(hash))) != null;
   await kvDel(kvPushSub(hash));
-  const index = (await kvGet<string[]>(KV_PUSH_SUB_INDEX)) ?? [];
-  const next = index.filter((h) => h !== hash);
-  await kvSet(KV_PUSH_SUB_INDEX, next);
+  // The worst of the three: no `includes` guard, so a failed read produced
+  // `[].filter(...)` → `[]` → the entire subscriber index overwritten with an
+  // empty array, on the unsubscribe path of ONE user.
+  const res = await kvMutate<string[]>(KV_PUSH_SUB_INDEX, [], (index) => {
+    const next = index.filter((h) => h !== hash);
+    return next.length === index.length ? null : next;
+  });
+  if (res === "skipped") {
+    console.error(`[push] subscription ${hash} deleted but index NOT updated — KV read failed; a dead hash remains indexed (harmless, pruned on next fan-out)`);
+  }
   return existed;
 }
 
@@ -121,12 +137,36 @@ export async function pushArrowToAll(a: Arrow): Promise<FanoutStats> {
   if (a.test || (a.origin && a.origin !== "engine")) {
     return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
   }
+  // Drift Statistics v0 — a browser notification is the same surface as the
+  // Telegram DM, so it answers to the same gate; suppressing one channel and
+  // not the other would just wake the user through the other one. Gated here
+  // rather than at the call site so every caller inherits it, matching how the
+  // origin check above is done. The arrow itself is untouched: still public,
+  // still graded, still in the published hit rate.
+  if (a.ticker_confidence?.level === "low") {
+    console.warn(
+      `[push] skip arrow=${a.serial} ticker=${a.ticker} reason=low_ticker_confidence ` +
+        `record=${a.ticker_confidence.hits}/${a.ticker_confidence.n} ` +
+        `wilson_high=${a.ticker_confidence.wilson_high}`,
+    );
+    return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
+  }
   if (!ensureVapidConfigured()) {
     console.warn("[push] VAPID keys missing — skipping fan-out");
     return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
   }
 
-  const index = (await kvGet<string[]>(KV_PUSH_SUB_INDEX)) ?? [];
+  // Probe, not `?? []`. This one is not destructive — the `length === 0`
+  // early-return below fires before the rewrite at the bottom — but it IS
+  // dishonest: a throttled read reported "no subscribers, nothing to do" and
+  // the fan-out logged nothing at all. An arrow that reached zero phones
+  // because KV was down must not look identical to one with no audience.
+  const idxProbe = await kvGetProbe<string[]>(KV_PUSH_SUB_INDEX);
+  if (idxProbe.status === "error") {
+    console.error(`[push] arrow=${a.serial} fan-out ABORTED — subscriber index unreadable: ${idxProbe.message}`);
+    return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
+  }
+  const index = idxProbe.status === "hit" ? idxProbe.value : [];
   if (index.length === 0) return { attempted: 0, delivered: 0, gone: 0, errored: 0 };
 
   const payload = payloadFor(a);
@@ -137,8 +177,21 @@ export async function pushArrowToAll(a: Arrow): Promise<FanoutStats> {
   for (let i = 0; i < index.length; i += BATCH) {
     const slice = index.slice(i, i + BATCH);
     const results = await Promise.all(slice.map(async (hash) => {
-      const sub = await kvGet<StoredPushSub>(kvPushSub(hash));
-      if (!sub) return { hash, gone: true };
+      // ⚠ `kvGetProbe`, not `kvGet`. `!sub` below means "this subscription no
+      // longer exists → prune it", and `kvGet` returns null on a KV THROW as
+      // well as on a genuine miss. Under the old code a throttled read
+      // therefore made a perfectly live subscription look expired, and we
+      // acted on it: `kvDel`'d the record AND dropped the hash from the index
+      // rewritten at the end of this function. A read blip permanently
+      // unsubscribed real users, silently — they keep believing they're
+      // subscribed because nothing on their device changed.
+      const subProbe = await kvGetProbe<StoredPushSub>(kvPushSub(hash));
+      if (subProbe.status === "error") {
+        console.warn(`[push] sub read failed hash=${hash} — keeping (NOT pruning): ${subProbe.message}`);
+        return { hash, errored: true };
+      }
+      if (subProbe.status === "miss") return { hash, gone: true };
+      const sub = subProbe.value;
       stats.attempted++;
       try {
         await webpush.sendNotification(

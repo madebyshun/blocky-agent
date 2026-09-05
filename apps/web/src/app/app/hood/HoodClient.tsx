@@ -16,6 +16,9 @@
  *   • Blue Hood green #34D399 (emerald) is THIS page's interactive accent
  *     (spec: "this section's own accent"); blue #4FC3F7 shows only in the
  *     footer "powered by 30 Blue Hub skills" attribution.
+ *   • Base brand blue #0052FF is used NARROWLY for the venue (chain) axis
+ *     only — the per-row chain chip + the Base pill in the chain selector —
+ *     so emerald stays the primary accent while Base rows read at a glance.
  *
  * Two data fetches, both `no-store`:
  *   • /api/hood/snapshot — poller's latest snapshot
@@ -28,7 +31,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
-import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow } from "@/lib/blue-hood/types";
+import { usePolling } from "@/hooks/usePolling";
+import type { HoodSnapshot, TickerSnapshot, M5Verdict, Arrow, HoodChain } from "@/lib/blue-hood/types";
+import { chainOf, rowKey, ARB_MIN_ABS_PCT, DRIFT_MIN_ABS_PCT } from "@/lib/blue-hood/types";
+import { closedAlignedLabel, oracleRoundAgeText } from "@/lib/blue-hood/oracle-age";
+import { explorerTokenUrl } from "@/lib/blue-hood/detail-support";
 import HoodSidebar from "./HoodSidebar";
 import TickerDetailPanel from "./TickerDetailPanel";
 import ArrowBriefBlock from "./ArrowBriefBlock";
@@ -49,9 +56,18 @@ const BG = "#050508";
 const SURFACE = "#0B0D13";
 const BORDER = "#1A1A2E";
 const MUTED = "#6b7280";
+// Base P (Surface Base UI) — venue accents. Base brand blue drives the chain
+// selector's active Base pill; a lightened variant keeps the 9px per-row chip
+// legible on the near-black table surface.
+const BASE_BLUE = "#0052FF";
+const BASE_BLUE_TEXT = "#5b8cff";
 
 type SortKey = "drift" | "volume" | "tvl";
 type Filter = "tradable" | "drifting" | "flow" | "frozen" | "dust" | "no_data" | "all";
+// Orthogonal to `Filter` — a row is e.g. (tradable AND base), so the venue axis
+// is its own selector that composes with the status filter. Absent ⟹ robinhood
+// (see `chainOf`), so the default "all" and RH rows stay back-compatible.
+type ChainFilter = "all" | "base" | "robinhood";
 
 // T2 — dust floor matches the engine's arrow gate. Anything under this is
 // treated as untradable at the row level (verdict badged as DUST, drift
@@ -82,7 +98,13 @@ function isFrozenLike(v: TickerSnapshot["verdict"]): boolean {
   return v === "FROZEN_ALIGNED" || v === "PREMARKET_DRIFT" || v === "AFTERHOURS_DRIFT";
 }
 
-type SnapshotRes = { ok: true; snapshot: HoodSnapshot } | { ok: false; error: string };
+/** Base P1 — `base_desk` is optional so a client running against an older
+ *  deployment (or a cached response) degrades to "unknown" rather than
+ *  crashing on a missing field. */
+type BaseDeskState = { status: "live" | "stale" | "offline"; count: number };
+type SnapshotRes =
+  | { ok: true; snapshot: HoodSnapshot; base_desk?: BaseDeskState }
+  | { ok: false; error: string };
 type PerTypeStat = {
   ready: boolean;
   sample: number;
@@ -106,6 +128,10 @@ type ArrowsRes =
 
 export default function HoodClient() {
   const [snap, setSnap] = useState<HoodSnapshot | null>(null);
+  /** Base P1 — desk state from /api/hood/snapshot. `null` = the field wasn't
+   *  in the response (older deploy / never fetched), which is NOT the same as
+   *  "offline" and must not be rendered as a failure. */
+  const [baseDesk, setBaseDesk] = useState<BaseDeskState | null>(null);
   const [arrowsData, setArrowsData] = useState<Extract<ArrowsRes, { ok: true }> | null>(null);
   // P2.4 (2026-07-24): positions read at the top-level so BOTH the
   // PositionsStrip and the drift-board rows can see the "held" set.
@@ -119,13 +145,18 @@ export default function HoodClient() {
   // T2 — default filter hides dust so the top of the board is tradable
   // rows, not COIN +132% on a $1k pool.
   const [filter, setFilter] = useState<Filter>("tradable");
+  // Base P — venue axis. Defaults to "all" so the board shows both desks
+  // (Coinbase B20 on Base + Robinhood Chain) until the reader narrows it.
+  const [chainFilter, setChainFilter] = useState<ChainFilter>("all");
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [s, a, lr] = await Promise.all([
-        fetch("/api/hood/snapshot", { cache: "no-store", signal }).then((r) => r.json() as Promise<SnapshotRes>),
-        fetch("/api/hood/arrows", { cache: "no-store", signal }).then((r) => r.json() as Promise<ArrowsRes>),
+        // Both public and now `s-maxage`-cached; `no-store` is gone on purpose
+        // so the shared edge cache is actually consulted. See useHoodShellData.
+        fetch("/api/hood/snapshot", { signal }).then((r) => r.json() as Promise<SnapshotRes>),
+        fetch("/api/hood/arrows", { signal }).then((r) => r.json() as Promise<ArrowsRes>),
         // Inbox unread count needs the read bookmark. Cheap GET, one KV
         // read; noop if the endpoint errors (nav still works, just no
         // badge). Never throws upward.
@@ -143,7 +174,10 @@ export default function HoodClient() {
       // clear the last-good snapshot or set an inline error — the honest,
       // cause-specific narrative (kv_error vs never_polled vs cron_stalled)
       // is owned entirely by <HealthBanner>, which reads /api/hood/health.
-      if (s.ok) setSnap(s.snapshot);
+      if (s.ok) {
+        setSnap(s.snapshot);
+        setBaseDesk(s.base_desk ?? null);
+      }
       if (a.ok) setArrowsData(a);
       if (lr.ok) setInboxLastRead(lr.last_read_at);
       setLastFetch(Date.now());
@@ -160,26 +194,38 @@ export default function HoodClient() {
     return arrows.filter((a) => new Date(a.fired_at).getTime() > cutoff).length;
   }, [arrowsData, inboxLastRead]);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => { ctl.abort(); clearInterval(t); };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
+
+  // Base P — venue counts come from the FULL snapshot (never chain-scoped) so
+  // the chain selector always shows how many rows each desk has, even when a
+  // venue is currently the active filter.
+  const chainCounts = useMemo(() => {
+    const t = snap?.tickers ?? [];
+    return {
+      all: t.length,
+      base: t.filter((r) => chainOf(r) === "base").length,
+      robinhood: t.filter((r) => chainOf(r) === "robinhood").length,
+    };
+  }, [snap]);
 
   // T2 + T3 — categorize once so filter pill counts + row grouping stay in sync.
+  // Base P — the status buckets are computed over the CHAIN-SCOPED rows, so
+  // picking "Base" makes every downstream count (tradable/dust/no-data) and
+  // pill reflect just that desk.
   const buckets = useMemo(() => {
     if (!snap) return { tradable: [], dust: [], no_data: [] } as Record<"tradable" | "dust" | "no_data", TickerSnapshot[]>;
+    const inChain = chainFilter === "all" ? snap.tickers : snap.tickers.filter((r) => chainOf(r) === chainFilter);
     const tradable: TickerSnapshot[] = [];
     const dust: TickerSnapshot[] = [];
     const no_data: TickerSnapshot[] = [];
-    for (const r of snap.tickers) {
+    for (const r of inChain) {
       if (isNoData(r)) no_data.push(r);
       else if (isDust(r)) dust.push(r);
       else tradable.push(r);
     }
     return { tradable, dust, no_data };
-  }, [snap]);
+  }, [snap, chainFilter]);
 
   const filtered = useMemo<TickerSnapshot[]>(() => {
     let list: TickerSnapshot[];
@@ -214,14 +260,16 @@ export default function HoodClient() {
 
   const scrollToTicker = useCallback((ticker: string) => {
     // If the current filter is hiding the ticker, drop back to "all" first
-    // so the row is actually in the DOM to scroll to.
+    // so the row is actually in the DOM to scroll to. Same for the venue
+    // axis — a Base-only view would hide an RH target (and vice versa).
     if (filter !== "all") setFilter("all");
+    if (chainFilter !== "all") setChainFilter("all");
     // rAF because setFilter's re-render hasn't landed yet on same tick.
     requestAnimationFrame(() => {
       const el = rowRefs.current[ticker];
       if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
     });
-  }, [filter]);
+  }, [filter, chainFilter]);
 
   return (
     <HealthProvider>
@@ -261,8 +309,15 @@ export default function HoodClient() {
           <PositionsStrip
             tickers={snap?.tickers ?? []}
             tickersWithOpenArrow={useMemo(() => {
+              // Base P1 — RH arrows ONLY. This set gates the [Sell] button on
+              // a REAL RH holding; a Base NVDA arrow reaching it would enable
+              // Sell on the RH NVDA position and hand ReviewSignPanel an arrow
+              // from the wrong chain. Bare ticker can't tell them apart, so
+              // filter on `chainOf` at the source.
               const s = new Set<string>();
-              for (const a of arrowsData?.arrows ?? []) if (a.status === "open") s.add(a.ticker);
+              for (const a of arrowsData?.arrows ?? []) {
+                if (a.status === "open" && chainOf(a) === "robinhood") s.add(a.ticker);
+              }
               return s;
             }, [arrowsData?.arrows])}
             onOpenTrade={(ticker) => {
@@ -279,11 +334,14 @@ export default function HoodClient() {
 
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <FilterPills value={filter} onChange={setFilter} buckets={buckets} />
+            <ChainToggle value={chainFilter} onChange={setChainFilter} counts={chainCounts} />
             <div className="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest" style={{ color: MUTED }}>
               <span>sort</span>
               <SortToggle value={sort} onChange={setSort} />
             </div>
           </div>
+
+          <BaseDeskNote desk={baseDesk} marketOpen={snap?.metrics.market_is_open ?? false} />
 
           <DriftBoard rows={filtered} rowRefs={rowRefs} arrows={arrowsData?.arrows ?? null} heldTickers={heldTickers} />
 
@@ -345,7 +403,7 @@ function Header({
           BLUE<span style={{ color: RH_GREEN }}>HOOD</span>
         </div>
         <div className="text-[12px]" style={{ color: "#9aa1ac", letterSpacing: "0.02em" }}>
-          copilot for Robinhood Chain
+          oracle-vs-DEX drift, graded in public
         </div>
       </div>
       {/* Nav: DRIFT (current) · INBOX (n unread) · TRACK RECORD + push
@@ -483,17 +541,25 @@ function MetricStrip({
         : `warming up · ${arrows.hit_rate.sample}/${arrows.hit_rate.needed}`)
     : undefined;
 
-  // BLOCKER 2 — honest denominator. Show "watched / registry_total" and
-  // annotate the drops so no one has to guess where the missing 2 went.
+  // BLOCKER 2 — honest denominator, and it is deliberately NOT registry_total.
+  // The poller can only ever watch a row that has a Chainlink feed, so
+  // `tokens_eligible` is what coverage should be read against; printing
+  // "24/96" would imply 72 misses when 61 of those have no oracle to miss.
+  // The sub-label closes the gap so the arithmetic is checkable by eye:
+  //   watched + not_enabled = eligible, and eligible + no_feed = registry_total.
+  // (`tokens_eligible` is absent on snapshots written before the registry
+  //  sweep — fall back rather than render "undefined".)
   const watchedValue = snap
-    ? `${snap.metrics.tokens_watched - snap.metrics.tokens_errored}/${snap.metrics.registry_total}`
+    ? `${snap.metrics.tokens_watched - snap.metrics.tokens_errored}/${snap.metrics.tokens_eligible ?? snap.metrics.registry_total}`
     : "…";
   const watchedSub = snap
-    ? snap.metrics.tokens_errored > 0
-      ? `${snap.metrics.tokens_errored} errored · ${snap.metrics.tokens_no_feed} no feed`
-      : snap.metrics.tokens_no_feed > 0
-        ? `${snap.metrics.tokens_no_feed} no Chainlink feed`
-        : "chainlink-backed"
+    ? [
+        snap.metrics.tokens_errored > 0 ? `${snap.metrics.tokens_errored} errored` : null,
+        snap.metrics.tokens_not_enabled ? `${snap.metrics.tokens_not_enabled} not enabled` : null,
+        snap.metrics.tokens_no_feed > 0 ? `${snap.metrics.tokens_no_feed} no feed` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "chainlink-backed"
     : undefined;
 
   const items: { label: string; value: string; sub?: string }[] = [
@@ -578,6 +644,124 @@ function FilterPills({
   );
 }
 
+// Base P — venue selector. Orthogonal to the status FilterPills (a row is e.g.
+// tradable AND base), so it's a separate control that composes with the filter.
+// Active Base wears Base brand blue, active RH the page emerald, "All chains"
+// neutral. Counts come from the FULL snapshot so the reader always sees how many
+// rows each desk carries; an empty venue grays out (matching FilterPills) rather
+// than vanishing — the desk still exists, it's just quiet this cycle.
+function ChainToggle({
+  value,
+  onChange,
+  counts,
+}: {
+  value: ChainFilter;
+  onChange: (v: ChainFilter) => void;
+  counts: { all: number; base: number; robinhood: number };
+}) {
+  const opts: { key: ChainFilter; label: string; count: number; accent: string }[] = [
+    { key: "all", label: "All chains", count: counts.all, accent: "#E7E9EE" },
+    { key: "base", label: "Base", count: counts.base, accent: BASE_BLUE },
+    { key: "robinhood", label: "RH", count: counts.robinhood, accent: RH_GREEN },
+  ];
+  return (
+    <div className="flex items-center gap-1">
+      <span className="mr-1 font-mono text-[10px] uppercase tracking-widest" style={{ color: MUTED }}>chain</span>
+      {opts.map((o) => {
+        const active = o.key === value;
+        const empty = o.count === 0;
+        return (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            disabled={empty && !active}
+            className="rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed"
+            style={{
+              borderColor: active ? o.accent : BORDER,
+              backgroundColor: active ? `${o.accent}1A` : "transparent",
+              color: active ? o.accent : empty ? "#3f4550" : "#9aa1ac",
+              opacity: empty && !active ? 0.55 : 1,
+            }}
+          >
+            <span>{o.label}</span>
+            <span className="ml-1 font-mono tabular-nums" style={{ opacity: 0.65 }}>({o.count})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Base P1 — the Base desk explains itself when it is quiet.
+//
+// WHY THIS EXISTS: `ChainToggle` renders the Base pill `disabled` and dimmed at
+// "(0)" with no explanation. A desk that is merely below threshold then looks
+// exactly like a desk that is broken — the #308 rule ("show Base even at 0
+// arrows") is about precisely this failure mode: silence must not read as an
+// error. So a quiet Base desk states its own count and the threshold it is
+// waiting on, and a Base desk that is actually degraded says THAT instead.
+//
+// Thresholds are imported from `@/lib/blue-hood/types`, never typed as literal
+// copy — the printed number and the fired number are the same constant. Which
+// one applies swaps with the session (2% closed → 1% open), so the note reads
+// `marketOpen` rather than assuming the closed-market case.
+//
+// `desk == null` means the snapshot response carried no `base_desk` field at
+// all — an older deployment, or the very first render before the fetch lands.
+// That is NOT a failure, so it renders nothing rather than claiming "offline".
+function BaseDeskNote({
+  desk,
+  marketOpen,
+}: {
+  desk: { status: "live" | "stale" | "offline"; count: number } | null;
+  marketOpen: boolean;
+}) {
+  if (!desk) return null;
+
+  const threshold = marketOpen ? ARB_MIN_ABS_PCT : DRIFT_MIN_ABS_PCT;
+  const kind = marketOpen ? "arb" : "drift";
+
+  let body: React.ReactNode;
+  let accent = BASE_BLUE_TEXT;
+  if (desk.status === "live") {
+    body = (
+      <>
+        Watching <span className="font-mono tabular-nums">{desk.count}</span> Base B20 stock
+        {desk.count === 1 ? "" : "s"} — {kind} arrows fire past{" "}
+        <span className="font-mono tabular-nums">±{threshold.toFixed(1)}%</span>
+        {marketOpen ? " while the market is open" : " while the market is closed"}.
+      </>
+    );
+  } else if (desk.status === "stale") {
+    accent = AMBER;
+    body = (
+      <>
+        Base desk rows are older than the freshness window, so they are withheld rather than shown
+        as live. Robinhood rows below are unaffected.
+      </>
+    );
+  } else {
+    accent = MUTED;
+    body = (
+      <>
+        Base desk returned no rows this cycle. Robinhood rows below are unaffected.
+      </>
+    );
+  }
+
+  return (
+    <div
+      className="mb-3 rounded border px-3 py-2 text-[11px] leading-relaxed"
+      style={{ borderColor: BORDER, backgroundColor: SURFACE, color: "#9aa1ac" }}
+    >
+      <span className="mr-2 font-mono text-[10px] uppercase tracking-widest" style={{ color: accent }}>
+        base desk
+      </span>
+      {body}
+    </div>
+  );
+}
+
 function SortToggle({ value, onChange }: { value: SortKey; onChange: (v: SortKey) => void }) {
   const opts: { key: SortKey; label: string }[] = [
     { key: "drift", label: "Drift" },
@@ -642,7 +826,7 @@ function DriftBoard({
                 and every numeric column is right-aligned consistently.
                 User feedback 2026-07-23: "24h chart could be wider,
                 inconsistent left/right alignment across columns" */}
-            <th className="px-3 py-2 text-left w-[96px]">Ticker</th>
+            <th className="px-3 py-2 text-left w-[132px]">Ticker</th>
             <th className="px-3 py-2 text-right w-[120px]">Oracle</th>
             <th className="px-3 py-2 text-right w-[120px]">DEX</th>
             <th className="px-3 py-2 text-right w-[96px]">Drift</th>
@@ -654,16 +838,31 @@ function DriftBoard({
         </thead>
         <tbody className="font-mono text-[13px]">
           {rows.map((r) => {
-            const openArrow = arrows?.find((a) => a.ticker === r.ticker && a.status === "open") ?? null;
+            // Base P1 — the open-arrow lookup MUST match on chain too. Arrows
+            // carry `chain` (absent ⟹ robinhood, see chainOf), and a bare
+            // ticker match would hang the Base NVDA arrow off the RH NVDA row
+            // and vice versa: two real, independent signals shown as one.
+            const openArrow =
+              arrows?.find(
+                (a) => a.ticker === r.ticker && chainOf(a) === chainOf(r) && a.status === "open",
+              ) ?? null;
+            // Base P1 — identity is (chain, ticker), not ticker. RH rows keep
+            // the bare-ticker key byte-for-byte, so their React key, ref, and
+            // accordion state are unchanged. See `rowKey`.
+            const k = rowKey(r);
             return (
               <DriftRow
-                key={r.ticker}
+                key={k}
                 r={r}
+                rowKeyStr={k}
                 rowRefs={rowRefs}
-                expanded={expanded === r.ticker}
-                onToggle={() => toggle(r.ticker)}
+                expanded={expanded === k}
+                onToggle={() => toggle(k)}
                 openArrow={openArrow}
-                isHeld={heldTickers.has(r.ticker)}
+                // Base P1 — `heldTickers` comes from PositionsStrip, whose
+                // balances are read at RH_CHAIN_ID. Holding RH NVDA does not
+                // mean holding Base NVDA, so the held marker is RH-only.
+                isHeld={chainOf(r) === "robinhood" && heldTickers.has(r.ticker)}
               />
             );
           })}
@@ -728,6 +927,7 @@ function Sparkline({
 
 function DriftRow({
   r,
+  rowKeyStr,
   rowRefs,
   expanded,
   onToggle,
@@ -735,6 +935,11 @@ function DriftRow({
   isHeld,
 }: {
   r: TickerSnapshot;
+  /** Base P1 — `rowKey(r)`: the (chain, ticker) identity this row registers
+   *  its DOM ref under. Passed in rather than recomputed so the ref key and
+   *  the React key are provably the same string. RH ⟹ the bare ticker, so
+   *  every existing `rowRefs.current["NVDA"]` caller keeps resolving. */
+  rowKeyStr: string;
   rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>;
   expanded: boolean;
   onToggle: () => void;
@@ -750,19 +955,20 @@ function DriftRow({
   if (noData) {
     return (
       <tr
-        ref={(el) => { rowRefs.current[r.ticker] = el; }}
+        ref={(el) => { rowRefs.current[rowKeyStr] = el; }}
         className="border-b last:border-b-0 hover:bg-black/40"
         style={{ borderColor: "#0f1218" }}
       >
         <td className="px-3 py-2 text-left">
           <a
-            href={`https://robinhoodchain.blockscout.com/token/${r.contract}`}
+            href={tokenExplorerUrl(r)}
             target="_blank"
             rel="noreferrer"
             className="font-medium text-slate-500 hover:text-slate-300"
           >
             {r.ticker}
           </a>
+          <ChainTag chain={chainOf(r)} />
           {isHeld && (
             <span
               className="ml-2 font-mono text-[9px] uppercase tracking-widest"
@@ -811,7 +1017,7 @@ function DriftRow({
   return (
     <>
       <tr
-        ref={(el) => { rowRefs.current[r.ticker] = el; }}
+        ref={(el) => { rowRefs.current[rowKeyStr] = el; }}
         // T-V2 #2 — `hood-row` gives the terminal-cursor border-left on
         // hover. Layered on top of the existing `hover:bg-black/40` so
         // the surface still darkens at the same time.
@@ -822,7 +1028,7 @@ function DriftRow({
         <td className="px-3 py-2 text-left">
           <span style={{ color: MUTED, marginRight: 4 }}>{chevron}</span>
           <a
-            href={`https://robinhoodchain.blockscout.com/token/${r.contract}`}
+            href={tokenExplorerUrl(r)}
             target="_blank"
             rel="noreferrer"
             onClick={(e) => e.stopPropagation()}
@@ -832,6 +1038,7 @@ function DriftRow({
           >
             {r.ticker}
           </a>
+          <ChainTag chain={chainOf(r)} />
           {isHeld && (
             <span
               className="ml-2 font-mono text-[9px] uppercase tracking-widest"
@@ -849,7 +1056,7 @@ function DriftRow({
         <td className="px-3 py-2 text-right">
           {r.pool_ref ? (
             <a
-              href={poolUrl(r.pool_ref)}
+              href={poolUrl(r.pool_ref, chainOf(r))}
               target="_blank"
               rel="noreferrer"
               onClick={(e) => e.stopPropagation()}
@@ -890,13 +1097,47 @@ function DriftRow({
           {/* T-V4 — right-align verdict badge so it hangs off the same
               edge as every numeric column above. Consistent alignment
               per user feedback 2026-07-23. */}
-          {dust ? <DustBadge /> : <VerdictBadge verdict={r.verdict} session={r.market.session} />}
+          {dust ? <DustBadge /> : (
+            <VerdictBadge
+              verdict={r.verdict}
+              session={r.market.session}
+              // Base rows carry a real round timestamp; RH rows leave it
+              // `undefined`. Passed straight through — the badge is what
+              // distinguishes the two absences, not this call site.
+              oracleUpdatedAt={r.oracle_updated_at}
+            />
+          )}
         </td>
       </tr>
       {expanded && (
         <tr style={{ borderBottom: "1px solid #0f1218" }}>
           <td colSpan={8} className="px-4 py-3" style={{ backgroundColor: "#07090e" }}>
-            <TickerDetailPanel ticker={r.ticker} contract={r.contract} openArrow={openArrow} />
+            {/* `chain` is load-bearing — see the header of TickerDetailPanel. The
+              panel's two data blocks resolve by BARE TICKER against RH-only
+              tools, so without this the Base rows rendered the RH token's
+              pools/holders under a BASE badge. Same defect family as the
+              open-arrow lookup above, which is why both now key off chainOf(r)
+              rather than r.ticker. */}
+          {/* `rowLiquidity` is what stops the panel from DENYING a number this
+              same row prints. It is not a second lookup: these three fields are
+              already on the row the board rendered above, so there is no fetch,
+              no tool call and no chance of reading another chain's pool.
+              `total_tvl_usd ?? tvl_usd` mirrors `rowTotalTvl` in rule-engine.ts
+              exactly — the panel must show the figure the DUST GATE judged, not
+              a differently-derived one, or the two would disagree on the same
+              screen. Kept as `??` and not `||` so a real 0 survives: "$0 of
+              depth" and "no reading" are separate states downstream. */}
+          <TickerDetailPanel
+            ticker={r.ticker}
+            chain={chainOf(r)}
+            contract={r.contract}
+            openArrow={openArrow}
+            rowLiquidity={{
+              totalTvlUsd: r.total_tvl_usd ?? r.tvl_usd ?? null,
+              volume24hUsd: r.volume_24h_usd ?? null,
+              poolRef: r.pool_ref ?? null,
+            }}
+          />
           </td>
         </tr>
       )}
@@ -976,6 +1217,28 @@ function WatchToggle({ ticker }: { ticker: string }) {
   );
 }
 
+// Base P — per-row venue chip. Base rows wear Base blue (lightened for legible
+// 9px text on near-black); RH rows wear the page emerald. `chainOf` supplies the
+// value (absent ⟹ robinhood), so the legacy RH-only board reads unchanged and
+// the 3 Coinbase-B20 Base rows now stand out at a glance.
+function ChainTag({ chain }: { chain: HoodChain }) {
+  const isBase = chain === "base";
+  return (
+    <span
+      className="ml-2 rounded px-1.5 py-0.5 align-middle font-mono text-[9px] font-semibold uppercase tracking-wider"
+      style={{
+        color: isBase ? BASE_BLUE_TEXT : RH_GREEN,
+        backgroundColor: isBase ? "rgba(0,82,255,0.16)" : "rgba(52,211,153,0.12)",
+      }}
+      title={isBase
+        ? "Coinbase B20 tokenized stock on Base (chain 8453)"
+        : "Tokenized stock on Robinhood Chain (chain 4663)"}
+    >
+      {isBase ? "BASE" : "RH"}
+    </span>
+  );
+}
+
 // T2 — separate badge so LONG/SHORT never leaks onto a dust row.
 function DustBadge() {
   return (
@@ -992,9 +1255,13 @@ function DustBadge() {
 function VerdictBadge({
   verdict,
   session,
+  oracleUpdatedAt,
 }: {
   verdict: M5Verdict | "ERROR";
   session?: string;
+  /** `TickerSnapshot.oracle_updated_at`. Optional AND nullable on purpose —
+   *  the two absences mean different things (see `oracleRoundAgeText`). */
+  oracleUpdatedAt?: number | null;
 }) {
   // T4 — semantic colors by direction/state:
   //   LONG DEX  = green  (DEX cheaper than oracle → buy DEX)
@@ -1007,19 +1274,33 @@ function VerdictBadge({
   // session === "weekend" we relabel so the badge doesn't lie about
   // being "AH DRIFT" on a Saturday afternoon. Enum stays untouched.
   const isWeekend = session === "weekend";
+
+  // ── The FROZEN_ALIGNED label no longer asserts a frozen feed ──────────────
+  // It used to read literally "FROZEN" on any non-weekend closed session — a
+  // claim about the ORACLE inferred purely from the MARKET CLOCK. The label and
+  // the age string both live in `blue-hood/oracle-age.ts`, which carries the
+  // full reasoning and is behaviour-tested by
+  // `scripts/hood-badge-honesty-check.ts`; this file only renders them.
   const map: Record<M5Verdict | "ERROR", { label: string; color: string; bg: string }> = {
     ALIGNED:          { label: "ALIGNED",   color: "#94a3b8", bg: "#0f1218" },
     LONG_DEX:         { label: "LONG DEX",  color: GREEN_TEXT, bg: "rgba(34,197,94,0.10)" },
     SHORT_DEX:        { label: "SHORT DEX", color: RED,        bg: "rgba(239,68,68,0.10)" },
-    FROZEN_ALIGNED:   { label: isWeekend ? "WKND ALIGN" : "FROZEN",   color: AMBER, bg: "rgba(245,179,66,0.10)" },
+    FROZEN_ALIGNED:   { label: closedAlignedLabel(session), color: AMBER, bg: "rgba(245,179,66,0.10)" },
     PREMARKET_DRIFT:  { label: "PRE DRIFT", color: AMBER, bg: "rgba(245,179,66,0.10)" },
     AFTERHOURS_DRIFT: { label: isWeekend ? "WKND DRIFT" : "AH DRIFT", color: AMBER, bg: "rgba(245,179,66,0.10)" },
     INSUFFICIENT_DATA:{ label: "NO DATA",   color: MUTED, bg: "#0f1218" },
     ERROR:            { label: "ERR",       color: RED,   bg: "rgba(239,68,68,0.10)" },
   };
   const s = map[verdict];
+  // Scoped to the arm this change owns, so no other badge silently gains a
+  // tooltip whose wording nobody reviewed.
+  const title =
+    verdict === "FROZEN_ALIGNED"
+      ? `Market closed · ${oracleRoundAgeText(oracleUpdatedAt)} · DEX drift inside the closed-session aligned band`
+      : undefined;
   return (
     <span
+      title={title}
       className="rounded px-2 py-0.5 font-mono text-[10px] font-semibold tracking-wider"
       style={{ color: s.color, backgroundColor: s.bg }}
     >
@@ -1261,8 +1542,8 @@ function Footer() {
   return (
     <footer className="mt-12 border-t pt-6 text-[11px]" style={{ borderColor: BORDER, color: MUTED }}>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
-        <span>Oracle: Chainlink AggregatorV3 on RH Chain</span>
-        <span>DEX: GeckoTerminal (Uniswap V3/V4)</span>
+        <span>Oracle: Chainlink AggregatorV3 (RH) + B20 share price (Base)</span>
+        <span>DEX: GeckoTerminal (Uniswap V3/V4 · Aerodrome)</span>
         <span>
           Powered by 30 <span style={{ color: BLUE }}>Blue Hub</span> skills · x402 · $0.05/call
         </span>
@@ -1329,8 +1610,25 @@ function formatUsd(n: number | null | undefined): string {
   return "$0";
 }
 
-function poolUrl(poolRef: string): string {
-  return `https://www.geckoterminal.com/robinhood/pools/${poolRef}`;
+// Base P — chain-aware token explorer. A Base B20 token lives on Basescan
+// (8453); an RH token on the RH Blockscout (4663). The Base contract does not
+// exist on RH's explorer, so this must key off the row's chain, never a
+// hardcoded host.
+//
+// The host mapping itself now lives in `blue-hood/detail-support.ts`. It was
+// duplicated here and in TickerDetailPanel, and the copy in the panel was the
+// one that had never been chain-aware — two copies, one of them wrong, is the
+// shape #308 fixed at this call site and missed one expand-panel away.
+function tokenExplorerUrl(r: TickerSnapshot): string {
+  return explorerTokenUrl(chainOf(r), r.contract);
+}
+
+// Base P — GeckoTerminal indexes both desks: Aerodrome pools under `base`, the
+// RWA pools under `robinhood`. Build the network segment from the row's chain so
+// a Base pool link never points at the RH index (and vice versa).
+function poolUrl(poolRef: string, chain: HoodChain): string {
+  const network = chain === "base" ? "base" : "robinhood";
+  return `https://www.geckoterminal.com/${network}/pools/${poolRef}`;
 }
 
 function formatRelTime(iso: string): string {

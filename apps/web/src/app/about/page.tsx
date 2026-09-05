@@ -11,11 +11,11 @@ const SURFACES = [
     icon: "🎯",
     name: "Blue Hood",
     handle: "blueagent.dev/app/hood",
-    desc: "The flagship copilot for Robinhood Chain. 24/7 non-custodial arbitrage between Chainlink oracles and DEX pools. Review-and-sign trading — every arrow is user-signed, no session keys.",
+    desc: "Oracle-vs-DEX drift signals for tokenized stocks on Base (Coinbase B20) and Robinhood Chain. Every call graded in public, misses included. Review-and-sign trading — every arrow is user-signed, no session keys.",
     link: "/app/hood",
     linkLabel: "Open Hood →",
     color: "#34D399",
-    stats: [{ label: "Chain", value: "RH 4663" }, { label: "Signing", value: "Non-custodial" }],
+    stats: [{ label: "Chain", value: "Base + RH" }, { label: "Signing", value: "Non-custodial" }],
   },
   {
     icon: "💬",
@@ -68,7 +68,7 @@ const ROADMAP = [
     period: "Q3 2026 — Robinhood Chain",
     status: "building",
     items: [
-      { done: true,  text: "Blue Hood — See · Explain · Alert · Act on RH Chain (chainId 4663)" },
+      { done: true,  text: "Blue Hood — See · Explain · Alert · Act on Base (B20) + RH Chain" },
       { done: true,  text: "Market-aware grader — arrows scored in NYSE regular hours only" },
       { done: true,  text: "RH RWA Phases 1–7 — registry, market analytics, trading, portfolio, discovery, agent skills, bridge/builder kit" },
       { done: true,  text: "x402 pay-per-call — RH + Base tools billed in USDC on Base" },
@@ -140,7 +140,7 @@ export default function AboutPage() {
           <p className="text-slate-400 text-lg max-w-2xl mx-auto leading-relaxed mb-12">
             Not a generic AI assistant. Not a Telegram bot with a GPT wrapper.
             A full economic actor — holds a wallet, reads Chainlink oracles vs DEX pools,
-            surfaces asymmetric arbitrage on Robinhood Chain, and settles every trade
+            surfaces asymmetric arbitrage on Base and Robinhood Chain, and settles every trade
             with your own signature. Non-custodial by default.
           </p>
 
@@ -303,9 +303,9 @@ export default function AboutPage() {
         <section className="max-w-5xl mx-auto px-6 py-20 border-t border-[#1A1A2E]">
           <div className="rounded-2xl border border-[#4FC3F720] bg-[#4FC3F705] p-12 text-center"
             style={{ boxShadow: "0 0 60px #4FC3F708" }}>
-            <h2 className="text-3xl font-bold mb-4">Ready to trade Robinhood Chain?</h2>
+            <h2 className="text-3xl font-bold mb-4">Ready to trade tokenized stocks?</h2>
             <p className="text-slate-500 mb-8 max-w-md mx-auto">
-              {TOOL_COUNT} AI tools. 5 core commands. Blue Hood copilot 24/7. Non-custodial. RH + Base.
+              {TOOL_COUNT} AI tools. 5 core commands. Blue Hood drift signals, graded in public. Non-custodial. Base + RH.
             </p>
             <div className="flex items-center justify-center gap-4 flex-wrap">
               <Link href="/app/chat"

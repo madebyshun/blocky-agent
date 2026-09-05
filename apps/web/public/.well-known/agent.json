@@ -30,7 +30,7 @@
     "version": 2,
     "network": "eip155:8453",
     "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    "payTo": "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f",
+    "payTo": "0x02950ad38ada1d599375bd447e080cd404809205",
     "catalog": "https://blueagent.dev/api/catalog",
     "pricing": "https://blueagent.dev/.well-known/pricing",
     "endpoint_pattern": "https://blueagent.dev/api/x402/{tool-id}",

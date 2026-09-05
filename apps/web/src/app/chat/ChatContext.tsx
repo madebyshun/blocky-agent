@@ -6,18 +6,21 @@ import {
 } from "react";
 import {
   type Message, type ChatTask, type Artifact,
-  type CronTask, type PersonaId, type SidebarTab, type Attachment,
+  type CronTask, type SidebarTab, type Attachment,
 } from "./types";
 import type { TierInfo } from "@/lib/credits";
 import {
-  loadTasks, saveTasks, createTask, migrateOldChat,
+  loadTasks, saveTasks, createTask, migrateOldChat, mergeTaskLists, clearGuestTasks,
   loadCrons, saveCrons, isDue,
-  loadPersona, savePersona, loadCustomPrompt, saveCustomPrompt,
 } from "./storage";
+import { localTz } from "@/lib/cron-schedule";
 import { extractArtifacts } from "./artifacts";
 import { enabledSkillsPrompt, loadIntegrations, runSkillCommand } from "./integrations";
 import { enabledConnectorsForChat } from "./connectors";
-import { getPersona } from "./personas";
+import { resolvePresetDispatch, VIRTUALS_PRESETS_V1 } from "./components/presets";
+import { useWorkspaceSync, WORKSPACE_HYDRATED_EVENT, type UseWorkspaceSync } from "./workspace-sync";
+import { useScheduleSync, type UseScheduleSync } from "./use-schedule-sync";
+import { useSiweSignIn } from "./use-siwe-signin";
 import {
   creditCost, deductCredits, addCredits,
   getNextRefresh, refreshCreditsIfNeeded, getDailyCr,
@@ -25,7 +28,7 @@ import {
 } from "@/lib/credits";
 import {
   buildMemoryContext, updateMemoryAfterChat,
-  addChunk, setChunkEmbedding, searchChunks,
+  addChunk, recentChunks,
 } from "@/lib/memory";
 
 // ── Context type ──────────────────────────────────────────────────────────────
@@ -52,12 +55,6 @@ interface ChatContextValue {
   chatTier:           string;
   setChatTier:        (t: string) => void;
 
-  // Persona
-  personaId:          PersonaId;
-  setPersonaId:       (id: PersonaId) => void;
-  customPersonaPrompt: string;
-  setCustomPersonaPrompt: (s: string) => void;
-
   // Artifacts
   artifacts:          Artifact[];
   artifactsPanelOpen: boolean;
@@ -70,6 +67,8 @@ interface ChatContextValue {
   deleteCron: (id: string) => void;
   runCron:    (id: string) => Promise<void>;
   cronRunning: string | null; // id of running cron
+  /** Server-side scheduling: state, count, and the two toggles. */
+  schedule:   UseScheduleSync;
 
   // Sidebar
   sidebarTab:    SidebarTab;
@@ -107,6 +106,11 @@ interface ChatContextValue {
   setCmdMenu: (v: boolean) => void;
   cmdFilter:  string;
   setCmdFilter: (v: string) => void;
+
+  // Cross-device sync (opt-in, wallet-gated). Lives here rather than in the
+  // Settings panel so hydration runs whenever Blue Chat is open, not only while
+  // the settings modal happens to be mounted.
+  sync: UseWorkspaceSync;
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
@@ -192,70 +196,75 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setWalletReady(true); // wallet detection completed — safe to evaluate outOfCredits
   }, []);
 
-  // ── Persona ───────────────────────────────────────────────────────────────
-  const [personaId,    setPersonaIdState]    = useState<PersonaId>("blue-agent");
-  const [customPersonaPrompt, setCustomPersonaPromptState] = useState("");
-
-  useEffect(() => {
-    setPersonaIdState(loadPersona(walletAddr));
-    setCustomPersonaPromptState(loadCustomPrompt(walletAddr));
-  }, [walletAddr]);
-
-  const setPersonaId = useCallback((id: PersonaId) => {
-    setPersonaIdState(id);
-    savePersona(id, walletAddr);
-  }, [walletAddr]);
-
-  const setCustomPersonaPrompt = useCallback((s: string) => {
-    setCustomPersonaPromptState(s);
-    saveCustomPrompt(s, walletAddr);
-  }, [walletAddr]);
-
   // ── Tasks ─────────────────────────────────────────────────────────────────
   const [tasks,        setTasksState]  = useState<ChatTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [chatTier,     setChatTier]    = useState("pro");
 
-  // Landing → chat deep-link: `/app/chat?preset=<id>` selects a V1 preset
-  // (fast · balanced · deep · private · grok). Guarded to the 5 known
-  // ids so nothing else in the query string can wedge the picker.
+  // Landing → chat deep-link: `/app/chat?preset=<id>` selects a V1 preset.
+  // Guarded to the live preset ids (derived from the spec, not hardcoded, so
+  // it can't drift as presets are added) so nothing else in the query string
+  // can wedge the picker.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const p = new URLSearchParams(window.location.search).get("preset");
-    if (p && ["fast", "balanced", "deep", "private", "grok"].includes(p)) {
+    if (p && VIRTUALS_PRESETS_V1.some((x) => x.id === p)) {
       setChatTier(p);
     }
   }, []);
 
-  // Load tasks on wallet change, migrate old chat, then ALWAYS open on a fresh
-  // New Chat draft (ChatGPT / Claude behaviour). Prior sessions stay available
-  // in the sidebar history; we never auto-restore the most recent one.
+  // Load tasks on wallet change. History is keyed per-identity in localStorage
+  // (`blue_tasks_v1_guest` vs `blue_tasks_v1_<address>`), so a naive load makes
+  // messages "vanish" on sign-in — they were written under the guest key but the
+  // app now reads the wallet key. Two guards fix that:
+  //   B) MERGE the guest bucket into the wallet key (union by id, newest wins)
+  //      on every connected load, then drain guest — no more stranding, and no
+  //      zombie-resurrection of a deleted thread (see storage.ts helpers).
+  //   A) When we just carried history across a *sign-in* transition, keep the
+  //      user on their most-recent conversation instead of snapping the main
+  //      pane to a blank New Chat (which reads as "all my messages are gone").
+  // A fresh page load with no such transition still opens on New Chat.
+  const prevWalletAddr = useRef<string | undefined>(undefined);
   useEffect(() => {
-    // Gather any existing history (current format, or migrated old/guest data).
+    const prevAddr  = prevWalletAddr.current;
+    prevWalletAddr.current = walletAddr;
+    // A genuine guest/undefined → connected step (sign-in / reconnect-on-load),
+    // not an address→address swap or the connected→disconnected direction.
+    const isSignIn  = !prevAddr && !!walletAddr;
+
+    // Gather existing history for this identity.
     let history = loadTasks(walletAddr);
+
+    // (B) Fold any guest-side history into the wallet key, then drain guest.
+    if (walletAddr) {
+      const guestReal = loadTasks(undefined).filter(t => t.messages.length > 0);
+      if (guestReal.length > 0) {
+        history = mergeTaskLists(history, guestReal);
+        saveTasks(history, walletAddr);
+        clearGuestTasks();
+      }
+    }
+
+    // Legacy single-chat blob migration — only when the key is otherwise empty.
     if (history.length === 0) {
       const migrated = migrateOldChat(walletAddr);
       if (migrated) {
         history = [migrated];
         saveTasks(history, walletAddr);
-      } else if (walletAddr) {
-        // Wallet just connected — carry guest history across.
-        const guestTasks = loadTasks(undefined); // blue_tasks_v1_guest
-        if (guestTasks.length > 0) {
-          history = guestTasks;
-          saveTasks(history, walletAddr);
-        }
       }
     }
+
     // Keep only real conversations (drop any empty drafts left over) and sort.
     const sorted = history
       .filter(t => t.messages.length > 0)
       .sort((a, b) => b.updatedAt - a.updatedAt);
-    // Open on a fresh in-memory draft so the welcome / New Chat screen shows.
-    // It is NOT persisted until the first message is sent.
-    const fresh = createTask(chatTier, personaId);
+    // Fresh in-memory draft (not persisted until first send) so the New Chat
+    // screen is always one array slot away.
+    const fresh = createTask(chatTier);
     setTasksState([fresh, ...sorted]);
-    setActiveTaskId(fresh.id);
+    // (A) On sign-in with existing history, stay on the most-recent conversation
+    // so it doesn't look like the chat was wiped; otherwise open on New Chat.
+    setActiveTaskId(isSignIn && sorted.length > 0 ? sorted[0].id : fresh.id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletAddr]);
 
@@ -273,12 +282,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // In-memory only — an empty draft is not persisted to storage, so it never
     // shows up as a blank entry in the sidebar history. send() saves it on the
     // first message.
-    const t = createTask(chatTier, personaId);
+    const t = createTask(chatTier);
     setTasksState(prev => [t, ...prev.filter(p => p.messages.length > 0)]);
     setActiveTaskId(t.id);
     setInput("");
     setError(null);
-  }, [chatTier, personaId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chatTier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectTask = useCallback((id: string) => {
     setActiveTaskId(id);
@@ -336,10 +345,46 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     saveCrons(cs, walletAddr);
   }, [walletAddr]);
 
+  // ── Cross-device sync ─────────────────────────────────────────────────────
+  const siweSignIn = useSiweSignIn();
+  const signIn     = useCallback(
+    () => siweSignIn(walletAddr as string),
+    [siweSignIn, walletAddr],
+  );
+  const sync = useWorkspaceSync(walletAddr, signIn);
+
+  // Re-read localStorage after sync has merged a remote copy in underneath us.
+  //
+  // Deliberately does NOT touch `activeTaskId`. Hydration can land while the
+  // user is mid-conversation, and snapping them to a blank New Chat would look
+  // exactly like the data loss this feature exists to prevent. Empty drafts are
+  // kept at the head so the New Chat slot survives too.
+  useEffect(() => {
+    function onHydrated() {
+      const sorted = loadTasks(walletAddr)
+        .filter(t => t.messages.length > 0)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      setTasksState(prev => [...prev.filter(t => t.messages.length === 0), ...sorted]);
+      setCreonsState(loadCrons(walletAddr));
+    }
+    window.addEventListener(WORKSPACE_HYDRATED_EVENT, onHydrated);
+    return () => window.removeEventListener(WORKSPACE_HYDRATED_EVENT, onHydrated);
+  }, [walletAddr]);
+
   const addCron = useCallback((c: Omit<CronTask, "id">) => {
-    const newCron: CronTask = { ...c, id: Math.random().toString(36).slice(2, 10) };
+    const newCron: CronTask = {
+      ...c,
+      id: Math.random().toString(36).slice(2, 10),
+      // Stamp the zone the user typed the time IN. Without it "09:00" is 09:00
+      // nowhere in particular, and the server would fall back to UTC — a task
+      // set for breakfast in Ho Chi Minh City would fire at 16:00 local.
+      tz:   c.tz   ?? localTz(),
+      // And the preset it should run on, so a later composer change cannot
+      // silently re-price a standing task. See CronTask.tier.
+      tier: c.tier ?? chatTier,
+    };
     setCrons([...crons, newCron]);
-  }, [crons]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [crons, chatTier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateCron = useCallback((id: string, patch: Partial<CronTask>) => {
     setCrons(crons.map(c => c.id === id ? { ...c, ...patch } : c));
@@ -357,27 +402,70 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const res = await fetch("/api/cron/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: cron.prompt, tier: chatTier }),
+        // Send the wallet: a task run is a chat message and is metered like
+        // one. Without it the run reaches /api/chat as a guest, and its paid
+        // Hub tools 402 instead of billing the person who scheduled them.
+        //
+        // `cron.tier` — the preset saved ON THE TASK — not the composer's
+        // current pick, so "Run now" costs what the card says it costs and
+        // matches what the background tick will charge. Older tasks have none
+        // and fall back to the composer, which is what they did before.
+        body: JSON.stringify({ prompt: cron.prompt, tier: cron.tier ?? chatTier, address: walletAddr }),
         signal: AbortSignal.timeout(60_000),
       });
-      const data = await res.json() as { result?: string };
+      const data = await res.json() as {
+        result?: string;
+        error?: string;
+        insufficientCredits?: { needed?: number; balance?: number; message?: string };
+      };
+      if (data.insufficientCredits) {
+        // Out of credits is not a result. Storing it as one would render as a
+        // successful run whose answer happens to be empty — the user would have
+        // no idea why the task stopped producing anything.
+        updateCron(id, {
+          lastRun:   Date.now(),
+          lastError: data.insufficientCredits.message ?? "Not enough credits to run this task.",
+        });
+        return;
+      }
       // Keep the full markdown report (capped to bound localStorage) so the
       // Scheduled card can render it properly on demand, not just a garbled
       // 200-char slice.
-      updateCron(id, { lastRun: Date.now(), lastResult: data.result?.slice(0, 4000) });
-    } catch {
-      updateCron(id, { lastRun: Date.now(), lastResult: "Error running task" });
+      updateCron(id, {
+        lastRun:    Date.now(),
+        lastResult: data.result?.slice(0, 4000),
+        lastError:  data.result ? undefined : (data.error ?? "The model returned nothing."),
+      });
+    } catch (e) {
+      updateCron(id, { lastRun: Date.now(), lastError: (e as Error).message || "Error running task" });
     } finally {
       setCronRunning(null);
     }
-  }, [crons, chatTier]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [crons, chatTier, walletAddr]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-run due crons on mount
+  // Auto-run due crons — once, after wallet detection settles.
+  //
+  // Waiting on `walletReady` is load-bearing, not tidiness: detection is async,
+  // so a mount-only effect fires while `walletAddr` is still undefined and the
+  // run reaches /api/chat as a guest — its paid Hub tools would 402 for a user
+  // who is in fact connected. `walletReady` flips true even when no wallet is
+  // found, so a guest still gets their run; it just isn't raced.
+  //
+  // `isDue` returns false for background tasks — the server owns those, and a
+  // tab firing one the tick has already run would charge the user twice for the
+  // same window.
+  const autoRanRef = useRef(false);
   useEffect(() => {
+    if (!walletReady || autoRanRef.current) return;
+    autoRanRef.current = true;
     const due = crons.filter(isDue);
     if (due.length === 0) return;
     (async () => { for (const c of due) await runCron(c.id); })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [walletReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the server's copy of the background tasks in step with this one, and
+  // adopt whatever the tick did while the tab was closed.
+  const schedule = useScheduleSync(walletAddr, crons, updateCron, signIn);
 
   // ── Chat state ─────────────────────────────────────────────────────────────
   const [streaming,    setStreaming]    = useState(false);
@@ -404,28 +492,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Only block sending after wallet detection is done — avoids false "out of credits" on F5
   const outOfCredits = walletReady && !isUnlimited && credits < cost;
 
-  // ── Tier config ────────────────────────────────────────────────────────────
-  // Pre-merge task #4 followup — Bankr got banned; every non-venice
-  // tier now routes through Virtuals server-side (task B). Send the
-  // truthful provider name over the wire so server logs / label pipes
-  // don't have to invert a stale value.
-  const activeTierProvider = chatTier.startsWith("venice") ? "venice" : "virtuals";
-  const VENICE_MODEL_IDS: Record<string, string> = {
-    // Venice — standard
-    "venice-deepseek":      "deepseek-v4-flash",
-    "venice-deepseek-pro":  "deepseek-v4-pro",
-    "venice-kimi":          "kimi-k2-6",
-    "venice-claude":        "claude-opus-4-7",
-    "venice-fable":         "claude-fable-5",
-    "venice-grok":          "grok-4-3",
-    "venice-qwen":          "qwen3-235b-a22b-instruct-2507",
-    "venice-mistral":       "mistral-small-3-2-24b-instruct",
-    "venice-uncut":         "venice-uncensored-1-2",
-    // Venice — Privacy / E2EE
-    "venice-e2ee-venice":   "e2ee-venice-uncensored-24b-p",
-    "venice-e2ee-gemma":    "e2ee-gemma-3-27b-p",
-    "venice-e2ee-qwen":     "e2ee-qwen3-6-35b-a3b",
-  };
 
   // ── send() ────────────────────────────────────────────────────────────────
   const send = useCallback(async (text: string) => {
@@ -440,7 +506,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       let stid = activeTaskId;
       let sbase: Message[] = activeTask?.messages ?? [];
       if (!stid) {
-        const ft = createTask(chatTier, personaId);
+        const ft = createTask(chatTier);
         stid = ft.id;
         setTasksState(prev => { const u = [ft, ...prev]; saveTasks(u, walletAddr); return u; });
         setActiveTaskId(stid);
@@ -482,7 +548,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     let baseMessages: Message[] = activeTask?.messages ?? [];
 
     if (!tid) {
-      const freshTask = createTask(chatTier, personaId);
+      const freshTask = createTask(chatTier);
       tid = freshTask.id;
       // Add to state AND persist immediately so it survives a refresh
       setTasksState(prev => {
@@ -527,29 +593,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     abortRef.current = new AbortController();
 
-    // Build persona system prompt
-    const persona = getPersona(personaId);
-    const personaPrompt = personaId === "custom" ? customPersonaPrompt : persona.systemPrompt;
-
-    // Semantic memory: embed query and find relevant past conversations
-    // This runs quickly using local cosine similarity against stored embeddings
-    let queryEmbedding: number[] | null = null;
-    try {
-      const embedRes = await fetch("/api/memory/embed", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: userMsg.slice(0, 512) }),
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (embedRes.ok) {
-        const { embedding } = await embedRes.json() as { embedding?: number[] };
-        queryEmbedding = embedding ?? null;
-      }
-    } catch { /* fall back to recency-based memory */ }
-
-    const semanticChunks = searchChunks(queryEmbedding, walletAddr, 3);
-    const memoryContext = buildMemoryContext(walletAddr, semanticChunks.length > 0 ? semanticChunks : undefined);
-    const modelId = VENICE_MODEL_IDS[chatTier];
+    // Conversation memory: the 3 most recent chunks, read from localStorage.
+    //
+    // This used to `await` a POST to /api/memory/embed (5s timeout) to get a
+    // query embedding before ranking chunks by cosine similarity. That route
+    // was retired (2026-09-03): it had been returning 402 "Insufficient USD or
+    // Diem balance" from Venice on every message, so `queryEmbedding` was
+    // always null and the ranking always fell through to this same recency
+    // slice. The await was therefore pure latency on the critical path to the
+    // user's first token — it changed the result on zero requests.
+    const relatedChunks = recentChunks(walletAddr, 3);
+    const memoryContext = buildMemoryContext(walletAddr, relatedChunks.length > 0 ? relatedChunks : undefined);
+    // How this preset dispatches: provider, the Venice model id (only set for
+    // a venice preset), and whether it carries live web search. One lookup off
+    // the preset spec — replaces the old startsWith("venice")/VENICE_MODEL_IDS
+    // pair that could never match a real preset id.
+    const dispatch = resolvePresetDispatch(chatTier);
     // Installed-skill prompt + integration toggles → extend the system prompt.
     const skillsPrompt = enabledSkillsPrompt();
     const integ = loadIntegrations();
@@ -571,16 +630,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({
           messages:    next,
           tier:        chatTier,
-          provider:    activeTierProvider,
+          provider:    dispatch.provider,
           // Connected wallet — when present, the chat backend debits the
           // message + tool credit cost from this wallet's unified ledger
           // (Week 2 of the credit redesign). Guest sessions omit this and
           // continue to use the localStorage daily-quota path.
-          ...(walletAddr    ? { address: walletAddr } : {}),
-          ...(modelId       ? { modelId }       : {}),
-          ...(memoryContext ? { memoryContext }  : {}),
-          ...(personaPrompt ? { persona: personaPrompt } : {}),
-          ...(webSearch     ? { webSearch: true } : {}),
+          ...(walletAddr        ? { address: walletAddr } : {}),
+          ...(dispatch.modelId  ? { modelId: dispatch.modelId } : {}),
+          ...(memoryContext     ? { memoryContext }  : {}),
+          // Preset-carried web search (the Search preset) OR the manual toggle.
+          ...((dispatch.webSearch || webSearch) ? { webSearch: true } : {}),
           ...(files.length  ? { attachments: files } : {}),
           ...(skillsPrompt  ? { skills: skillsPrompt } : {}),
           ...(integ.baseMcp  ? { baseMcp: true }  : {}),
@@ -618,6 +677,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // tool call hit a paid tool). The turn produced no answer, so we refund
       // the up-front message charge below and stamp the chip at 0 cr.
       let walletBlocked = false;
+      // Set when the LLM gateway refused or returned nothing. The server has
+      // already reversed the ledger debit for a connected wallet (#193); this
+      // is the display half of the same fact — the chip must not bill a turn
+      // whose credits were just handed back, and a guest (who is metered only
+      // in localStorage) gets that local charge returned below.
+      let upstreamFailed = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -735,6 +800,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Guest tool call hit a paid tool — the turn is just the
               // connect-wallet wall, no answer. Mark it so we don't charge.
               walletBlocked = true;
+            } else if (parsed.type === "upstream_error") {
+              // The gateway failed before producing a single token. What
+              // follows in the stream is an error notice, not an answer.
+              upstreamFailed = true;
             } else if (parsed.type === "insufficient_credits") {
               // Server signalled the wallet's credit ledger couldn't cover the
               // chat message or tool call. Attach the structured notice to the
@@ -786,9 +855,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Blocked turn (guest hit a paid tool) → refund the up-front message
-      // charge. The guest got the connect-wallet wall, not an answer.
-      if (walletBlocked && !walletAddr) {
+      // Turns that produced no answer → refund the up-front local charge.
+      //   - walletBlocked: the guest got the connect-wallet wall.
+      //   - upstreamFailed: the gateway refused or returned nothing (#193).
+      // Guests only; a connected wallet is metered in the server ledger, which
+      // has already reversed its own debit — double-crediting here would show
+      // a balance the ledger disagrees with.
+      if ((walletBlocked || upstreamFailed) && !walletAddr) {
         const refunded = addCredits(cost, walletAddr);
         setCredits(refunded);
       }
@@ -802,29 +875,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const lastIdx  = task.messages.length - 1;
         const last     = task.messages[lastIdx];
 
-        // Stamp model + timing on the completed assistant message
-        // Local dev (isUnlimited) is unmetered, and a blocked turn
-        // (connect-wallet wall) is refunded — both stamp the chip at 0 cr.
+        // Stamp model + timing on the completed assistant message.
+        // Three turns cost nothing and must not print a price: local dev
+        // (isUnlimited, unmetered), the connect-wallet wall, and a gateway
+        // failure that produced no answer — the last two were refunded, in the
+        // server ledger for a connected wallet and locally for a guest.
         const finalMsgs = task.messages.map((m, i) =>
           i === lastIdx && m.role === "assistant"
-            ? { ...m, modelUsed: chatTier, responseMs, creditsUsed: (isUnlimited || walletBlocked) ? 0 : cost, isThinking: false }
+            ? {
+                ...m,
+                modelUsed: chatTier,
+                responseMs,
+                creditsUsed: (isUnlimited || walletBlocked || upstreamFailed) ? 0 : cost,
+                isThinking: false,
+              }
             : m
         );
 
         if (last?.role === "assistant" && last.content) {
           updateMemoryAfterChat(walletAddr, userMsg, last.content);
           const chunkText = `Q: ${userMsg.slice(0, 200)}\nA: ${last.content.slice(0, 400)}`;
-          const chunkId = addChunk(chunkText, walletAddr);
-          fetch("/api/memory/embed", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: chunkText.slice(0, 1024) }),
-            signal: AbortSignal.timeout(10_000),
-          }).then(r => r.ok ? r.json() : null)
-            .then((d: { embedding?: number[] } | null) => {
-              if (d?.embedding) setChunkEmbedding(chunkId, d.embedding, walletAddr);
-            })
-            .catch(() => {});
+          // Stored for recency recall. A background POST to /api/memory/embed
+          // (10s timeout) used to follow this and write the chunk's embedding;
+          // that route was retired (2026-09-03) after 402ing on every call, so
+          // the embedding it wrote was never non-null in production anyway.
+          addChunk(chunkText, walletAddr);
         }
 
         const updated = prev.map(t => t.id === tid ? { ...t, messages: finalMsgs, updatedAt: Date.now() } : t);
@@ -849,7 +924,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [
     streaming, activeTask, activeTaskId, chatTier, walletAddr, cost, credits,
-    isUnlimited, personaId, customPersonaPrompt, activeTierProvider,
+    isUnlimited,
     webSearch, pendingFiles,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -860,15 +935,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     tasks, activeTaskId, activeTask, createNewTask, selectTask, deleteTask,
     streaming, error, setError, input, setInput, send, stop,
     chatTier, setChatTier,
-    personaId, setPersonaId, customPersonaPrompt, setCustomPersonaPrompt,
     artifacts, artifactsPanelOpen, setArtifactsPanelOpen,
-    crons, addCron, updateCron, deleteCron, runCron, cronRunning,
+    crons, addCron, updateCron, deleteCron, runCron, cronRunning, schedule,
     sidebarTab, setSidebarTab,
     buyOpen, setBuyOpen,
     walletAddr, holderTier, credits, countdown, isUnlimited, daily, cost, outOfCredits,
     walletReady, onWalletChange, setCredits, walletRefresh, triggerWalletRefresh,
     webSearch, setWebSearch, pendingFiles, setPendingFiles,
     cmdMenu, setCmdMenu, cmdFilter, setCmdFilter,
+    sync,
   };
 
   return <ChatCtx.Provider value={value}>{children}</ChatCtx.Provider>;

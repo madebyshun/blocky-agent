@@ -9,14 +9,14 @@ export default function ApiDoc() {
       <DocHeader
         eyebrow="Platform"
         title="API Reference"
-        lead="60+ x402 endpoints at api.blueagent.dev. Pay per call in USDC on Base — no API keys, no subscription, no signup. Every Blue command and Hub tool is reachable over HTTP."
+        lead="112 x402 endpoints on blueagent.dev. Pay per call in USDC on Base — no API keys, no subscription, no signup. Every Blue command and Hub tool is reachable over HTTP."
       />
 
       <H2 id="base-url">Base URL</H2>
-      <CodeBlock title="base url">{`https://api.blueagent.dev`}</CodeBlock>
+      <CodeBlock title="base url">{`https://blueagent.dev/api/x402`}</CodeBlock>
       <P>
-        Full interactive OpenAPI explorer:{" "}
-        <a href="https://api.blueagent.dev/docs" className="text-[#4FC3F7] underline">api.blueagent.dev/docs</a>.
+        Machine-readable catalog:{" "}
+        <a href="https://blueagent.dev/.well-known/openapi.json" className="text-[#4FC3F7] underline">/.well-known/openapi.json</a>.
       </P>
 
       <H2 id="auth">Authentication — x402</H2>
@@ -29,13 +29,13 @@ export default function ApiDoc() {
       <CodeBlock title="with the x402 client" badge="recommended">{`import { createX402Client } from "@blueagent/x402";
 
 const client = createX402Client({ wallet }); // pays 402s for you
-const res = await client.post("https://api.blueagent.dev/x402/blue-idea", {
+const res = await client.post("https://blueagent.dev/api/x402/blue-idea", {
   prompt: "DeFi protocol for Base",
 });
 console.log(res.data);`}</CodeBlock>
 
       <CodeBlock title="raw HTTP (handle 402 yourself)">{`# 1. first call returns 402 with payment requirements
-$ curl -i https://api.blueagent.dev/x402/blue-idea \\
+$ curl -i https://blueagent.dev/api/x402/blue-idea \\
     -H "Content-Type: application/json" \\
     -d '{"prompt":"DeFi protocol for Base"}'
 
@@ -43,14 +43,14 @@ $ curl -i https://api.blueagent.dev/x402/blue-idea \\
 
       <H2 id="surfaces">Same tools, every surface</H2>
       <CardGrid cols={3}>
-        <Card title="API" color="#fbbf24" href="https://api.blueagent.dev/docs">Direct HTTP — this reference.</Card>
+        <Card title="API" color="#fbbf24" href="https://blueagent.dev/.well-known/openapi.json">Direct HTTP — this reference.</Card>
         <Card title="MCP" color="#4FC3F7" href="/docs/mcp">In your IDE via the MCP server.</Card>
         <Card title="Hub" color="#A78BFA" href="/hub">Point-and-click in the Hub UI.</Card>
       </CardGrid>
 
       <Callout color="#fbbf24" title="Catalog">
         Discover every endpoint with <code className="text-[#4FC3F7]">blue-registry</code>, or browse{" "}
-        <a href="https://api.blueagent.dev/docs" className="text-[#fbbf24] underline">the OpenAPI spec</a>. Pricing lives in{" "}
+        <a href="https://blueagent.dev/.well-known/openapi.json" className="text-[#fbbf24] underline">the OpenAPI spec</a>. Pricing lives in{" "}
         <Link href="/docs/x402" className="text-[#fbbf24] underline">x402 Tools</Link>.
       </Callout>
 

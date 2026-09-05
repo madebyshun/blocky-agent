@@ -21,7 +21,8 @@
  */
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
+import { usePolling } from "@/hooks/usePolling";
 import type { EngineHealth, EngineStatus } from "@/lib/blue-hood/health";
 
 /** Health polls a touch slower than the board's 15s — engine state moves in minutes. */
@@ -70,15 +71,8 @@ export function HealthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    poll(ctl.signal);
-    const t = setInterval(() => poll(ctl.signal), HEALTH_POLL_MS);
-    return () => {
-      ctl.abort();
-      clearInterval(t);
-    };
-  }, [poll]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(poll, HEALTH_POLL_MS);
 
   return <HealthContext.Provider value={state}>{children}</HealthContext.Provider>;
 }

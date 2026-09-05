@@ -65,7 +65,7 @@ export async function runMicroPost(
   // Validate reward
   const reward = parseFloat(opts.reward ?? "0");
   if (isNaN(reward) || reward <= 0) {
-    printError("--reward must be a positive number (USDC), e.g. --reward 1");
+    printError("--reward must be a positive number, e.g. --reward 1");
     return;
   }
 
@@ -126,7 +126,9 @@ export async function runMicroPost(
   }
   process.stdout.write(`  Deadline:  ${deadline}\n`);
   process.stdout.write(`  Approval:  ${approval}\n`);
-  process.stdout.write(`  Escrow:    funded ($${totalBudget.toFixed(2)} USDC)\n`);
+  process.stdout.write(`  Budget:    $${totalBudget.toFixed(2)} tracked locally — no funds are held\n`);
+  process.stdout.write(`\n  blue micro is a local task tracker. It records who did what and\n`);
+  process.stdout.write(`  what you owe them; paying is up to you.\n`);
   process.stdout.write(`\n  Share: blue micro list\n`);
   process.stdout.write(`  ID:    ${task.id}\n`);
   process.stdout.write(`${LINE}\n\n`);

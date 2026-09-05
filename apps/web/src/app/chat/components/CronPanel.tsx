@@ -1,7 +1,10 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useChat } from "../ChatContext";
-import { nextRunLabel } from "../storage";
+import { isBackground, nextRunLabel } from "../storage";
+import { localTz } from "@/lib/cron-schedule";
+import { creditCost } from "@/lib/credits";
+import { VIRTUALS_PRESETS_V1 } from "./presets";
 import { MarkdownRenderer } from "./ChatMessages";
 import type { CronSchedule, CronTask } from "../types";
 
@@ -31,6 +34,20 @@ const CRON_PRESETS = [
   { label: "Weekly Base digest",      prompt: "What happened on Base this week?",          schedule: "weekly" as CronSchedule, time: "09:00" },
   { label: "Daily narrative scan",    prompt: "What narratives are running on Base now?",  schedule: "daily"  as CronSchedule, time: "08:00" },
 ];
+
+/**
+ * The human name of the model a task runs on.
+ *
+ * A task stamps `tier` at creation and keeps it (see `CronTask.tier`), so this
+ * has to survive ids that are no longer in the catalog — an older build's
+ * `venice-kimi`, say. Falling back to the raw id is deliberate: showing a
+ * catalog name that isn't what the run will use would be the same defect as
+ * pricing the card off the live composer instead of the stored tier.
+ */
+function presetLabel(tier?: string): string {
+  if (!tier) return "Balanced";
+  return VIRTUALS_PRESETS_V1.find(p => p.id === tier)?.label ?? tier;
+}
 
 // ── Status dot ─────────────────────────────────────────────────────────────────
 function StatusDot({ active }: { active: boolean }) {
@@ -64,7 +81,11 @@ function Toggle({ active, onChange }: { active: boolean; onChange: () => void })
 
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function CronPanel() {
-  const { crons, addCron, updateCron, deleteCron, runCron, cronRunning } = useChat();
+  const { crons, addCron, updateCron, deleteCron, runCron, cronRunning, schedule, holderTier } = useChat();
+  // The zone the TIME field is written in — shown next to the label so "09:00"
+  // is 09:00 somewhere in particular. `addCron` stamps this same value onto the
+  // task, so what the form says and what the server fires on are one string.
+  const tzLabel = localTz();
   const [showForm, setShowForm] = useState(false);
   const [viewing,  setViewing]  = useState<CronTask | null>(null);
   const [form, setForm] = useState({
@@ -112,7 +133,24 @@ export default function CronPanel() {
             </button>
           </div>
         </div>
-        <p className="font-mono text-[10px] text-slate-700">Run prompts on a schedule. Auto-executes in chat.</p>
+        {/* Two modes, and the copy has to name both. #169 removed the old
+            "Auto-executes in chat" line because nothing ran while the tab was
+            closed; the server tick now does, but ONLY for tasks the user
+            switched to background. Describing every task as scheduled would
+            repeat the original lie in the other direction. */}
+        <p className="font-mono text-[10px] text-slate-700">
+          Tasks run when you open Blue Chat. Switch one to{" "}
+          <span className="text-slate-500">Background</span> and it runs at its
+          set time even with this tab closed.
+        </p>
+        {schedule.state.phase === "signed-out" && (
+          <p className="font-mono text-[10px] text-slate-600 mt-1.5">
+            Sign in with your wallet to keep background tasks running.
+          </p>
+        )}
+        {schedule.state.phase === "error" && (
+          <p className="font-mono text-[10px] text-slate-600 mt-1.5">{schedule.state.message}</p>
+        )}
       </div>
 
       {/* ── Add form ── */}
@@ -143,7 +181,13 @@ export default function CronPanel() {
                 </select>
               </div>
               <div>
-                <label className="font-mono text-[10px] text-slate-500 block mb-1.5">TIME</label>
+                {/* The picker decides something now: the server tick reads it
+                    through `lib/cron-schedule.ts`, in the zone shown below. It
+                    is still ignored for a foreground task — hence the two-line
+                    explanation under the grid rather than a bare label. */}
+                <label className="font-mono text-[10px] text-slate-500 block mb-1.5">
+                  TIME <span className="text-slate-700">· {tzLabel}</span>
+                </label>
                 <input
                   type="time"
                   value={form.time}
@@ -152,6 +196,12 @@ export default function CronPanel() {
                 />
               </div>
             </div>
+
+            <p className="font-mono text-[10px] text-slate-700 leading-relaxed">
+              The time is used once you switch the task to Background. Until then
+              a daily task runs the first time you open Blue Chat after 24h have
+              passed.
+            </p>
 
             {/* Prompt */}
             <div>
@@ -205,13 +255,14 @@ export default function CronPanel() {
               ⏱
             </div>
             <p className="font-mono text-sm text-slate-500 mb-0.5">No scheduled tasks</p>
-            <p className="font-mono text-[10px] text-slate-700">Create one above to run prompts automatically</p>
+            <p className="font-mono text-[10px] text-slate-700">Create one above — it runs next time you open Blue Chat</p>
           </div>
         )}
 
         <div className="space-y-3">
           {crons.map(cron => {
             const isRunning = cronRunning === cron.id;
+            const bg        = isBackground(cron);
             return (
               <div
                 key={cron.id}
@@ -245,12 +296,24 @@ export default function CronPanel() {
 
                 {/* ── Schedule chips ── */}
                 <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                  {/* The time is shown ONLY for a background task, because only
+                      a background task fires at it. On a foreground task this
+                      chip would read as "fires daily at 09:00" — the promise
+                      #169 removed. */}
                   <span className="font-mono text-[10px] px-2 py-1 rounded-md bg-[#11111A] text-slate-300 capitalize">
-                    🗓 {cron.schedule} · {cron.time}
+                    🗓 {cron.schedule}{bg ? ` · ${cron.time}` : ""}
                   </span>
                   {cron.active && (
                     <span className="font-mono text-[10px] px-2 py-1 rounded-md" style={{ background: "#34D39912", color: "#34D399" }}>
-                      next {nextRunLabel(cron)}
+                      {nextRunLabel(cron)}
+                    </span>
+                  )}
+                  {/* What each unattended run costs. A standing instruction to
+                      spend should say what it spends, on the card, where the
+                      user decides — not only in a balance they check later. */}
+                  {bg && (
+                    <span className="font-mono text-[10px] px-2 py-1 rounded-md bg-[#11111A] text-slate-500">
+                      {presetLabel(cron.tier)} · {creditCost(cron.tier ?? "pro", holderTier)} cr/run
                     </span>
                   )}
                 </div>
@@ -262,6 +325,52 @@ export default function CronPanel() {
                     {cron.prompt}
                   </p>
                 </div>
+
+                {/* ── Background switch ─────────────────────────────────────
+                     Per task, not global: a user may well want one daily digest
+                     firing unattended and keep an expensive research task on
+                     open-only. Flipping this on is what asks for a signature. */}
+                <button
+                  onClick={() => (bg ? schedule.disable(cron.id) : schedule.enable(cron.id))}
+                  className="w-full flex items-center justify-between rounded-xl border px-3 py-2.5 mb-3 transition-colors text-left"
+                  style={{
+                    borderColor: bg ? "#4FC3F730" : "#1A1A2E",
+                    background:  bg ? "#4FC3F708" : "#050508",
+                  }}
+                >
+                  <span className="min-w-0">
+                    <span className="font-mono text-[11px] block" style={{ color: bg ? "#4FC3F7" : "#64748B" }}>
+                      {bg ? "Runs in the background" : "Run in the background"}
+                    </span>
+                    <span className="font-mono text-[9px] text-slate-600 block mt-0.5">
+                      {bg
+                        ? `Fires at ${cron.time} ${cron.tz ?? ""} with this tab closed`
+                        : "Fires at its set time even with this tab closed"}
+                    </span>
+                  </span>
+                  <Toggle active={bg} onChange={() => (bg ? schedule.disable(cron.id) : schedule.enable(cron.id))} />
+                </button>
+
+                {/* ── Why the scheduler switched this off ──────────────────
+                     Rendered as its own row rather than folded into the error
+                     line: a paused task is not a failed run, it is a task that
+                     will not run again until the user acts. */}
+                {cron.pausedReason && (
+                  <div className="rounded-xl border px-3 py-2.5 mb-3" style={{ borderColor: "#F59E0B30", background: "#F59E0B08" }}>
+                    <p className="font-mono text-[8px] tracking-widest mb-1" style={{ color: "#F59E0B" }}>PAUSED</p>
+                    <p className="font-mono text-[11px] text-slate-400 leading-relaxed">{cron.pausedReason}</p>
+                  </div>
+                )}
+
+                {/* A run that produced nothing says so. It used to be stored as
+                    `lastResult: "Error running task"`, which rendered in the
+                    LAST RESULT box as if the model had answered that. */}
+                {cron.lastError && !cron.pausedReason && (
+                  <div className="rounded-xl border border-[#1A1A2E] bg-[#070710] px-3 py-2.5 mb-3">
+                    <p className="font-mono text-[8px] text-slate-600 tracking-widest mb-1">LAST RUN FAILED</p>
+                    <p className="font-mono text-[11px] text-slate-500 leading-relaxed line-clamp-2">{cron.lastError}</p>
+                  </div>
+                )}
 
                 {/* ── Last result preview (cleaned to plain text) ── */}
                 {cron.lastResult && (
@@ -334,7 +443,10 @@ function ResultModal({ cron, onClose }: { cron: CronTask; onClose: () => void })
           <div className="min-w-0">
             <p className="font-mono text-[11px] text-[#4FC3F7] tracking-widest truncate">// {cron.label.toUpperCase()}</p>
             <p className="font-mono text-[9px] text-slate-600 mt-0.5">
-              {cron.schedule} · {cron.time}
+              {/* Same rule as the card chip: the time is shown only when a
+                  background task actually fires at it. `ran` is a real observed
+                  timestamp (stamped by the run), so it always stays. */}
+              {cron.schedule}{isBackground(cron) ? ` · ${cron.time}` : ""}
               {cron.lastRun && ` · ran ${new Date(cron.lastRun).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`}
             </p>
           </div>

@@ -1,10 +1,6 @@
 {
   "crons": [
     {
-      "path": "/api/cron/feed/daily",
-      "schedule": "0 9 * * *"
-    },
-    {
       "path": "/api/cron/research-loop",
       "schedule": "0 6 * * *"
     },
@@ -23,6 +19,14 @@
     {
       "path": "/api/cron/blue-hood/alert-drain",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/blue-hood/archive-watch",
+      "schedule": "7 * * * *"
+    },
+    {
+      "path": "/api/cron/user-tasks",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

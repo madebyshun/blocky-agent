@@ -5,11 +5,10 @@ import { useChat } from "../ChatContext";
 import { getMemory, clearMemory } from "@/lib/memory";
 import WalletBar from "@/components/WalletBar";
 import TopUpModal from "@/components/TopUpModal";
-import PersonaSelector from "./PersonaSelector";
 
 // The settings categories — Claude-style two-pane modal. The modal owns the
 // left nav + active section; this panel renders the matching content.
-export type SettingsSection = "account" | "credits" | "persona" | "memory" | "about";
+export type SettingsSection = "account" | "credits" | "memory" | "about";
 
 const LINKS: { label: string; sub: string; href: string }[] = [
   { label: "Website",     sub: "blueagent.dev",      href: "https://blueagent.dev" },
@@ -35,6 +34,85 @@ function PaneHeader({ title, subtitle, right }: { title: string; subtitle?: stri
         {subtitle && <p className="font-mono text-[10px] text-slate-600 mt-1 leading-relaxed">{subtitle}</p>}
       </div>
       {right}
+    </div>
+  );
+}
+
+/**
+ * Cross-device sync toggle.
+ *
+ * Every string here has to survive the question "is that literally true?".
+ * Sync is off by default, needs a signature, and never deletes anything local —
+ * so the copy says exactly that instead of a bare "Sync: on". The status line
+ * reports the real phase, including the failure phases: a sync that could not
+ * write must not render as a checkmark.
+ */
+function SyncCard() {
+  const { sync } = useChat();
+  const [busy, setBusy] = useState(false);
+
+  const status = (() => {
+    switch (sync.state.phase) {
+      case "off":        return { text: "Off — this browser only",                    color: "#64748b" };
+      case "signed-out": return { text: "Sign in again to resume syncing",            color: "#F59E0B" };
+      case "hydrating":  return { text: "Loading your synced workspace…",             color: "#4FC3F7" };
+      case "syncing":    return { text: "Saving…",                                    color: "#4FC3F7" };
+      case "idle":       return { text: `Synced · ${new Date(sync.state.at).toLocaleTimeString()}`, color: "#22C55E" };
+      case "error":      return { text: sync.state.message,                           color: "#EF4444" };
+    }
+  })();
+
+  async function toggle() {
+    setBusy(true);
+    try { sync.enabled ? await sync.disable() : await sync.enable(); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="mt-4 rounded-2xl bg-[#0A0A12] border border-[#1A1A2E] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-mono text-[11px] text-slate-300 font-semibold">Sync across devices</p>
+          <p className="font-mono text-[10px] text-slate-600 mt-1 leading-relaxed">
+            Off by default. Turning it on asks your wallet for one signature — it proves
+            you own this address and moves no funds. Your conversations, scheduled prompts,
+            skills and memory are then kept on our server so another device signed in with
+            the same wallet sees them.
+          </p>
+        </div>
+        <button
+          onClick={toggle}
+          disabled={busy}
+          className="shrink-0 font-mono text-[10px] px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50"
+          style={
+            sync.enabled
+              ? { color: "#EF4444", borderColor: "#EF444430", background: "#EF444410" }
+              : { color: "#4FC3F7", borderColor: "#4FC3F730", background: "#4FC3F710" }
+          }
+        >
+          {busy ? "…" : sync.enabled ? "Turn off" : "Turn on"}
+        </button>
+      </div>
+
+      <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-[#13131f]">
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: status.color }} />
+        <span className="font-mono text-[10px] truncate" style={{ color: status.color }}>{status.text}</span>
+      </div>
+
+      <p className="font-mono text-[9px] text-slate-700 mt-2.5 leading-relaxed">
+        Not synced: credits (already tracked server-side) and MCP connectors (their rows hold
+        access tokens, which stay in this browser until the secrets vault ships).
+        Turning sync off ends the session but leaves this browser&apos;s copy untouched.
+      </p>
+
+      {sync.enabled && (
+        <button
+          onClick={() => sync.forget()}
+          className="font-mono text-[10px] text-slate-600 hover:text-red-400 transition-colors mt-2.5"
+        >
+          Delete the synced copy from the server →
+        </button>
+      )}
     </div>
   );
 }
@@ -84,6 +162,8 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
               </a>
             </div>
           )}
+
+          {walletAddr && <SyncCard />}
         </>
       )}
 
@@ -218,17 +298,6 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
               </Link>
             </div>
           )}
-        </>
-      )}
-
-      {/* ── Persona ─────────────────────────────────────────────────────── */}
-      {section === "persona" && (
-        <>
-          <PaneHeader
-            title="Persona"
-            subtitle="The expert role the agent takes on — it swaps the system prompt, not the model. Pick the model (Chat · Fast · Web Search · Deep Think · Private) in the chat composer."
-          />
-          <PersonaSelector />
         </>
       )}
 

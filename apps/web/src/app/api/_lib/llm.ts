@@ -18,9 +18,21 @@
 //     directly import it keep compiling. Those calls are DEAD in prod today
 //     (Bankr account 403 banned) — see the migration task that follows.
 //
-// Env: VIRTUALS_API_KEY (required), VIRTUALS_MODEL (optional). VENICE_INFERENCE_KEY
-// is no longer read anywhere in this file; a follow-up sweeps it out of the
-// rest of the codebase (chat/route.ts, memory/embed, crypto-rpc, status).
+// Env: VIRTUALS_API_KEY (required), VIRTUALS_MODEL (optional).
+//
+// VENICE_INFERENCE_KEY is not read in this file — but it is NOT a dead env var,
+// contra the older note here (and contra CLAUDE.md). Measured 2026-09-03, two
+// live readers remain and the key IS set in Vercel:
+//   • api/crypto-rpc/route.ts — backs the `hub_crypto_rpc` chat tool. Verified
+//     working: a prod POST reached Venice and came back with a *semantic* error
+//     ("Unsupported RPC network: base"), not 401/402. Auth is fine here.
+//   • api/chat/route.ts — the `provider === "venice"` branch. Unreachable from
+//     the web client (chatTier only ever holds a VIRTUALS_PRESETS_V1 id, none of
+//     which start with "venice"), but still reachable by a direct API call,
+//     because the route trusts the client-supplied `provider` field.
+// The third reader, api/memory/embed, was retired 2026-09-03 — it had been
+// answering 402 "Insufficient USD or Diem balance" on every chat message.
+// So: do NOT unset this key during env cleanup.
 
 import { getAeonOutput, formatAeonForLLM } from "./aeon-kv";
 
@@ -154,6 +166,112 @@ export const STATIC_KNOWLEDGE_DISCLAIMER =
 
 export const VIRTUALS_DEFAULT_MODEL = "deepseek-deepseek-v4-flash";
 
+/** Virtuals OpenAI-compatible base URL — the single inference gateway. */
+export const VIRTUALS_BASE_URL = "https://compute.virtuals.io/v1";
+
+export type VirtualsProbe = {
+  /** true only when the gateway accepted our key on a real authenticated call. */
+  ok: boolean;
+  /** Health vocabulary: "ok" | "missing_key" | "error_<code>: …" | "unreachable: …" */
+  status: string;
+  /** The model this deployment is configured to call. */
+  model: string;
+  latencyMs: number | null;
+  /** When the underlying network check actually ran (not when it was served). */
+  checkedAt: string;
+  /** True when this verdict came from cache rather than a fresh call. */
+  cached: boolean;
+};
+
+// Bound the cost of a PUBLIC probe: at most one real upstream call per window
+// per warm instance, no matter how hard the endpoint is hit. Failures expire
+// faster than successes so a recovery shows up quickly instead of being pinned
+// "down" for the full success TTL.
+const PROBE_OK_TTL_MS   = 10 * 60 * 1000; // 10 min
+const PROBE_FAIL_TTL_MS = 30 * 1000;      // 30 s
+let _probeCache: { probe: VirtualsProbe; at: number } | null = null;
+
+/**
+ * Liveness probe for the Virtuals gateway — the real health of the only
+ * inference provider we use.
+ *
+ * Why a 1-token authenticated completion and NOT `GET /v1/models`: the models
+ * catalog is served to *anyone*, with no auth at all (verified 2026-08-18 —
+ * a bogus bearer and a missing header both return 200 with 63 models). So a
+ * catalog probe proves the host is up while saying nothing about whether OUR
+ * key works. That would have made `/api/health` publish a green light with a
+ * revoked `VIRTUALS_API_KEY` while every tool in the product failed — the same
+ * class of lie as the old Bankr red light, only inverted. `/v1/chat/completions`
+ * returns 403 without a valid key, so it actually discriminates.
+ *
+ * Cost is why this is cached, not why it's avoided: `max_tokens: 1` on the
+ * flash model is a fraction of a cent, but the endpoint is public and
+ * `no-store`, so an uncached probe would be an unmetered faucet on our
+ * credits. The cache bounds it to one upstream call per TTL per instance.
+ * (The *authenticated* `/api/hood/llm-health` still does a full uncached
+ * `callLLM` — that one is gated behind `X-Blue-Internal` precisely so a public
+ * caller can never trigger it.)
+ *
+ * Deliberately NOT reusing `getVirtualsCatalog()`: that helper serves a 6h
+ * stale cache on failure, which is right for validating model ids and wrong
+ * for health — it would keep reporting "ok" straight through an outage.
+ *
+ * NOTE: if this ever reports `error_403`, that is a TRUE signal about a gateway
+ * we really depend on — unlike the pre-2026-08-18 Bankr 403, which reported a
+ * provider that had already been removed from the code path.
+ */
+export async function probeVirtuals(timeoutMs = 4000): Promise<VirtualsProbe> {
+  const now = Date.now();
+  if (_probeCache) {
+    const ttl = _probeCache.probe.ok ? PROBE_OK_TTL_MS : PROBE_FAIL_TTL_MS;
+    if (now - _probeCache.at < ttl) return { ..._probeCache.probe, cached: true };
+  }
+
+  const model = process.env.VIRTUALS_MODEL ?? VIRTUALS_DEFAULT_MODEL;
+  const apiKey = process.env.VIRTUALS_API_KEY;
+  const checkedAt = new Date(now).toISOString();
+
+  const finish = (p: Omit<VirtualsProbe, "cached" | "checkedAt">): VirtualsProbe => {
+    const probe: VirtualsProbe = { ...p, checkedAt, cached: false };
+    _probeCache = { probe, at: Date.now() };
+    return probe;
+  };
+
+  if (!apiKey) return finish({ ok: false, status: "missing_key", model, latencyMs: null });
+
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${VIRTUALS_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      // Smallest call that still exercises auth + routing. Content is never read.
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const latencyMs = Date.now() - t0;
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      return finish({ ok: false, status: `error_${res.status}: ${txt.slice(0, 80)}`, model, latencyMs });
+    }
+    return finish({ ok: true, status: "ok", model, latencyMs });
+  } catch (e) {
+    return finish({
+      ok: false,
+      status: `unreachable: ${(e as Error).message.slice(0, 60)}`,
+      model,
+      latencyMs: null,
+    });
+  }
+}
+
 // ─── Virtuals catalog (kill the "id-doesn't-exist → 400" bug family) ──────
 //
 // Root cause of the same bug family, 3rd time (2026-07-24):
@@ -170,10 +288,42 @@ export const VIRTUALS_DEFAULT_MODEL = "deepseek-deepseek-v4-flash";
 // The 4 preset ids below were verified live against the catalog on
 // 2026-07-24 (see the "chốt preset" spec). The `-fast` variants are
 // deliberately absent: 6× the price for the same capability.
+// NAME NOTE: `VirtualsPreset` / `VIRTUALS_PRESETS` keep their original names
+// even though the list is no longer Virtuals-only — same convention as
+// `BANKR_TIERS` in ChatInput.tsx, which outlived Bankr. Renaming would touch 5
+// files for zero behaviour change; the `provider` field below is what actually
+// decides where a preset dispatches.
+//
+// WHY A PROVIDER FIELD NOW (2026-09-03). Blue Chat had TWO live upstreams and
+// was only using one. `/api/chat` has a complete Venice branch (route.ts:2495)
+// and `VENICE_INFERENCE_KEY` is set in Vercel Production — but the client
+// derived the provider as `chatTier.startsWith("venice")` while every id the
+// picker can produce comes from this list (fast/balanced/deep/private/grok).
+// No id starts with "venice", so the Venice branch was unreachable from the
+// web UI: a paid-for, keyed, fully-written provider that served 0% of traffic.
+// ChatInput.tsx:614 documents the visible cost of that — the web-search button
+// was deleted because search only works on Venice, and Venice couldn't be
+// reached. Deriving the provider from the preset instead of from a string
+// prefix is what makes both upstreams real.
+//
+// VERIFIED 2026-09-03 — every model id below was probed against its own
+// provider with the REAL 46-tool HUB_TOOLS schema (~38.5k chars) and returned
+// a correct `tool_calls` for a honeypot question. A capability flag in a
+// catalog is a claim; a returned tool call is a measurement. Small models
+// routinely accept the schema and then answer from training data instead of
+// calling anything, which is invisible to the user — so "supportsFunction-
+// Calling: true" was not accepted as sufficient for any entry here.
 export interface VirtualsPreset {
-  /** Stable UI id — never a Virtuals model id. */
-  id: "fast" | "balanced" | "deep" | "private" | "grok";
-  /** The Virtuals /v1/models `id`. Validated against the catalog. */
+  /** Stable UI id — never a provider model id. */
+  id: "free" | "fast" | "balanced" | "deep" | "private" | "grok" | "flash" | "search";
+  /**
+   * Which upstream this preset dispatches to. Decides the endpoint, the auth
+   * header, and whether `venice_parameters` is sent — see `veniceCfg` /
+   * `virtualsCfg` in `/api/chat/route.ts`. Also decides which catalog the id
+   * is validated against below.
+   */
+  provider: "virtuals" | "venice";
+  /** The provider's own /v1/models `id`. Validated against that catalog. */
   model: string;
   /** Short user-facing name shown on the picker card. */
   label: string;
@@ -189,18 +339,134 @@ export interface VirtualsPreset {
   privacy?: boolean;
   /** Whether this preset is optional (hidden by default in the primary picker). */
   optional?: boolean;
+  /**
+   * Ask the upstream for live web search. Venice-only: it maps to
+   * `venice_parameters.enable_web_search: "on"`. The Virtuals gateway exposes
+   * no search of any kind, so setting this on a `virtuals` preset would be the
+   * exact defect #143 was filed for — telling the model it can check the web
+   * when it cannot. Guarded in `getAvailablePresets()`.
+   */
+  webSearch?: boolean;
+  /**
+   * Chat-only: this preset never registers Hub tools. Set on the free tier so a
+   * 0-credit message can't trigger a paid tool call. `/api/chat` enforces it
+   * from THIS server-side copy (keyed on `tier`), so it is a real gate, not a
+   * client-trusted hint — a crafted request can neither turn it off nor pair a
+   * free tier's price with a paid model (the model is pinned here too).
+   */
+  noTools?: boolean;
 }
 
+// CONTEXT-WINDOW CAVEAT: `contextTokens` is a VENDOR-PUBLISHED figure, not a
+// measured one. It drives a picker subtitle, nothing load-bearing, but don't
+// quote it as verified.
+//
+// CORRECTED 2026-09-04. This comment used to say the Virtuals catalog "returns
+// ids ONLY — no context, no pricing, no capability flags". Measured against
+// /v1/models: it returns `contextLength`, `pricing{input,output,cacheInput}`,
+// `name`, `description` and `modality` for all 191 rows. Only the capability
+// flags were genuinely absent. Because the comment said otherwise, nobody went
+// back to the catalog, and two of the numbers below drifted into being wrong:
+// `balanced` and `deep` both claimed 200k while the catalog says 1,000,000 —
+// understating the real window 5x on the two most-used presets. The values here
+// are now reconciled with the catalog and are the pre-fetch FALLBACK only; the
+// display path reads the live figure via `getCatalogModels()`.
+
 export const VIRTUALS_PRESETS: VirtualsPreset[] = [
-  { id: "fast",     model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_000_000, credits: 10 },
-  { id: "balanced", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 200_000,   credits: 50 },
-  { id: "deep",     model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 200_000,   credits: 200 },
-  { id: "private",  model: "e2ee-deepseek-v4-flash",     label: "Private",  desc: "E2EE · no logs · DeepSeek V4",            cost: "●",   contextTokens: 1_000_000, credits: 30,  privacy: true },
-  { id: "grok",     model: "x-ai-grok-4-20",             label: "Grok",     desc: "Grok 4 · 2M context window",              cost: "●●",  contextTokens: 2_000_000, credits: 60,  optional: true },
+  { id: "fast",     provider: "virtuals", model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_048_576, credits: 10 },
+  // NEW — Free. The only 0-credit preset, and deliberately chat-only
+  // (`noTools`): a message that costs nothing must not be able to spend a paid
+  // Hub tool. Model measured in the live Venice catalog 2026-09-03 —
+  // `qwen3-5-9b`, 256k ctx, function-calling capable (we don't use it here; the
+  // route pins the model AND drops the tool schema for this tier). This row is
+  // the SERVER source of truth the route reads to pin the free model server-
+  // side, so the client can't swap in a paid model at zero cost. Order mirrors
+  // VIRTUALS_PRESETS_V1 (fast, then free) so the picker renders identically
+  // before and after the /api/chat/presets fetch resolves.
+  { id: "free",     provider: "venice",   model: "qwen3-5-9b",                 label: "Free",     desc: "Qwen 3.5 9B · no credits · chat only",   cost: "●",   contextTokens: 256_000,   credits: 0,   noTools: true },
+  { id: "balanced", provider: "virtuals", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 1_000_000, credits: 50 },
+  { id: "deep",     provider: "virtuals", model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 1_000_000, credits: 200 },
+  { id: "private",  provider: "virtuals", model: "e2ee-deepseek-v4-flash",     label: "Private",  desc: "E2EE · no logs · DeepSeek V4",            cost: "●",   contextTokens: 1_000_000, credits: 30,  privacy: true },
+  // NEW — Instant. Measured 2026-09-03 against the full tool schema:
+  // 1,231 ms and 7,375 prompt tokens, the fastest and the cheapest-to-prompt
+  // of 11 Virtuals candidates probed (`fast`/deepseek-v4-flash took 5,387 ms
+  // on the identical request — 4.4x slower). Kept as a separate preset rather
+  // than swapping `fast`'s model, because `fast` has a 1M window and this does
+  // not; silently changing what an existing saved tier points at is how users
+  // lose a capability without being told.
+  { id: "flash",    provider: "virtuals", model: "google-gemini-2-5-flash",    label: "Instant",  desc: "Gemini 2.5 Flash · fastest first token",  cost: "●",   contextTokens: 1_048_576, credits: 10 },
+  { id: "grok",     provider: "virtuals", model: "x-ai-grok-4-20",             label: "Grok",     desc: "Grok 4 · 2M context window",              cost: "●●",  contextTokens: 2_000_000, credits: 60,  optional: true },
+  // NEW — Search. The ONLY preset that can read the live web: Venice honours
+  // `enable_web_search`, Virtuals has no search at all. This is the capability
+  // ChatInput.tsx:614 had to delete a button for. Grok rather than a cheaper
+  // Venice model because search answers get quoted as fact, and $1.42/$2.83
+  // per Mtok buys the model that is actually good at it (~$0.014 of inference
+  // against a 60 cr / $0.03 charge — thin but positive).
+  { id: "search",   provider: "venice",   model: "grok-4-3",                   label: "Search",   desc: "Grok 4.3 · live web search · 1M ctx",     cost: "●●",  contextTokens: 1_000_000, credits: 60,  optional: true, webSearch: true },
 ];
 
+/**
+ * One model row, normalised across the two upstreams so a caller never has to
+ * know which provider it came from. Every optional field is `null` when the
+ * provider does not publish it — **never `false` and never a guess**. A models
+ * page that renders `false` for an unpublished capability is asserting a
+ * negative it cannot measure, which is the #143 defect family.
+ */
+export interface CatalogModel {
+  id: string;
+  provider: "virtuals" | "venice";
+  /** Vendor display name, e.g. "Anthropic: Claude Sonnet 5". */
+  name: string | null;
+  description: string | null;
+  /** Vendor-published context window, in tokens. */
+  contextTokens: number | null;
+  /** USD per 1M tokens, as published by the provider. Not what a user pays. */
+  pricing: { input: number | null; output: number | null; cachedInput: number | null } | null;
+  inputModalities: string[];
+  outputModalities: string[];
+  /**
+   * Provider-declared capability flags. Venice publishes 15 of them; Virtuals
+   * publishes none, so this is `null` on every Virtuals row — absent, not false.
+   */
+  capabilities: Record<string, boolean> | null;
+  maxOutputTokens: number | null;
+  privacy: string | null;
+}
+
 const CATALOG_CACHE_MS = 6 * 60 * 60 * 1000; // 6h — matches the "chốt preset" spec
-let _virtualsCatalogCache: { ids: Set<string>; fetchedAt: number } | null = null;
+let _virtualsCatalogCache: { ids: Set<string>; models: Map<string, CatalogModel>; fetchedAt: number } | null = null;
+
+/** Raw shape of one Virtuals /v1/models row. Measured 2026-09-04. */
+type VirtualsCatalogRow = {
+  id?: string;
+  name?: string;
+  description?: string;
+  contextLength?: number;
+  pricing?: { input?: number; output?: number; cacheInput?: number };
+  modality?: { input?: string[]; output?: string[] };
+};
+
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+
+function normaliseVirtualsRow(row: VirtualsCatalogRow): CatalogModel {
+  const p = row.pricing;
+  return {
+    id: row.id as string,
+    provider: "virtuals",
+    name: str(row.name),
+    description: str(row.description),
+    contextTokens: num(row.contextLength),
+    pricing: p ? { input: num(p.input), output: num(p.output), cachedInput: num(p.cacheInput) } : null,
+    inputModalities: Array.isArray(row.modality?.input) ? row.modality.input : [],
+    outputModalities: Array.isArray(row.modality?.output) ? row.modality.output : [],
+    // Virtuals publishes no capability flags at all — see the caveat above
+    // VIRTUALS_PRESETS. `null`, so a renderer shows "unknown" rather than "no".
+    capabilities: null,
+    maxOutputTokens: null,
+    privacy: null,
+  };
+}
 
 /**
  * Fetches the current Virtuals /v1/models catalog and returns the set of
@@ -234,16 +500,19 @@ export async function getVirtualsCatalog(): Promise<Set<string> | null> {
       console.warn(`[virtuals-catalog] /v1/models ${res.status} — using stale cache=${_virtualsCatalogCache?.ids.size ?? 0}`);
       return _virtualsCatalogCache?.ids ?? null;
     }
-    const d = (await res.json()) as { data?: { id?: string }[] };
+    const d = (await res.json()) as { data?: VirtualsCatalogRow[] };
     const ids = new Set<string>();
+    const models = new Map<string, CatalogModel>();
     for (const row of d.data ?? []) {
-      if (typeof row.id === "string" && row.id.length > 0) ids.add(row.id);
+      if (typeof row.id !== "string" || row.id.length === 0) continue;
+      ids.add(row.id);
+      models.set(row.id, normaliseVirtualsRow(row));
     }
     if (ids.size === 0) {
       console.warn("[virtuals-catalog] empty catalog — using stale cache");
       return _virtualsCatalogCache?.ids ?? null;
     }
-    _virtualsCatalogCache = { ids, fetchedAt: now };
+    _virtualsCatalogCache = { ids, models, fetchedAt: now };
     console.log(`[virtuals-catalog] refreshed size=${ids.size}`);
     return ids;
   } catch (e) {
@@ -252,23 +521,170 @@ export async function getVirtualsCatalog(): Promise<Set<string> | null> {
   }
 }
 
-/**
- * Returns the presets whose model id is currently in the Virtuals
- * catalog. If the catalog fetch fails and we have no cache, returns the
- * full preset list (fail-open — the picker still works, and a bad id
- * will surface as a typed 4xx from the chat route rather than a
- * mysterious 400).
- */
-export async function getAvailableVirtualsPresets(): Promise<VirtualsPreset[]> {
-  const catalog = await getVirtualsCatalog();
-  if (catalog === null) return VIRTUALS_PRESETS;
-  const available = VIRTUALS_PRESETS.filter((p) => catalog.has(p.model));
-  const missing = VIRTUALS_PRESETS.filter((p) => !catalog.has(p.model));
-  if (missing.length > 0) {
-    console.warn(`[virtuals-catalog] hiding presets missing from catalog: ${missing.map((p) => `${p.id}=${p.model}`).join(", ")}`);
+let _veniceCatalogCache: { ids: Set<string>; models: Map<string, CatalogModel>; fetchedAt: number } | null = null;
+
+/** Raw shape of one Venice /v1/models row. Measured 2026-09-04. */
+type VeniceCatalogRow = {
+  id?: string;
+  type?: string;
+  context_length?: number;
+  model_spec?: {
+    name?: string;
+    description?: string;
+    availableContextTokens?: number;
+    maxCompletionTokens?: number;
+    privacy?: string;
+    capabilities?: Record<string, unknown>;
+    pricing?: {
+      input?: { usd?: number };
+      output?: { usd?: number };
+      cache_input?: { usd?: number };
+    };
+  };
+};
+
+function normaliseVeniceRow(row: VeniceCatalogRow): CatalogModel {
+  const spec = row.model_spec ?? {};
+  const p = spec.pricing;
+  // Keep only the real booleans. Venice mixes in string values (e.g.
+  // `quantization: "not-available"`), which are not capability answers.
+  const caps: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(spec.capabilities ?? {})) {
+    if (typeof v === "boolean") caps[k] = v;
   }
+  return {
+    id: row.id as string,
+    provider: "venice",
+    name: str(spec.name),
+    description: str(spec.description),
+    contextTokens: num(spec.availableContextTokens) ?? num(row.context_length),
+    pricing: p
+      ? { input: num(p.input?.usd), output: num(p.output?.usd), cachedInput: num(p.cache_input?.usd) }
+      : null,
+    inputModalities: str(row.type) ? [row.type as string] : [],
+    outputModalities: str(row.type) ? [row.type as string] : [],
+    capabilities: Object.keys(caps).length > 0 ? caps : null,
+    maxOutputTokens: num(spec.maxCompletionTokens),
+    privacy: str(spec.privacy),
+  };
+}
+
+/**
+ * Same contract as `getVirtualsCatalog`, for Venice.
+ *
+ * One difference worth knowing: Venice's /v1/models is PUBLIC. Measured
+ * 2026-09-03 — it answers 200 with no Authorization header at all. So a 200
+ * here proves the MODEL exists; it proves nothing about whether our key can
+ * run inference. (That distinction cost real time: a local key that lists 113
+ * models happily returns 401 on /chat/completions.) Key validity is handled
+ * separately in `getAvailablePresets` by requiring the env var to be present.
+ */
+export async function getVeniceCatalog(): Promise<Set<string> | null> {
+  const now = Date.now();
+  if (_veniceCatalogCache && now - _veniceCatalogCache.fetchedAt < CATALOG_CACHE_MS) {
+    return _veniceCatalogCache.ids;
+  }
+  const apiKey = process.env.VENICE_INFERENCE_KEY ?? process.env.VENICE_API_KEY ?? "";
+  try {
+    const res = await fetch("https://api.venice.ai/api/v1/models", {
+      // Sent when we have one, but not required — see the note above.
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.warn(`[venice-catalog] /v1/models ${res.status} — using stale cache=${_veniceCatalogCache?.ids.size ?? 0}`);
+      return _veniceCatalogCache?.ids ?? null;
+    }
+    const d = (await res.json()) as { data?: VeniceCatalogRow[] };
+    const ids = new Set<string>();
+    const models = new Map<string, CatalogModel>();
+    for (const row of d.data ?? []) {
+      if (typeof row.id !== "string" || row.id.length === 0) continue;
+      ids.add(row.id);
+      models.set(row.id, normaliseVeniceRow(row));
+    }
+    if (ids.size === 0) {
+      console.warn("[venice-catalog] empty catalog — using stale cache");
+      return _veniceCatalogCache?.ids ?? null;
+    }
+    _veniceCatalogCache = { ids, models, fetchedAt: now };
+    console.log(`[venice-catalog] refreshed size=${ids.size}`);
+    return ids;
+  } catch (e) {
+    console.warn(`[venice-catalog] fetch failed: ${(e as Error).message} — using stale cache`);
+    return _veniceCatalogCache?.ids ?? null;
+  }
+}
+
+/**
+ * The full catalog rows, not just the ids. Backed by the SAME 6h cache and the
+ * same fetch as `getVirtualsCatalog` / `getVeniceCatalog`, so asking for
+ * metadata costs no extra upstream call once either is warm.
+ *
+ * Why both shapes exist: the id-only helpers are the validation path (three
+ * call sites depend on `Set<string>`), and widening their return type would
+ * churn all of them for no behaviour change. This is the display path.
+ *
+ * Returns `null` on the same terms as the id helpers — a null here means "the
+ * catalog is unavailable", which a caller must render as *unknown*, not as an
+ * empty catalog (the #149/#150 bug family).
+ */
+export async function getCatalogModels(
+  provider: "virtuals" | "venice",
+): Promise<Map<string, CatalogModel> | null> {
+  if (provider === "virtuals") {
+    const ids = await getVirtualsCatalog();
+    return ids === null ? null : (_virtualsCatalogCache?.models ?? null);
+  }
+  const ids = await getVeniceCatalog();
+  return ids === null ? null : (_veniceCatalogCache?.models ?? null);
+}
+
+/**
+ * Returns the presets that are actually runnable right now — each validated
+ * against ITS OWN provider's catalog, not a single shared one. Cross-checking
+ * a Venice id against the Virtuals catalog would hide every Venice preset
+ * permanently, which is a silent way to undo this whole change.
+ *
+ * Two independent reasons a preset is hidden:
+ *   1. Its model id is gone from that provider's catalog (the #120 bug family
+ *      — a de-listed id turning into a mystery 400 at dispatch).
+ *   2. Its provider has no API key configured. A keyless Venice preset does
+ *      not fail loudly; `/api/chat` returns the canned line "Please select a
+ *      model: Fast · Chat · Deep Think · DeepSeek", which reads to the user
+ *      as their own mistake. Better to never offer the option.
+ *
+ * Catalog fetch failure with no cache → fail OPEN for that provider (keep the
+ * presets). A missing KEY → fail CLOSED. They are different failures: a flaky
+ * catalog fetch says nothing about whether inference works, while an unset key
+ * is a certainty.
+ */
+export async function getAvailablePresets(): Promise<VirtualsPreset[]> {
+  const [virtualsCat, veniceCat] = await Promise.all([
+    getVirtualsCatalog(),
+    // Only pay for the Venice catalog if a Venice preset actually exists.
+    VIRTUALS_PRESETS.some((p) => p.provider === "venice") ? getVeniceCatalog() : Promise.resolve(null),
+  ]);
+  const hasVeniceKey = !!(process.env.VENICE_INFERENCE_KEY ?? process.env.VENICE_API_KEY);
+  const hasVirtualsKey = !!process.env.VIRTUALS_API_KEY;
+
+  const hidden: string[] = [];
+  const available = VIRTUALS_PRESETS.filter((p) => {
+    if (p.provider === "venice") {
+      if (!hasVeniceKey) { hidden.push(`${p.id}(no VENICE key)`); return false; }
+      if (veniceCat !== null && !veniceCat.has(p.model)) { hidden.push(`${p.id}=${p.model}(delisted)`); return false; }
+      return true;
+    }
+    if (!hasVirtualsKey) { hidden.push(`${p.id}(no VIRTUALS_API_KEY)`); return false; }
+    if (virtualsCat !== null && !virtualsCat.has(p.model)) { hidden.push(`${p.id}=${p.model}(delisted)`); return false; }
+    return true;
+  });
+  if (hidden.length > 0) console.warn(`[presets] hiding: ${hidden.join(", ")}`);
   return available;
 }
+
+/** @deprecated Use `getAvailablePresets` — the list is no longer Virtuals-only. */
+export const getAvailableVirtualsPresets = getAvailablePresets;
 
 /** Floor on `max_tokens` (all providers). Below ~400 tokens the model
  *  frequently truncates a JSON object mid-key, which — combined with

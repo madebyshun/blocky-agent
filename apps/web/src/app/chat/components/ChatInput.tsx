@@ -1,42 +1,19 @@
 "use client";
 import { useRef, useCallback, useState, useEffect } from "react";
 import { useChat } from "../ChatContext";
-import { PERSONAS } from "../personas";
 import { creditCost } from "@/lib/credits";
 import { useLang } from "@/lib/i18n/context";
 import type { Attachment } from "../types";
 
-// ── V1 catalog-driven Virtuals presets ────────────────────────────────────
-// Shape mirrors `VirtualsPreset` in `/api/_lib/llm.ts`. The list served
-// here is the STATIC fallback used until `/api/chat/presets` responds; the
-// server may filter this down based on the live Virtuals /v1/models
-// catalog (missing id → hidden). Never hardcode the model id anywhere
-// else — this file + the server-side spec are the two authoritative sites.
-export interface VirtualsPresetV1 {
-  id: "fast" | "balanced" | "deep" | "private" | "grok";
-  model: string;
-  label: string;
-  desc: string;
-  cost: "●" | "●●" | "●●●";
-  contextTokens: number;
-  credits: number;
-  privacy?: boolean;
-  optional?: boolean;
-}
-export const VIRTUALS_PRESETS_V1: VirtualsPresetV1[] = [
-  { id: "fast",     model: "deepseek-deepseek-v4-flash", label: "Fast",     desc: "DeepSeek V4 Flash · cheapest, snappy",   cost: "●",   contextTokens: 1_000_000, credits: 10 },
-  { id: "balanced", model: "anthropic-claude-sonnet-5",  label: "Balanced", desc: "Claude Sonnet 5 · default for most work", cost: "●●",  contextTokens: 200_000,   credits: 50 },
-  { id: "deep",     model: "anthropic-claude-opus-4-8",  label: "Deep",     desc: "Claude Opus 4.8 · heavy reasoning",       cost: "●●●", contextTokens: 200_000,   credits: 200 },
-  { id: "private",  model: "e2ee-deepseek-v4-flash",     label: "Private",  desc: "E2EE · no logs · DeepSeek V4",            cost: "●",   contextTokens: 1_000_000, credits: 30,  privacy: true },
-  { id: "grok",     model: "x-ai-grok-4-20",             label: "Grok",     desc: "Grok 4 · 2M context window",              cost: "●●",  contextTokens: 2_000_000, credits: 60,  optional: true },
-];
-
-/** "1M" / "200k" — human-readable context size for the preset subtitle. */
-export function formatContextTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return `${n}`;
-}
+// The V1 preset spec + dispatch helper moved to the leaf module `./presets`
+// so ChatContext can read them without importing this component (which imports
+// ChatContext → cycle). Imported here for the picker's own use, and re-exported
+// so existing callers that import them from `./ChatInput` (e.g. ModelsPanel)
+// keep resolving.
+import { VIRTUALS_PRESETS_V1, formatContextTokens, type VirtualsPresetV1 } from "./presets";
+export { VIRTUALS_PRESETS_V1, resolvePresetDispatch, formatContextTokens } from "./presets";
+export type { VirtualsPresetV1 } from "./presets";
+import ProviderMark from "./ProviderMark";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -158,8 +135,10 @@ export default function ChatInput() {
     input, setInput, send, stop, streaming, outOfCredits,
     error, credits, cost, chatTier, holderTier, setChatTier,
     cmdMenu, setCmdMenu, cmdFilter, setCmdFilter,
-    webSearch, setWebSearch, pendingFiles, setPendingFiles,
-    personaId, setPersonaId,
+    // `webSearch` / `setWebSearch` intentionally NOT destructured — the toggle
+    // that used them is removed (see the comment where it stood). They remain on
+    // the context and in the request payload so re-enabling is a small revert.
+    pendingFiles, setPendingFiles,
   } = useChat();
   const { t } = useLang();
 
@@ -167,7 +146,6 @@ export default function ChatInput() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [modelOpen,   setModelOpen]   = useState(false);
   const [cmdOpen,     setCmdOpen]     = useState(false);
-  const [personaOpen, setPersonaOpen] = useState(false);
 
   // Catalog-driven V1 preset list. Starts as the static fallback so the
   // picker renders instantly; the /api/chat/presets fetch then trims
@@ -188,8 +166,6 @@ export default function ChatInput() {
       .catch(() => { /* fail-open — keep the static fallback */ });
     return () => { cancelled = true; };
   }, []);
-
-  const activePersona = PERSONAS.find(p => p.id === personaId) ?? PERSONAS[0];
 
   // Active preset — highlighted in the picker when chatTier === preset.id.
   // V1 preset ids ARE the chatTier values (fast, balanced, deep, private,
@@ -243,7 +219,7 @@ export default function ChatInput() {
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Escape") { setCmdMenu(false); setCmdOpen(false); setModelOpen(false); setPersonaOpen(false); return; }
+    if (e.key === "Escape") { setCmdMenu(false); setCmdOpen(false); setModelOpen(false); return; }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
   }
 
@@ -317,41 +293,6 @@ export default function ChatInput() {
           </div>
         )}
 
-        {/* ── Persona selector popover ─────────────────────────────────────── */}
-        {personaOpen && (
-          <div className="absolute bottom-full mb-2 left-0 bg-[#0D0D14] border border-[#2A2A4E] rounded-xl overflow-hidden shadow-2xl z-20 w-80 max-h-[420px] overflow-y-auto">
-            <div className="px-3 pt-2.5 pb-1.5 border-b border-[#1A1A2E] sticky top-0 bg-[#0D0D14] z-10">
-              <span className="font-mono text-[10px] text-slate-600 tracking-widest">PERSONA · EXPERT ROLE</span>
-            </div>
-            <div className="py-1.5">
-              {PERSONAS.map(p => {
-                const isActive = personaId === p.id;
-                return (
-                  <button key={p.id}
-                    onClick={() => { setPersonaId(p.id); setPersonaOpen(false); textareaRef.current?.focus(); }}
-                    className="w-full text-left flex items-center gap-2.5 px-3 py-2 hover:bg-white/[0.02] transition-colors relative"
-                    style={isActive ? { background: `${p.color}0a` } : undefined}>
-                    {isActive && (
-                      <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r"
-                            style={{ background: p.color, boxShadow: `0 0 8px ${p.color}80` }} />
-                    )}
-                    <span className="text-base shrink-0 w-5 text-center">{p.icon}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="font-mono text-[12px] font-bold" style={{ color: isActive ? p.color : "#e2e8f0" }}>
-                          {p.label}
-                        </span>
-                        {isActive && <span className="font-mono text-[9px]" style={{ color: p.color }}>✓</span>}
-                      </div>
-                      <p className="font-mono text-[10px] text-slate-500 leading-snug truncate">{p.desc}</p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         {/* ── Model selector popover — presets first, advanced behind toggle ── */}
         {modelOpen && (
           <div className="absolute bottom-full mb-2 left-0 bg-[#0D0D14] border border-[#2A2A4E] rounded-xl overflow-hidden shadow-2xl z-20 w-80 max-h-[520px] overflow-y-auto">
@@ -377,9 +318,6 @@ export default function ChatInput() {
                 const accent = p.privacy ? "#6EE7B7" : accentByCost[p.cost];
                 const prevOptional = virtualsPresets[idx - 1]?.optional === true;
                 const showDividerBefore = p.optional && !prevOptional;
-                const iconMap: Record<VirtualsPresetV1["id"], string> = {
-                  fast: "⚡", balanced: "💬", deep: "🔬", private: "🔒", grok: "🧠",
-                };
                 return (
                   <div key={p.id}>
                     {showDividerBefore && (
@@ -401,7 +339,7 @@ export default function ChatInput() {
                         <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r"
                               style={{ background: accent, boxShadow: `0 0 8px ${accent}80` }} />
                       )}
-                      <span className="text-base shrink-0 w-5 text-center">{iconMap[p.id]}</span>
+                      <ProviderMark modelId={p.model} size={22} className="!rounded-lg" />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline gap-2">
                           <span className="font-mono text-[12px] font-bold" style={{ color: isActive ? accent : "#e2e8f0" }}>
@@ -416,7 +354,9 @@ export default function ChatInput() {
                         <p className="font-mono text-[10px] text-slate-500 leading-snug truncate">{p.desc}</p>
                       </div>
                       <span className="font-mono text-[10px] shrink-0" style={{ color: accent }}>
-                        {p.credits}<span className="text-slate-700"> cr</span>
+                        {p.credits === 0
+                          ? <span className="font-bold">Free</span>
+                          : <>{p.credits}<span className="text-slate-700"> cr</span></>}
                       </span>
                     </button>
                   </div>
@@ -560,29 +500,15 @@ export default function ChatInput() {
               </svg>
             </label>
 
-            {/* Persona selector pill — surfaces the active expert role so it's
-                visible in the chat tab (not just buried in Settings) and lets
-                the user switch inline. Mirrors the model pill pattern. */}
-            <button
-              onMouseDown={(e) => { e.preventDefault(); setPersonaOpen(!personaOpen); setModelOpen(false); setCmdOpen(false); }}
-              className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] font-medium transition-all"
-              style={{ color: activePersona.color, background: `${activePersona.color}10`, borderColor: `${activePersona.color}30` }}
-              title={`Persona: ${activePersona.label}`}
-            >
-              <span className="text-[11px] leading-none">{activePersona.icon}</span>
-              <span className="hidden sm:inline">{activePersona.label}</span>
-              <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-
             {/* Model selector pill */}
             <button
-              onMouseDown={(e) => { e.preventDefault(); setModelOpen(!modelOpen); setCmdOpen(false); setPersonaOpen(false); }}
+              onMouseDown={(e) => { e.preventDefault(); setModelOpen(!modelOpen); setCmdOpen(false); }}
               className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] font-medium transition-all"
               style={{ color: activeTier.color, background: `${activeTier.color}10`, borderColor: `${activeTier.color}30` }}
             >
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: activeTier.color }} />
+              {activeVirtualsPreset
+                ? <ProviderMark modelId={activeVirtualsPreset.model} size={16} className="!rounded-md !border-0 !bg-transparent" />
+                : <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: activeTier.color }} />}
               {/* Show the V1 preset label (Fast / Balanced / Deep / Private / Grok)
                   with its cost dots. Fall back to the legacy static preset
                   or tier label so the collapsed button never shows raw ids. */}
@@ -597,7 +523,7 @@ export default function ChatInput() {
 
             {/* Commands button */}
             <button
-              onMouseDown={(e) => { e.preventDefault(); setCmdOpen(!cmdOpen); setModelOpen(false); setPersonaOpen(false); }}
+              onMouseDown={(e) => { e.preventDefault(); setCmdOpen(!cmdOpen); setModelOpen(false); }}
               className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] transition-all"
               style={cmdOpen
                 ? { color: "#4FC3F7", background: "#4FC3F710", borderColor: "#4FC3F730" }
@@ -608,21 +534,27 @@ export default function ChatInput() {
               <span className="hidden sm:inline">Cmds</span>
             </button>
 
-            {/* Web search toggle */}
-            <button
-              onMouseDown={(e) => { e.preventDefault(); setWebSearch(!webSearch); }}
-              className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border font-mono text-[11px] transition-all"
-              style={webSearch
-                ? { color: "#34D399", background: "#34D39910", borderColor: "#34D39930" }
-                : { color: "#475569", borderColor: "transparent" }}
-              title={webSearch ? "Web search ON" : "Web search OFF"}
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
-                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-              </svg>
-              <span className="hidden sm:inline">{webSearch ? "Search on" : "Search"}</span>
-            </button>
+            {/* Web search toggle — REMOVED, deliberately, not lost.
+                It was a no-op that looked like a feature. Flipping it set
+                `webSearch: true` on the request, and the ONLY branch the web
+                client can reach is the Virtuals one, where `virtualsAutoSearch`
+                is hard-coded `false` and no `web_search` tool is registered. The
+                server read the flag and ignored it.
+                (The Venice branch does honour it — but `chatTier` comes from
+                VIRTUALS_PRESETS_V1, whose ids are fast/balanced/deep/private/
+                grok. None start with "venice", and `provider` is derived as
+                `chatTier.startsWith("venice") ? "venice" : "virtuals"`, so that
+                branch is unreachable from this UI. VENICE_TIERS survives only as
+                an `ALL_TIERS.find()` lookup that can never match.)
+                That made it worse than merely useless: the button turned green
+                and said "Search on", so a user had MORE confidence in an answer
+                the model had produced from stale training data. A control that
+                raises trust while doing nothing is the exact opposite of what
+                this product sells.
+                `webSearch` / `setWebSearch` state and the request field are left
+                intact on purpose — when a real web_search tool is registered on
+                the Virtuals branch, restoring this button is a small revert, not
+                a rebuild. */}
 
             <div className="flex-1" />
 

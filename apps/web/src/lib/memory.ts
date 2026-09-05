@@ -5,8 +5,20 @@
  *
  * Two layers:
  * 1. Structured UserMemory — project, topics, command history (recency-based)
- * 2. MemoryChunks — conversation summaries with optional Venice embeddings
- *    for semantic retrieval (cosine similarity)
+ * 2. MemoryChunks — conversation summaries, retrieved by RECENCY
+ *
+ * ⚠️ There is no semantic retrieval here, and the naming no longer pretends
+ * otherwise. Chunks were once ranked by cosine similarity against Venice
+ * BGE-M3 embeddings fetched from `/api/memory/embed`. That route was retired
+ * (2026-09-03) because it had been answering 402 "Insufficient USD or Diem
+ * balance" on EVERY message for an unknown period: the fetch failed, the
+ * embedding came back null, and `searchChunks` silently fell through to its
+ * recency branch. So retrieval has been recency-only in production regardless
+ * — this change makes the code say what it was already doing, and stops
+ * paying two failed round-trips (5s + 10s timeouts) per message for it.
+ *
+ * Restoring semantic recall means picking an embeddings provider that is
+ * actually funded and re-adding the ranking step; it is not a copy fix.
  */
 
 export interface ProjectContext {
@@ -49,8 +61,12 @@ const CHUNK_PREVIEW_LEN  = 200;  // chars to store per chunk for context
 export interface MemoryChunk {
   id:        string;
   text:      string;          // summary / key content from the exchange
-  embedding: number[] | null; // Venice BGE-M3 embedding (1024-dim) or null if pending
   createdAt: number;
+  // NOTE: records written before 2026-09-03 may still carry an `embedding`
+  // key in localStorage (usually `null` — the fetch that filled it was 402ing).
+  // It is no longer declared, written, or read. Left in place rather than
+  // stripped on load so we never rewrite a user's stored chunks as a side
+  // effect of reading them; JSON.parse carries the stale key through harmlessly.
 }
 
 export function getChunks(wallet?: string): MemoryChunk[] {
@@ -75,59 +91,24 @@ export function clearChunks(wallet?: string): void {
   localStorage.removeItem(CHUNKS_KEY(wallet));
 }
 
-/** Add a chunk. Embedding is set later (async background call). */
+/** Add a chunk. Chunks are stored newest-first. */
 export function addChunk(text: string, wallet?: string): string {
   const chunks = getChunks(wallet);
   const id = Math.random().toString(36).slice(2, 10);
-  const chunk: MemoryChunk = { id, text: text.slice(0, CHUNK_PREVIEW_LEN * 4), embedding: null, createdAt: Date.now() };
+  const chunk: MemoryChunk = { id, text: text.slice(0, CHUNK_PREVIEW_LEN * 4), createdAt: Date.now() };
   const updated = [chunk, ...chunks].slice(0, MAX_CHUNKS);
   saveChunks(updated, wallet);
   return id;
 }
 
-/** Store the embedding for a chunk (called after background fetch resolves). */
-export function setChunkEmbedding(id: string, embedding: number[], wallet?: string): void {
-  const chunks = getChunks(wallet);
-  const updated = chunks.map(c => c.id === id ? { ...c, embedding } : c);
-  saveChunks(updated, wallet);
-}
-
-// ─── Cosine similarity ───────────────────────────────────────────────────────
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) return 0;
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot   += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
-}
-
 /**
- * Find the top-k most semantically relevant chunks for a query embedding.
- * Falls back to the k most recent chunks if no embeddings are stored yet.
+ * The k most RECENT chunks. Named for what it does — the previous name,
+ * `searchChunks`, described a semantic search that has not run in production
+ * (see the file header). `getChunks` already stores newest-first, so this is
+ * a slice, not a sort.
  */
-export function searchChunks(queryEmbedding: number[] | null, wallet?: string, k = 3): MemoryChunk[] {
-  const chunks = getChunks(wallet);
-  if (chunks.length === 0) return [];
-
-  const withEmbeddings = chunks.filter(c => c.embedding !== null);
-
-  // Not enough embeddings yet — fall back to recency
-  if (!queryEmbedding || withEmbeddings.length < 3) {
-    return chunks.slice(0, k);
-  }
-
-  // Score and rank
-  const scored = withEmbeddings.map(c => ({
-    chunk: c,
-    score: cosineSimilarity(queryEmbedding, c.embedding!),
-  }));
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, k).map(s => s.chunk);
+export function recentChunks(wallet?: string, k = 3): MemoryChunk[] {
+  return getChunks(wallet).slice(0, k);
 }
 
 // ─── Read / Write ────────────────────────────────────────────────────────────
@@ -205,10 +186,13 @@ export function addAgentNote(wallet: string | undefined, note: string): void {
 
 /**
  * Build the memory context to inject into the system prompt.
- * If semanticChunks are provided (from embedding search), they are appended
- * as "Related conversations" for richer context.
+ * If `relatedChunks` are provided (the most recent exchanges — see
+ * `recentChunks`), they are appended as "Related conversations". They are
+ * related by RECENCY, not by meaning; the prompt label is deliberately vague
+ * enough to stay true of that, and the chunks carry their own "(3h ago)"
+ * stamps so the model can weigh them.
  */
-export function buildMemoryContext(wallet?: string, semanticChunks?: MemoryChunk[]): string {
+export function buildMemoryContext(wallet?: string, relatedChunks?: MemoryChunk[]): string {
   const memory = getMemory(wallet);
   const parts: string[] = [];
 
@@ -237,9 +221,9 @@ export function buildMemoryContext(wallet?: string, semanticChunks?: MemoryChunk
     parts.push(`Agent notes: ${memory.agentNotes.slice(0, 3).join(" · ")}`);
   }
 
-  // Semantic memory chunks (most relevant past conversations)
-  if (semanticChunks && semanticChunks.length > 0) {
-    const chunkLines = semanticChunks.map((c, i) => {
+  // Recent conversation chunks (recency-ranked — see `recentChunks`)
+  if (relatedChunks && relatedChunks.length > 0) {
+    const chunkLines = relatedChunks.map((c, i) => {
       const ago = Math.round((Date.now() - c.createdAt) / 60_000);
       const timeStr = ago < 60 ? `${ago}m ago` : ago < 1440 ? `${Math.round(ago / 60)}h ago` : `${Math.round(ago / 1440)}d ago`;
       return `  [${i + 1}] (${timeStr}) ${c.text.slice(0, CHUNK_PREVIEW_LEN)}`;

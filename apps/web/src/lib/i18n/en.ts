@@ -35,7 +35,7 @@ export const en = {
     stack_conn_label: "Blue Connector",
     stack_conn_desc: "Attach any external MCP server and use its tools right in chat.",
     stack_hood_label: "Blue Hood",
-    stack_hood_desc: "24/7 non-custodial copilot for Robinhood Chain — Chainlink vs DEX drift, arrow signals, review-and-sign trading.",
+    stack_hood_desc: "Oracle-vs-DEX drift signals for tokenized stocks on Base & Robinhood Chain — Chainlink vs DEX, every arrow graded in public, non-custodial.",
     // stack_bank_* removed 2026-07-24 (Blue Bank archived; middleware
     // redirects /bank + /pay → /chat). Keys retained as comments so a
     // grep of `stack_bank_label` still finds this note.
@@ -126,7 +126,7 @@ export const en = {
   nav: {
     chat: "Chat",
     hub: "Hub",
-    feed: "Feed",
+    wallet: "Wallet",
     bank: "Bank",
     launches: "Launches",
     hood: "Hood",
@@ -136,14 +136,16 @@ export const en = {
     docs: "Docs",
     home: "Home",
     // AgentOS Control pages (promoted from Blue Chat tabs).
+    models: "Models",
     skills: "Skills",
     connectors: "Connectors",
     cron: "Scheduled",
     usage: "Usage",
     plans: "Plans",
-    // Sidebar group headers.
-    group_workspace: "Workspace",
-    group_control: "Control",
+    // Sidebar group headers — the 3 Agent-OS pillars + account band.
+    group_agent: "Agent",
+    group_explore: "Explore",
+    group_hub: "Hub",
     group_account: "Account",
   },
   chat: {
@@ -265,11 +267,6 @@ export const en = {
     no_tokens: "No tokens launched yet",
     unclaimed: "Unclaimed",
     search: "Search tokens...",
-  },
-  feed: {
-    title: "Blue Feed",
-    loading: "Loading feed...",
-    empty: "No feed items yet",
   },
   balance_card: {
     title: "Wallet Balance",

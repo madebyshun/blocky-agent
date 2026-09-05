@@ -200,10 +200,10 @@ check("/claim weighs about the same as /pledge, not double", () => {
  * browser fetches — so this answers "did a user download wallet code" with no
  * inference about how the module graph was built.
  *
- * It is a COMPARISON against /pledge rather than an absolute check, and that is
- * not a weakened assertion — it is the only correct one. The root layout wraps
- * the whole site in the wagmi providers, so /pledge, /about and every other
- * page already serve the connector chunks. Asserting "/claim serves no wallet
+ * It is a COMPARISON against an ordinary page rather than an absolute check, and
+ * that is not a weakened assertion — it is the only correct one. The root layout
+ * wraps the whole site in the wagmi providers, so /about and every other page
+ * already serve the connector chunks. Asserting "/claim serves no wallet
  * code" would fail on a perfectly gated page and could only be satisfied by
  * moving the providers out of the root layout — a site-wide change, out of
  * scope here. What /claim must not do is add anything on top of that floor.
@@ -214,11 +214,39 @@ check("/claim weighs about the same as /pledge, not double", () => {
 console.log("\n2. DELIVERED HTML — what a browser actually fetches");
 
 const HTML = join(DIST, "server/app/claim.html");
-const PLEDGE_HTML = join(DIST, "server/app/pledge.html");
+
+/*
+ * The baseline was hardcoded to /pledge until 2026-09-05, when /pledge gained
+ * `export const dynamic = "force-dynamic"`. Next then stops emitting
+ * pledge.html, `walletChunksIn` read a file that wasn't there, the floor
+ * silently evaluated to ZERO wallet chunks, and every chunk on /claim came back
+ * "served ONLY on the gated-off claim page" — including `app/layout-*.js`,
+ * which by construction every page on the site serves. Two red failures, both
+ * artifacts of the missing baseline, neither pointing at the real cause.
+ *
+ * So the baseline is now RESOLVED rather than named. Any prerendered page on
+ * the root layout is an equally valid floor — the connector chunks come from
+ * the layout, not from the page (measured: /about, /docs, /launch, /profile,
+ * /waitlist and / all carry the identical 6, and /claim adds none of its own) —
+ * so taking the first one that exists means a single page turning dynamic can
+ * no longer decapitate this check.
+ *
+ * It resolves to a page, or it fails. There is deliberately no skip path: per
+ * the header, a guard that green-lights on an absent artifact is worse than no
+ * guard, and that is exactly the failure this paragraph exists to prevent.
+ */
+const BASELINE_PAGES = ["about", "index", "docs", "launch", "waitlist", "profile"];
+const BASELINE = BASELINE_PAGES.map((n) => join(DIST, `server/app/${n}.html`)).find(existsSync);
 
 check("the page prerendered to static HTML", () => {
   if (!existsSync(HTML)) throw new Error(`${HTML.replace(WEB + "/", "")} missing — /claim is no longer static`);
-  if (!existsSync(PLEDGE_HTML)) throw new Error("pledge.html missing — no baseline to compare against");
+  if (!BASELINE)
+    throw new Error(
+      `no baseline to compare against — none of these prerendered:\n` +
+        BASELINE_PAGES.map((n) => `        /${n === "index" ? "" : n}`).join("\n") +
+        `\n        (a baseline page is any STATIC page on the root layout; if they all` +
+        `\n         went dynamic, add one that hasn't to BASELINE_PAGES)`,
+    );
 });
 
 const html = existsSync(HTML) ? readFileSync(HTML, "utf8") : "";
@@ -243,11 +271,24 @@ function walletChunksIn(htmlPath: string): Set<string> {
   return out;
 }
 
-check("/claim serves no wallet chunk that /pledge does not already serve", () => {
+check("/claim serves no wallet chunk the rest of the site does not already serve", () => {
+  if (!BASELINE) throw new Error("no baseline resolved");
+  const name = BASELINE.replace(/.*\/(.+)\.html$/, "$1");
   const onClaim = walletChunksIn(HTML);
-  const onPledge = walletChunksIn(PLEDGE_HTML);
-  const extra = [...onClaim].filter((c) => !onPledge.has(c));
-  console.log(`      site-wide floor (also on /pledge): ${onPledge.size} wallet-carrying chunk(s)`);
+  const onBaseline = walletChunksIn(BASELINE);
+  console.log(`      site-wide floor (also on /${name}): ${onBaseline.size} wallet-carrying chunk(s)`);
+
+  // A zero floor means the differential is vacuous — every chunk on /claim would
+  // read as "extra" (the 2026-09-05 false alarm) or, if /claim were also empty,
+  // the check would pass without having compared anything. Neither is a result.
+  if (onBaseline.size === 0)
+    throw new Error(
+      `/${name} carries NO connector chunks, so there is no floor to compare against.\n` +
+        `        Either the root layout no longer wraps the site in wagmi providers\n` +
+        `        (then this test's premise changed), or /${name} is not really prerendered.`,
+    );
+
+  const extra = [...onClaim].filter((c) => !onBaseline.has(c));
   if (extra.length)
     throw new Error(
       `${extra.length} wallet chunk(s) served ONLY on the gated-off claim page:\n` +

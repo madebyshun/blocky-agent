@@ -34,7 +34,7 @@ export const zh: Dict = {
     stack_conn_label: "Blue Connector",
     stack_conn_desc: "接入任意外部 MCP 服务器，在对话中直接使用它的工具。",
     stack_hood_label: "Blue Hood",
-    stack_hood_desc: "Robinhood Chain 的 24/7 非托管副驾 —— Chainlink 对比 DEX 价差、箭头信号、审核-签名交易。",
+    stack_hood_desc: "Base 与 Robinhood Chain 上代币化股票的预言机-DEX 价差信号 —— Chainlink 对比 DEX、每个箭头公开评级、非托管。",
     // stack_bank_* removed 2026-07-24 (Blue Bank archived; middleware
     // redirects /bank + /pay → /chat).
     stack_image_label: "Blue Image",
@@ -123,7 +123,7 @@ export const zh: Dict = {
   nav: {
     chat: "聊天",
     hub: "中心",
-    feed: "动态",
+    wallet: "钱包",
     bank: "银行",
     launches: "发行",
     hood: "Hood",
@@ -133,14 +133,16 @@ export const zh: Dict = {
     docs: "文档",
     home: "首页",
     // AgentOS 控制页（从 Blue Chat 标签页提升而来）。
+    models: "模型",
     skills: "技能",
     connectors: "连接器",
     cron: "定时任务",
     usage: "用量",
     plans: "套餐",
-    // 侧边栏分组标题。
-    group_workspace: "工作区",
-    group_control: "控制台",
+    // 侧边栏分组标题 — 3 大 Agent-OS 支柱 + 账户分组。
+    group_agent: "智能体",
+    group_explore: "探索",
+    group_hub: "中心",
     group_account: "账户",
   },
   chat: {
@@ -262,11 +264,6 @@ export const zh: Dict = {
     no_tokens: "尚未发行任何代币",
     unclaimed: "未领取",
     search: "搜索代币...",
-  },
-  feed: {
-    title: "蓝色动态",
-    loading: "加载中...",
-    empty: "暂无动态",
   },
   balance_card: {
     title: "钱包余额",

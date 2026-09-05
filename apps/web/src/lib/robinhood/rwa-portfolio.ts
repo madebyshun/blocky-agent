@@ -30,23 +30,50 @@ export type Holding = {
   value_usd: number | null;
 };
 
-/** Read balanceOf(wallet) for every RWA token in parallel. Fast + safe. */
-export async function readAllBalances(
-  wallet: Address,
-): Promise<Array<{ token: RwaToken; balance: bigint }>> {
-  const balances = await Promise.all(
-    RWA_TOKENS.map(async (t) => {
-      try {
-        const b = await rpc().readContract({
-          address: t.contract, abi: ERC20_ABI, functionName: "balanceOf", args: [wallet],
-        });
-        return { token: t, balance: b as bigint };
-      } catch {
-        return { token: t, balance: 0n };
+/**
+ * Ceiling on in-flight balanceOf calls.
+ *
+ * This used to be an unbounded `Promise.all` over the registry, which was 26
+ * concurrent eth_calls and fine. Completing the registry from the RHJ factory
+ * log took it to 205 — one burst per portfolio request, against a single
+ * public RPC with no Multicall3 deployed on RH Chain (see task #88). Bounded,
+ * it is a few sequential waves and no throttling.
+ */
+const BALANCE_CONCURRENCY = 12;
+
+export type BalanceRow = { token: RwaToken; balance: bigint; failed: boolean };
+
+/**
+ * Read balanceOf(wallet) for every RWA token.
+ *
+ * `failed` exists because the old version returned 0n on a thrown call, which
+ * makes a throttled read indistinguishable from "you don't hold this" — the
+ * worst possible failure mode for a portfolio tool, since it silently
+ * under-reports a position and every downstream total inherits it. Callers are
+ * expected to surface a non-empty failure set rather than present a partial
+ * portfolio as complete.
+ */
+export async function readAllBalances(wallet: Address): Promise<BalanceRow[]> {
+  const out = new Array<BalanceRow>(RWA_TOKENS.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(BALANCE_CONCURRENCY, RWA_TOKENS.length) }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= RWA_TOKENS.length) return;
+        const t = RWA_TOKENS[i];
+        try {
+          const b = await rpc().readContract({
+            address: t.contract, abi: ERC20_ABI, functionName: "balanceOf", args: [wallet],
+          });
+          out[i] = { token: t, balance: b as bigint, failed: false };
+        } catch {
+          out[i] = { token: t, balance: 0n, failed: true };
+        }
       }
     }),
   );
-  return balances;
+  return out;
 }
 
 /** For each token with non-zero balance, resolve a price (Chainlink first,

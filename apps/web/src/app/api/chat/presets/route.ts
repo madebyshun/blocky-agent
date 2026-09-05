@@ -1,20 +1,24 @@
 /**
- * GET /api/chat/presets — the catalog-driven preset picker source of
- * truth. The client fetches this on mount to hide any preset whose
- * underlying Virtuals model id is missing from the live /v1/models
- * catalog.
+ * GET /api/chat/presets — the catalog-driven preset picker source of truth.
+ * The client fetches this on mount and renders exactly what comes back, so a
+ * preset that is not runnable right now never reaches the user as an option.
  *
- * Cached in-process for 6h via `getVirtualsCatalog()`. If the catalog
- * fetch fails and we have no prior cache, we fail *open* — return the
- * full preset list. A stale id that survives to dispatch will surface
- * as a typed error from `callVirtualsLLM` rather than a mystery 400,
- * which is the whole point.
+ * Now spans BOTH upstreams. Each preset is validated against its own
+ * provider's catalog (Virtuals or Venice) and its own provider's key — see
+ * `getAvailablePresets()` for why a missing key fails closed while a failed
+ * catalog fetch fails open. Cross-checking one provider's ids against the
+ * other's catalog would silently hide every preset of one kind, which is the
+ * failure this endpoint exists to prevent, not cause.
+ *
+ * Both catalogs are cached in-process for 6h, so once warm this endpoint does
+ * no upstream work.
  */
 import { NextResponse } from "next/server";
 import {
   VIRTUALS_PRESETS,
-  getAvailableVirtualsPresets,
+  getAvailablePresets,
   getVirtualsCatalog,
+  getVeniceCatalog,
 } from "@/app/api/_lib/llm";
 
 export const runtime = "nodejs";
@@ -24,8 +28,11 @@ export const runtime = "nodejs";
 export const revalidate = 0;
 
 export async function GET() {
-  const catalog = await getVirtualsCatalog();
-  const available = await getAvailableVirtualsPresets();
+  const [virtualsCatalog, veniceCatalog, available] = await Promise.all([
+    getVirtualsCatalog(),
+    getVeniceCatalog(),
+    getAvailablePresets(),
+  ]);
   return NextResponse.json({
     ok: true,
     presets: available,
@@ -33,7 +40,15 @@ export async function GET() {
     // because their id disappeared from the catalog" note in an admin
     // view later. Not user-visible today.
     all: VIRTUALS_PRESETS,
-    catalog_size: catalog?.size ?? null,
-    catalog_status: catalog === null ? "unavailable" : "ok",
+    // Per-provider so an operator can tell WHICH upstream is degraded. A
+    // single merged number would report "ok" while one provider was dark.
+    catalogs: {
+      virtuals: { size: virtualsCatalog?.size ?? null, status: virtualsCatalog === null ? "unavailable" : "ok" },
+      venice:   { size: veniceCatalog?.size   ?? null, status: veniceCatalog   === null ? "unavailable" : "ok" },
+    },
+    // Legacy shape — kept so any existing reader of `catalog_size` /
+    // `catalog_status` keeps working. Virtuals only, by definition.
+    catalog_size:   virtualsCatalog?.size ?? null,
+    catalog_status: virtualsCatalog === null ? "unavailable" : "ok",
   });
 }

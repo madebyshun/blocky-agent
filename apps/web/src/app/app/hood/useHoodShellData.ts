@@ -14,7 +14,8 @@
  * provider tree for the 3-page section.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { usePolling } from "@/hooks/usePolling";
 import type { Arrow, HoodSnapshot } from "@/lib/blue-hood/types";
 
 const REFRESH_MS = 15_000;
@@ -50,10 +51,16 @@ export function useHoodShellData(): HoodShellData {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [s, a, lr] = await Promise.all([
-        fetch("/api/hood/snapshot", { cache: "no-store", signal }).then(
+        // No `cache: "no-store"` on these two: both are public and now carry
+        // `s-maxage`, and `no-store` is a request-side directive that can skip
+        // the shared edge cache entirely — which would leave the header change
+        // doing nothing for exactly the traffic it was added for. Their
+        // `max-age=0` already forbids the browser from serving a stale copy,
+        // so freshness is unchanged and only the CDN dedupes.
+        fetch("/api/hood/snapshot", { signal }).then(
           (r) => r.json() as Promise<SnapshotRes>,
         ),
-        fetch("/api/hood/arrows", { cache: "no-store", signal }).then(
+        fetch("/api/hood/arrows", { signal }).then(
           (r) => r.json() as Promise<ArrowsRes>,
         ),
         (async (): Promise<LastReadRes> => {
@@ -82,15 +89,8 @@ export function useHoodShellData(): HoodShellData {
     }
   }, []);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => {
-      ctl.abort();
-      clearInterval(t);
-    };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
 
   const marketLabel = useMemo(() => {
     if (!snap) return "…";

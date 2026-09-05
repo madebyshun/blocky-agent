@@ -19,7 +19,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import { setAeonOutput } from "@/app/api/_lib/aeon-kv";
 import { callLLM as callSharedLLM } from "@/app/api/_lib/llm";
 
@@ -64,18 +64,29 @@ async function loadPreviousSignals(): Promise<Signal[]> {
   return data ?? [];
 }
 
-async function loadHistory(): Promise<Signal[]> {
-  const data = await kvGet<Signal[]>(KV_KEY_HISTORY);
-  return data ?? [];
-}
-
-async function saveSignals(signals: Signal[]): Promise<void> {
+/**
+ * Returns true when the rolling history was appended to, false when the history
+ * read failed and the append was skipped.
+ *
+ * The KV_KEY_SIGNALS write is a plain overwrite — `signals` is produced whole by
+ * runResearch and never merged with what was read — so it stays a kvSet.
+ * The history write is the destructive one: #150 A-part2 — it read
+ * KV_KEY_HISTORY and wrote back to the SAME key, so a throttled read yielded
+ * `[]` and the "append" replaced 50 accumulated signals with just this run's.
+ * The history is what makes the loop a loop; silently truncating it to one run
+ * costs weeks of context and looks exactly like a normal run in the logs.
+ */
+async function saveSignals(signals: Signal[]): Promise<boolean> {
   await kvSet(KV_KEY_SIGNALS, signals, KV_TTL_SIGNALS);
 
   // Append to rolling history (last 50 signals)
-  const history = await loadHistory();
-  const updated = [...signals, ...history].slice(0, 50);
-  await kvSet(KV_KEY_HISTORY, updated, KV_TTL_HISTORY);
+  const res = await kvMutate<Signal[]>(
+    KV_KEY_HISTORY,
+    [],
+    (history) => [...signals, ...history].slice(0, 50),
+    KV_TTL_HISTORY,
+  );
+  return res === "ok";
 }
 
 // ─── LLM call ────────────────────────────────────────────────────────────────
@@ -228,7 +239,7 @@ function formatTelegram(output: ResearchOutput): string {
   }
 
   lines.push(`—`);
-  lines.push(`<a href="https://blueagent.dev/market">blueagent.dev/market</a> · Blue Agent`);
+  lines.push(`<a href="https://blueagent.dev">blueagent.dev</a> · Blue Agent`);
 
   return lines.join("\n");
 }
@@ -315,7 +326,10 @@ export async function GET(req: NextRequest) {
       steps.push(`✓ research complete — ${output.signals.length} signals generated`);
 
       // 3. Save to KV (powers the loop)
-      await saveSignals(output.signals);
+      const historyAppended = await saveSignals(output.signals);
+      if (!historyAppended) {
+        steps.push("⚠ rolling history NOT appended — KV read failed; this run's signals are not in the loop memory");
+      }
       // Bridge: expose research signals to x402 tools via aeon:deep-research key.
       // These are MODEL-GENERATED leads (this cron calls the LLM), NOT measured
       // data — so we drop the numeric confidence (don't surface LLM self-scores

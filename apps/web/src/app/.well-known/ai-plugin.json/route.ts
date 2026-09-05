@@ -40,7 +40,7 @@ export async function GET() {
     legal_info_url: BASE_URL,
     // x402 extension — non-standard but picked up by x402-aware agents
     "x-x402": {
-      payTo:    "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f",
+      payTo:    "0x02950ad38ada1d599375bd447e080cd404809205",
       network:  "eip155:8453",
       asset:    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       catalog:  "https://agentic.market/services/blueagent-dev",

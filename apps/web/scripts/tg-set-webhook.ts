@@ -7,12 +7,14 @@
  * header on every request. Our route rejects any request missing that header
  * (401), so this script is what actually turns the bot on.
  *
- * ⚠ COLLISION — read before running:
- *   The legacy Sentinel bot (/api/webhook/telegram) binds the SAME
- *   TELEGRAM_BOT_TOKEN. Telegram allows exactly ONE active webhook URL per
- *   token, so pointing it HERE takes Sentinel's Telegram commands OFFLINE
- *   (Sentinel's cron alerts are unaffected — they push out, they don't receive).
- *   This is reversible: re-run against the old URL to hand the token back.
+ * COLLISION — resolved 2026-08-31, kept here because the HAZARD is permanent:
+ *   Telegram allows exactly ONE active webhook URL per bot token, so any two
+ *   routes sharing a token silently take each other offline. That used to be a
+ *   live problem — the legacy Sentinel bot (/api/webhook/telegram) bound the
+ *   same TELEGRAM_BOT_TOKEN. Sentinel is retired and that route is deleted, so
+ *   Blue Hood is now the only claimant. If you ever add a second bot route,
+ *   give it its OWN token; this constraint is Telegram's, not ours.
+ *   Run `--info` first — it reads the live binding and needs no secret.
  *
  * SECURITY: this script never prints the bot token or the webhook secret. The
  * token lives only inside the api.telegram.org URL path (masked in every log);
@@ -21,8 +23,8 @@
  * Usage (from apps/web):
  *   npm run tg:set-webhook            # set → prod /api/telegram/webhook
  *   npm run tg:set-webhook -- --info  # read current webhook (no writes, no secret needed)
- *   npm run tg:set-webhook -- --drop  # set + drop the pending-update backlog (recommended on the FIRST switch from Sentinel)
- *   npm run tg:set-webhook -- --delete# remove the webhook entirely (both bots go dark)
+ *   npm run tg:set-webhook -- --drop  # set + drop the pending-update backlog
+ *   npm run tg:set-webhook -- --delete# remove the webhook entirely (the bot goes dark)
  *   npm run tg:set-webhook -- --url=https://<preview>.vercel.app/api/telegram/webhook
  *
  * Env (auto-loaded from apps/web/.env.local):
@@ -124,9 +126,13 @@ async function main() {
       const when = info.last_error_date ? new Date(info.last_error_date * 1000).toISOString() : "?";
       console.log(`  last_error           : ${info.last_error_message} @ ${when}`);
     }
-    // Which bot owns the token right now — purely informational.
+    // Which URL owns the token right now — purely informational.
     if (info.url?.includes("/api/telegram/webhook")) console.log("\n→ Blue Hood is currently live on this token.");
-    else if (info.url?.includes("/api/webhook/telegram")) console.log("\n→ Legacy Sentinel is currently live on this token.");
+    // Kept as a DIAGNOSTIC, not as a peer: /api/webhook/telegram was the legacy
+    // Sentinel bot and was deleted 2026-08-31. If the webhook still points there,
+    // Telegram is POSTing into a 404 and the bot silently receives nothing —
+    // re-run this script with no flags to repoint it at Blue Hood.
+    else if (info.url?.includes("/api/webhook/telegram")) console.log("\n→ ⚠ Points at the DELETED Sentinel route — every update is 404ing. Re-run without --info to fix.");
     else if (info.url) console.log("\n→ Some other URL owns this token.");
     else console.log("\n→ No webhook set — the bot receives nothing.");
     process.exit(0);

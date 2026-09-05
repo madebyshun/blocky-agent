@@ -167,12 +167,114 @@ export async function kvGetProbe<T>(key: string): Promise<KvProbe<T>> {
   }
 }
 
+/**
+ * Read an integer counter WITHOUT collapsing "unknown" into "zero".
+ *
+ * `kvGet<number>(k) ?? 0` is the read-side half of the #150 bug family. It is
+ * not destructive the way the write-side half is — nothing is lost — but on a
+ * MONEY counter it is arguably worse for the reader, because the answer is
+ * indistinguishable from a fact: a throttled read of `hub:tools:revenue:<id>`
+ * renders as "$0.0000 earned", which a builder reads as "Blue Hub says I have
+ * made nothing", not as "Blue Hub could not check".
+ *
+ * The three-way split maps exactly onto what a counter means:
+ *   • hit   → the value.
+ *   • miss  → 0. A counter that has never been incremented IS zero; this is a
+ *             genuine fact and callers should render it as one.
+ *   • error → null. We learned nothing. Callers MUST NOT render this as 0.
+ *
+ * Non-numeric junk under the key also reads as 0 rather than NaN — a corrupted
+ * value is a different bug and should not masquerade as a KV outage here.
+ */
+export async function kvGetCounter(key: string): Promise<number | null> {
+  const probe = await kvGetProbe<unknown>(key);
+  if (probe.status === "error") return null;
+  if (probe.status === "miss")  return 0;
+  const n = typeof probe.value === "number" ? probe.value : Number(probe.value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export async function kvSet(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
   try { await kv.set(key, value, ttlSeconds ? { ex: ttlSeconds } : undefined); } catch (e) { console.error(`[kv:set] ${key}: ${(e as Error).message}`); }
 }
 
 export async function kvDel(...keys: string[]): Promise<void> {
   try { await kv.del(...keys); } catch (e) { console.error(`[kv:del] ${keys.join(",")}: ${(e as Error).message}`); }
+}
+
+/**
+ * Outcome of a `kvMutate`. Four states, because "didn't write" has three very
+ * different causes and collapsing them is how this bug family started:
+ *   • ok        — read succeeded, value changed, write landed
+ *   • unchanged — read succeeded, `mutate` returned null (nothing to do)
+ *   • skipped   — READ FAILED. We did not write. Contents still unknown.
+ *   • failed    — read succeeded, the write itself failed
+ */
+export type KvMutateResult = "ok" | "unchanged" | "skipped" | "failed";
+
+/**
+ * Read-modify-write against a single key, WITHOUT the wipe.
+ *
+ * ⚠ This exists to close a specific, repeated, data-destroying bug. The shape
+ * it replaces appears ~30 times in this repo:
+ *
+ *     const list = (await kvGet<string[]>(K)) ?? [];   // throw → null → []
+ *     list.push(x);
+ *     await kvSet(K, list);                            // writes [x]
+ *
+ * `kvGet` catches a KV throw and returns null, so a throttle is indistinguishable
+ * from an absent key. Feed that `?? []` into a write against THE SAME KEY and a
+ * transient read error doesn't drop one item — it replaces the entire collection
+ * with a one-element array. The Upstash cap outages (#123, #148) made exactly
+ * this failure mode routine, not theoretical: throttled reads for minutes at a
+ * time, every one of them a chance to flatten an index that has no TTL and no
+ * backup. Same reasoning, same author, same fix as `recordToolPayment` (#147).
+ *
+ * So: the read goes through `kvGetProbe`, and on `error` we DO NOT WRITE. The
+ * cost of skipping is that one mutation is lost. The cost of not skipping is
+ * that every prior mutation is lost. Those are not comparable, and the whole
+ * point of this helper is that the safe choice is now also the shorter one to
+ * write — a rule nobody has to remember is a rule nobody can forget.
+ *
+ * `mutate` returns the next value, or `null` to mean "no change, skip the
+ * write" (the `if (!list.includes(x))` guard, expressed as a return value).
+ * It receives `empty` when the key is genuinely absent — a real miss, never an
+ * error masquerading as one.
+ *
+ * NOT atomic. This is still read-then-write, so two concurrent mutators can
+ * interleave and one update can be lost. That is a one-item gap, categorically
+ * different from the wipe this prevents, and closing it needs native Redis ops
+ * (SADD/SREM — see `kvSAdd`/`kvSRem`, which ARE atomic and are the better
+ * choice for pure membership sets). Use this for the JSON-blob keys that can't
+ * take a type change without a migration.
+ */
+export async function kvMutate<T>(
+  key: string,
+  empty: T,
+  mutate: (current: T) => T | null,
+  ttlSeconds?: number,
+): Promise<KvMutateResult> {
+  const probe = await kvGetProbe<T>(key);
+
+  // The entire reason this function exists. Logged rather than silent:
+  // `kvGet` used to print `[kv:get] …` from its own catch, and `kvGetProbe`
+  // deliberately doesn't log — so without this line the fix would trade a
+  // data-loss bug for an invisibility one.
+  if (probe.status === "error") {
+    console.error(`[kv:mutate] ${key}: SKIPPED write — read failed: ${probe.message}`);
+    return "skipped";
+  }
+
+  const next = mutate(probe.status === "hit" ? probe.value : empty);
+  if (next === null) return "unchanged";
+
+  try {
+    await kv.set(key, next, ttlSeconds ? { ex: ttlSeconds } : undefined);
+    return "ok";
+  } catch (e) {
+    console.error(`[kv:mutate] ${key}: write failed: ${(e as Error).message}`);
+    return "failed";
+  }
 }
 
 /**
@@ -243,8 +345,12 @@ export async function kvSetNX(key: string, value: unknown, ttlSeconds: number): 
  * Set helpers — thin, fault-tolerant wrappers over Redis SADD/SREM/SMEMBERS.
  * A KV set is the right primitive for a "who's subscribed to X" list: adds are
  * idempotent, removes never leave orphans, and membership reads are one call —
- * no whole-array read-modify-write (the race-prone shape Sentinel's global
- * `sentinel:watches` array has). Never throw: a failed set op logs and no-ops,
+ * no whole-array read-modify-write. That last part is the point: the shape this
+ * replaces kept EVERY subscription in one global JSON array, read and rewritten
+ * whole on every edit, so two concurrent edits lost one of them and the blob
+ * grew unbounded. (It was Sentinel's `sentinel:watches`; Sentinel was retired
+ * 2026-08-31, but the anti-pattern outlives it — don't rebuild it.)
+ * Never throw: a failed set op logs and no-ops,
  * so a KV blip degrades one alert route, it doesn't 500 the caller.
  */
 export async function kvSAdd(key: string, ...members: string[]): Promise<void> {

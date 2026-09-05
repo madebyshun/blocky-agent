@@ -13,6 +13,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useAccount } from "wagmi";
+import SpendConsole from "@/components/SpendConsole";
 
 // ─── Types (shape mirrors the local Tool/Category from /hub/page.tsx) ─────────
 // Kept loose on purpose — HubHome doesn't import from page.tsx to avoid a
@@ -120,6 +122,11 @@ export default function HubHome(props: HubHomeProps) {
 
 function HomeView(props: HubHomeProps) {
   const { tools, usage, featuredIds, recentIds, onSearch, onPickCat, onSelect, onListTool } = props;
+  // Read here rather than threaded down from HubView: the parent has no other
+  // use for it, and a prop chained through two components for one panel is a
+  // thing that silently goes stale. Providers wrap the root layout, so this is
+  // safe on the marketing host and in the app shell alike.
+  const { address } = useAccount();
   const byId = new Map(tools.map(t => [t.id, t] as const));
   const runsOf = (id: string) => { const t = byId.get(id); return t ? toolRuns(t, usage) : (usage[id] ?? 0); };
 
@@ -201,6 +208,24 @@ function HomeView(props: HubHomeProps) {
                 </button>
               ))}
             </div>
+          </section>
+        )}
+
+        {/* ── Agent spend — only for a connected wallet ──────────────────────
+            Mounted HERE, on the marketplace home, because this is where the
+            money is actually spent: every row in it was paid for by clicking a
+            tool on this page. /app/usage has the same panel, but a user
+            browsing tools should not have to leave to find out what the last
+            ones cost.
+
+            Gated on `address`, not rendered-then-emptied: with no address there
+            is no question to ask, and the component's own disconnected copy is
+            aimed at a page you visit to ask about YOUR spend. On a marketplace
+            home an unconnected visitor gets no panel at all rather than a
+            connect-prompt competing with the two CTAs above. */}
+        {address && (
+          <section className="mb-9">
+            <SpendConsole address={address} />
           </section>
         )}
 

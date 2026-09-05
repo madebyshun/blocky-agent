@@ -712,29 +712,124 @@ function MarketFitCard({ result }: { result: Record<string, unknown> }) {
   );
 }
 
-// ── WalletPnlCard ─────────────────────────────────────────────────────────────
+// ── WhaleSignalCard ───────────────────────────────────────────────────────────
+//
+// `hub_whale_signal` used to render through ContractTrustCard. The two shapes
+// share no field: whale-copy-signal returns signal / whale_activity /
+// entry_timing / patterns / topMovements, while ContractTrustCard reads
+// `verdict`, `security.score` and `basescan.*`. Every read missed, so the card
+// fell through to its OWN defaults and drew "🔐 Contract Trust · CAUTION · 50"
+// over a wallet-flow answer — a security verdict and a risk score the tool
+// never returned and has no way to produce. Worst on the empty-data path,
+// where the handler deliberately answers PASS ("nothing on-chain to copy")
+// and the card overrode that with CAUTION. Inventing a risk level from absent
+// data is the one thing CLAUDE.md rules out flat, so every field below is read
+// under the name the handler actually sends, and anything missing renders as
+// nothing rather than as a default.
+const SIGNAL_COLORS: Record<string, { bg: string; text: string; icon: string }> = {
+  STRONG_BUY: { bg: "#16a34a15", text: "#4ade80", icon: "▲▲" },
+  BUY:        { bg: "#16a34a15", text: "#4ade80", icon: "▲" },
+  WATCH:      { bg: "#d9770615", text: "#fb923c", icon: "◆" },
+  PASS:       { bg: "#1E1E32",   text: "#94a3b8", icon: "·" },
+};
 
-function WalletPnlCard({ result }: { result: Record<string, unknown> }) {
-  const pnl   = String(result.estimatedPnL ?? result.pnl ?? "");
-  const wr    = String(result.winRate ?? result.win_rate ?? "");
-  const style = String(result.tradingStyle ?? result.trading_style ?? "");
-  const score = Number(result.smartMoneyScore ?? result.smart_money_score ?? 0);
-  const summary = String(result.summary ?? "");
-  const isPos = pnl.startsWith("+");
-  const color = isPos ? "#4ade80" : pnl.startsWith("-") ? "#f87171" : "#4FC3F7";
+const WHALE_ACTIVITY_COLOR: Record<string, string> = {
+  accumulating: "#4ade80",
+  distributing: "#f87171",
+  mixed:        "#fb923c",
+  neutral:      "#94a3b8",
+};
+
+function WhaleSignalCard({ result }: { result: Record<string, unknown> }) {
+  const signal     = String(result.signal ?? "");
+  const activity   = String(result.whale_activity ?? "");
+  const confidence = typeof result.confidence === "number" ? result.confidence : null;
+  const timing     = String(result.entry_timing ?? "");
+  const summary    = String(result.summary ?? "");
+  const note       = String(result.note ?? "");
+  const patterns   = Array.isArray(result.patterns) ? (result.patterns as string[]) : [];
+  const moves      = Array.isArray(result.topMovements) ? (result.topMovements as Record<string, unknown>[]) : [];
+  const analyzed   = typeof result.transfers_analyzed === "number" ? result.transfers_analyzed : null;
+  const url        = typeof result.url === "string" ? result.url : undefined;
+  const degraded   = result.degraded === true;
+  const color      = SIGNAL_COLORS[signal]?.text ?? "#94a3b8";
+
   return (
     <Card accentColor={color}>
       <CardHeader accentColor={color}>
-        <span className="font-mono text-[11px] font-bold text-slate-300">Wallet PnL</span>
-        {pnl && <span className="font-mono text-[13px] font-bold" style={{ color }}>{pnl}</span>}
+        <div className="flex items-center gap-3">
+          <span className="text-sm">🐋</span>
+          <span className="font-mono text-[11px] text-slate-500 tracking-widest uppercase">Whale Copy Signal</span>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          {signal && <VerdictBadge verdict={signal} colorMap={SIGNAL_COLORS} />}
+          {confidence !== null && (
+            <span className="font-mono text-[10px] text-slate-600">{confidence}% confidence</span>
+          )}
+        </div>
       </CardHeader>
       <CardBody>
-        <div className="grid grid-cols-3 gap-3">
-          {wr    && <div><p className="font-mono text-[9px] text-slate-600 uppercase">Win Rate</p><p className="font-mono text-[12px]" style={{ color: "#4ade80" }}>{wr}</p></div>}
-          {style && <div><p className="font-mono text-[9px] text-slate-600 uppercase">Style</p><p className="font-mono text-[11px] text-slate-300">{style}</p></div>}
-          {score > 0 && <div><p className="font-mono text-[9px] text-slate-600 uppercase">Smart $</p><ScoreBar score={score} color="#A78BFA" /></div>}
-        </div>
+        {/* Signal synthesis unavailable — the on-chain movements below are still real. */}
+        {degraded && (
+          <p className="font-mono text-[10px] text-amber-400 leading-snug">
+            ⚠ Signal synthesis unavailable — the transfers below are still live on-chain data.
+          </p>
+        )}
+
+        {(activity || timing) && (
+          <div className="grid grid-cols-2 gap-3">
+            {activity && (
+              <div>
+                <p className="font-mono text-[9px] text-slate-600 uppercase">Activity</p>
+                <p className="font-mono text-[12px]" style={{ color: WHALE_ACTIVITY_COLOR[activity] ?? "#94a3b8" }}>{activity}</p>
+              </div>
+            )}
+            {timing && (
+              <div>
+                <p className="font-mono text-[9px] text-slate-600 uppercase">Entry Timing</p>
+                <p className="font-mono text-[11px] text-slate-300">{timing}</p>
+              </div>
+            )}
+          </div>
+        )}
+
         {summary && <p className="font-mono text-[11px] text-slate-400 leading-snug">{summary}</p>}
+        {note && <p className="font-mono text-[10px] text-slate-500 leading-snug">{note}</p>}
+        {patterns.length > 0 && <FlagList flags={patterns} color={color} />}
+
+        {/* Real transfers — the part of this tool that is measured, not modelled. */}
+        {moves.length > 0 && (
+          <div>
+            <p className="font-mono text-[9px] text-slate-600 uppercase mb-1">
+              Largest transfers{analyzed !== null ? ` · ${analyzed} analysed` : ""}
+            </p>
+            {moves.slice(0, 4).map((m, i) => {
+              const dir = String(m.direction ?? "");
+              const dirColor = dir === "IN" ? "#4ade80" : dir === "OUT" ? "#f87171" : "#94a3b8";
+              return (
+                <div key={i} className="flex items-center justify-between py-1 border-b border-slate-800 last:border-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-[10px] shrink-0" style={{ color: dirColor }}>
+                      {dir === "IN" ? "↓" : dir === "OUT" ? "↑" : "·"}
+                    </span>
+                    <span className="font-mono text-[11px] text-slate-200 truncate">{String(m.token ?? "")}</span>
+                    {m.significance === "HIGH" && (
+                      <span className="font-mono text-[8px] px-1 rounded bg-[#dc262620] text-[#f87171] shrink-0">HIGH</span>
+                    )}
+                  </div>
+                  <span className="font-mono text-[11px] text-slate-400 shrink-0">{String(m.amount ?? "")}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {url && (
+          <a href={url} target="_blank" rel="noopener noreferrer"
+            className="font-mono text-[10px] text-slate-600 hover:text-slate-400 transition-colors">
+            View on Basescan ↗
+          </a>
+        )}
       </CardBody>
     </Card>
   );
@@ -772,61 +867,81 @@ function AmlCard({ result }: { result: Record<string, unknown> }) {
   );
 }
 
-// ── QuantumCard ───────────────────────────────────────────────────────────────
+// ── KeyExposureCard ───────────────────────────────────────────────────────────
+//
+// Was `QuantumCard`, dispatched on the tool id `hub_quantum` — an id that
+// exists nowhere in this repo (not in HUB_TOOLS, TOOL_ENDPOINT, AGENT_TOOLS or
+// HANDLERS), so the card could never render. The live tool is `key-exposure`,
+// and the old card's field names missed it on EVERY read:
+//   vulnerabilityScore / score / quantum_score → riskScore
+//   verdict / risk_level                       → riskLevel
+//   keyExposed / key_exposed                   → exposed
+//   recommendations[]                          → recommendation (a string)
+// Wiring the card as-written would therefore have drawn an empty shell over a
+// perfectly good EXPOSED/SAFE verdict. Names below match the handler's return.
+//
+// Deliberately NOT a danger meter: riskScore is a fixed 55/5 and the handler's
+// own disclaimer says EXPOSED means "the public key is visible", not "funds are
+// at risk". `exposed` is read as tri-state — undefined stays "unknown" instead
+// of collapsing into a reassuring "No", since absent data is not a safe result.
+function KeyExposureCard({ result }: { result: Record<string, unknown> }) {
+  const exposed  = typeof result.exposed === "boolean" ? result.exposed : undefined;
+  const verdict  = String(result.riskLevel ?? "");
+  const txCount  = typeof result.txCount === "number" ? result.txCount : null;
+  const firstAt  = typeof result.firstExposureDate === "string" ? result.firstExposureDate : "";
+  const urgency  = String(result.migrationUrgency ?? "");
+  const explain  = String(result.explanation ?? "");
+  const recommend = String(result.recommendation ?? "");
+  const disclaimer = String(result.disclaimer ?? "");
+  const color = exposed === undefined ? "#94a3b8" : exposed ? "#fb923c" : "#4ade80";
 
-function QuantumCard({ result }: { result: Record<string, unknown> }) {
-  const score    = Number(result.vulnerabilityScore ?? result.score ?? result.quantum_score ?? 0);
-  const verdict  = String(result.verdict ?? result.risk_level ?? "");
-  const exposed  = result.keyExposed ?? result.key_exposed;
-  const timeline = String(result.timeline ?? result.threat_timeline ?? "");
-  const recs     = Array.isArray(result.recommendations) ? result.recommendations as string[] : [];
-  const color    = score > 70 ? "#f87171" : score > 40 ? "#fb923c" : "#4ade80";
   return (
     <Card accentColor={color}>
       <CardHeader accentColor={color}>
-        <span className="font-mono text-[11px] font-bold text-slate-300">⚛ Quantum Scan</span>
-        <div className="flex items-center gap-2">
-          {verdict && <span className="font-mono text-[10px] font-bold" style={{ color }}>{verdict}</span>}
-          {score > 0 && <span className="font-mono text-[10px] text-slate-500">Score {score}</span>}
+        <div className="flex items-center gap-3">
+          <span className="text-sm">🔑</span>
+          <span className="font-mono text-[11px] text-slate-500 tracking-widest uppercase">Key Exposure</span>
         </div>
+        {verdict && <span className="font-mono text-[11px] font-bold" style={{ color }}>{verdict}</span>}
       </CardHeader>
       <CardBody>
-        {score > 0 && <ScoreBar score={score} color={color} />}
-        {exposed !== undefined && (
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[9px] text-slate-600 uppercase">Key Exposed</span>
-            <span className="font-mono text-[11px]" style={{ color: exposed ? "#f87171" : "#4ade80" }}>{exposed ? "Yes ⚠" : "No ✓"}</span>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="font-mono text-[9px] text-slate-600 uppercase">Public key exposed</p>
+            <p className="font-mono text-[12px]" style={{ color }}>
+              {exposed === undefined ? "unknown" : exposed ? "Yes" : "No"}
+            </p>
+          </div>
+          {txCount !== null && (
+            <div>
+              <p className="font-mono text-[9px] text-slate-600 uppercase">Transactions sent</p>
+              <p className="font-mono text-[12px] text-slate-300">{txCount}</p>
+            </div>
+          )}
+        </div>
+
+        {(firstAt || urgency) && (
+          <div className="grid grid-cols-2 gap-3">
+            {firstAt && (
+              <div>
+                <p className="font-mono text-[9px] text-slate-600 uppercase">First send</p>
+                <p className="font-mono text-[11px] text-slate-300">{firstAt}</p>
+              </div>
+            )}
+            {urgency && (
+              <div>
+                <p className="font-mono text-[9px] text-slate-600 uppercase">Migration</p>
+                <p className="font-mono text-[11px] text-slate-300">{urgency.replace(/_/g, " ").toLowerCase()}</p>
+              </div>
+            )}
           </div>
         )}
-        {timeline && <p className="font-mono text-[11px] text-slate-400 leading-snug">{timeline}</p>}
-        {recs.length > 0 && <FlagList flags={recs} color="#A78BFA" />}
-      </CardBody>
-    </Card>
-  );
-}
 
-// ── YieldCard ─────────────────────────────────────────────────────────────────
-
-function YieldCard({ result }: { result: Record<string, unknown> }) {
-  const opps = Array.isArray(result.opportunities) ? result.opportunities as Record<string, unknown>[] : [];
-  const summary = String(result.summary ?? result.top_opportunity ?? "");
-  return (
-    <Card accentColor="#34D399">
-      <CardHeader accentColor="#34D399">
-        <span className="font-mono text-[11px] font-bold text-slate-300">💰 Yield Optimizer</span>
-        {opps.length > 0 && <span className="font-mono text-[10px] text-[#34D399]">{opps.length} opportunities</span>}
-      </CardHeader>
-      <CardBody>
-        {opps.slice(0, 3).map((o, i) => (
-          <div key={i} className="flex items-center justify-between py-1 border-b border-slate-800 last:border-0">
-            <div>
-              <p className="font-mono text-[11px] text-slate-200">{String(o.protocol ?? o.name ?? "")}</p>
-              <p className="font-mono text-[9px] text-slate-600">{String(o.asset ?? o.pool ?? "")}</p>
-            </div>
-            <span className="font-mono text-[12px] font-bold text-[#34D399]">{String(o.apy ?? o.apr ?? "")}</span>
-          </div>
-        ))}
-        {opps.length === 0 && summary && <p className="font-mono text-[11px] text-slate-400">{summary}</p>}
+        {explain && <p className="font-mono text-[11px] text-slate-400 leading-snug">{explain}</p>}
+        {recommend && <FlagList flags={[recommend]} color={color} />}
+        {disclaimer && (
+          <p className="font-mono text-[9px] text-slate-600 leading-snug border-t border-slate-800 pt-2">{disclaimer}</p>
+        )}
       </CardBody>
     </Card>
   );
@@ -2285,18 +2400,23 @@ function B20ManageCard({ result }: { result: B20ManageResult }) {
 
 interface YieldMoveResult { action?: string; amount?: number | string; network?: string }
 
-export function MoveToYieldCard({ result, account }: { result: YieldMoveResult; account?: `0x${string}` }) {
+export function MoveToYieldCard({ result, account, withdrawOnly = false }: { result: YieldMoveResult; account?: `0x${string}`; withdrawOnly?: boolean }) {
   // `account` is the connected wallet, passed in by the host (chat dispatcher
   // reads it from useChat; the /app/bank dashboard reads it from useAccount) so
   // the card works both inside and outside the chat. wagmi hooks below still
   // drive the actual signing.
+  //
+  // `withdrawOnly` locks the card to the exit: the Supply/Withdraw toggle is not
+  // rendered and `action` can never leave "withdraw". The Wallet passes it
+  // because new yield deposits are deferred to phase 2 while existing positions
+  // must stay withdrawable; chat's prepare_yield tool leaves it off.
   const address = account;
   const isConnected = !!account;
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
   const [venue,   setVenue]   = useState<VenueId>("aave");
-  const [action,  setAction]  = useState<"supply" | "withdraw">(result.action === "withdraw" ? "withdraw" : "supply");
+  const [action,  setAction]  = useState<"supply" | "withdraw">(withdrawOnly || result.action === "withdraw" ? "withdraw" : "supply");
   const [network, setNetwork] = useState<YieldNetwork>(result.network === "base" ? "base" : "baseSepolia");
   const [amount,  setAmount]  = useState<string>(
     result.amount != null && (typeof result.amount === "number" || typeof result.amount === "string") ? String(result.amount) : "");
@@ -2451,7 +2571,9 @@ export function MoveToYieldCard({ result, account }: { result: YieldMoveResult; 
 
   return (
     <div className="mt-2 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3.5">
-      <div className="font-mono text-[10px] text-slate-500 tracking-widest font-bold mb-3">MOVE TO YIELD · BASE</div>
+      <div className="font-mono text-[10px] text-slate-500 tracking-widest font-bold mb-3">
+        {withdrawOnly ? "WITHDRAW FROM YIELD · BASE" : "MOVE TO YIELD · BASE"}
+      </div>
 
       {/* Network risk banner */}
       <div className="rounded-lg px-2.5 py-1.5 mb-3 font-mono text-[10px] leading-relaxed"
@@ -2524,21 +2646,24 @@ export function MoveToYieldCard({ result, account }: { result: YieldMoveResult; 
         </div>
       )}
 
-      {/* Supply / Withdraw toggle */}
-      <div className="flex gap-1 mb-3">
-        {(["supply", "withdraw"] as const).map(a => {
-          const active = action === a;
-          return (
-            <button key={a} onClick={() => setAction(a)}
-              className="flex-1 font-mono text-[11px] py-1.5 rounded-md transition-colors"
-              style={active
-                ? { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
-                : { color: "#64748b", border: "1px solid #1A1A2E" }}>
-              {a === "supply" ? "Supply" : "Withdraw"}
-            </button>
-          );
-        })}
-      </div>
+      {/* Supply / Withdraw toggle — omitted entirely when the host locked the
+          card to withdraw, so there is no control that re-opens supply. */}
+      {!withdrawOnly && (
+        <div className="flex gap-1 mb-3">
+          {(["supply", "withdraw"] as const).map(a => {
+            const active = action === a;
+            return (
+              <button key={a} onClick={() => setAction(a)}
+                className="flex-1 font-mono text-[11px] py-1.5 rounded-md transition-colors"
+                style={active
+                  ? { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
+                  : { color: "#64748b", border: "1px solid #1A1A2E" }}>
+                {a === "supply" ? "Supply" : "Withdraw"}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Network */}
       <label className="block mb-3">
@@ -3155,13 +3280,11 @@ export function ToolResultCard({ tool, result }: { tool: string; result: Record<
     case "hub_risk_gate":     return <RiskGateCard    result={r as RiskGateResult} />;
     case "hub_deep_analysis": return <DeepAnalysisCard result={r as DeepAnalysisResult} />;
     case "hub_token_pick":    return <TokenPickCard   result={r as TokenPickResult} />;
-    case "hub_contract_trust":
-    case "hub_whale_signal":  return <ContractTrustCard result={r as ContractTrustResult} />;
+    case "hub_contract_trust": return <ContractTrustCard result={r as ContractTrustResult} />;
+    case "hub_whale_signal":  return <WhaleSignalCard  result={r} />;
     case "hub_market_fit":    return <MarketFitCard   result={r} />;
-    case "hub_wallet_pnl":    return <WalletPnlCard   result={r} />;
     case "hub_aml":           return <AmlCard         result={r} />;
-    case "hub_quantum":       return <QuantumCard      result={r} />;
-    case "hub_yield":         return <YieldCard        result={r} />;
+    case "hub_key_exposure":  return <KeyExposureCard  result={r} />;
     case "blue_stream":       return <BlueStreamCard   result={r} />;
     case "hub_b20_launch":       return <B20LaunchCard   result={r as B20LaunchResult} />;
     case "hub_hood_arrow":       return <HoodArrowCard   result={r as unknown as HoodArrowResult} />;

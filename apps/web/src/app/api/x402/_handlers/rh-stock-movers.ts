@@ -9,7 +9,7 @@
 // with volume, returns an empty list rather than pad the response.
 
 import { RWA_TOKENS, RH_CHAIN } from "@/lib/robinhood/rwa-registry";
-import { poolsForToken, type PoolMeta } from "@/lib/robinhood/rwa-market";
+import { poolsForToken, topPools, type PoolMeta } from "@/lib/robinhood/rwa-market";
 
 // Dust-pool filter — protects the ranking from thin-liquidity noise.
 // A pool with $453 TVL and $0.01 24h volume can quote AAPL at $868 for a
@@ -29,14 +29,29 @@ export default async function handler(req: Request): Promise<Response> {
 
     const timestamp = new Date().toISOString();
 
-    // Iterate the RWA registry and pull each token's deepest pool. This is
-    // ~20 GT calls, but poolsForToken has an in-memory 60s memo and always
-    // resolves prices correctly for the queried token (base OR quote side).
-    // Compared to topPools + heuristics, this is honest about which token
-    // moved by how much.
+    // Pull each candidate token's deepest pool. `poolsForToken` resolves the
+    // price correctly whichever side of the pool the token sits on, which
+    // topPools alone cannot do — that is why the per-token call still happens.
+    //
+    // What topPools IS good for is deciding *who* to ask about. This used to
+    // fan out over the whole registry, which was ~20 calls when the registry
+    // held 26 rows and became 203 the moment the registry was completed from
+    // the factory log — 203 concurrent GeckoTerminal requests, i.e. a rate-limit
+    // wall and a slower, worse answer. Most RH stock tokens have no pool at
+    // all, and a token absent from the volume-ranked pool list cannot be a top
+    // mover by definition, so it costs nothing to skip it. The registry
+    // intersection still does the real work: it drops non-RWA pools, and it is
+    // what keeps an impersonator's pool out of the ranking.
     const stocks = RWA_TOKENS.filter((t) => t.kind === "stock" || t.kind === "etf");
+    const traded = new Set<string>();
+    for (const p of await topPools(100)) {
+      if (p.base_token) traded.add(p.base_token);
+      if (p.quote_token) traded.add(p.quote_token);
+    }
+    const candidates = stocks.filter((t) => traded.has(t.contract.toLowerCase()));
+
     const perToken = await Promise.all(
-      stocks.map(async (rwa) => {
+      candidates.map(async (rwa) => {
         try {
           const pools = await poolsForToken(rwa.contract);
           if (!pools.length) return null;

@@ -125,7 +125,7 @@ Schema: {
         watch_thresholds: isAddress
           ? ["Liquidity drops > 30% in 24h", "Price moves > 20% in 1h", "Contract upgrade / ownership change"]
           : ["TVL drops > 20% in 24h", "Unusual governance proposal", "Oracle / bridge incident"],
-        monitor_plan: ["Re-check this snapshot every 6–12h", "Set onchain alerts via Blue Sentinel"],
+        monitor_plan: ["Re-check this snapshot every 6–12h", "Diff liquidity / price / volume against this snapshot on each re-run"],
         summary: "Live synthesis was briefly unavailable — this snapshot is built from the grounded heuristic signals. Re-run for a full read.",
         degraded: true,
       };
@@ -150,8 +150,17 @@ Schema: {
           }
         : null,
       ...synth,
+      /**
+       * ⚠ This tool is ON-DEMAND ONLY — it takes a snapshot when you call it and
+       * forgets you afterwards. It used to close by telling buyers to "subscribe
+       * this target to Blue Sentinel via the alert-subscribe tool", which was
+       * false in BOTH halves: no `alert-subscribe` tool has ever existed in
+       * AGENT_TOOLS or HANDLERS, and Blue Sentinel is retired as of 2026-08-31.
+       * A paid endpoint may not sell a subscription that cannot be bought.
+       */
       continuous_monitoring:
-        "For always-on alerts, subscribe this target to Blue Sentinel via the alert-subscribe tool (Telegram / webhook).",
+        "None. This is a point-in-time snapshot — there is no subscription behind it. " +
+        "To watch a target, re-call this endpoint on your own schedule and diff the `onchain` block against your previous response.",
     });
   } catch (e) {
     return Response.json(

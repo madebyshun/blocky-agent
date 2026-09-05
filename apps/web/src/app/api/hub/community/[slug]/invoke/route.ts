@@ -2,7 +2,7 @@
  * POST /api/hub/community/[slug]/invoke — paid invoke for a HOSTED Blue Hub tool.
  *
  * Payment model (x402 USDC on Base, via the Coinbase CDP facilitator):
- *   no X-Payment → 402 with our requirements (payTo = Blue Hub wallet 0xb058)
+ *   no X-Payment → 402 with our requirements (payTo = Blue Agent treasury 0x0295)
  *   X-Payment    → cdpVerify (NO charge) → accept job (202) → run in background
  *                  → cdpSettle ONLY after a successful run → accrue creator 90%
  *
@@ -150,9 +150,24 @@ export async function POST(
         const builderShare = Math.floor((price * BUILDER_SHARE_BPS) / 10_000);
         await addBuilderEarnings(tool.builderAddress, builderShare);
         await incrHostedCalls(slug);
-        // Real USDC settled on Base via Coinbase CDP → aggregate /stats meter.
+        // Real USDC settled on Base via Coinbase CDP → aggregate /stats meter,
+        // plus the payer's own receipt so /wallet can name this call instead of
+        // rendering it as a transfer to anonymous hex.
+        //
+        // `src: "community"` is not decoration: this `slug` lives in the hosted
+        // registry, NOT in AGENT_TOOLS, and a slug is free-form. Without the
+        // flag a community tool named "token-price" would be displayed under the
+        // first-party tool of that id — telling a user they bought something
+        // they did not. Flagged rows skip the catalog lookup and show the slug.
+        //
+        // Wiring this second settle site is what keeps the wallet's footnote
+        // honest: it tells the user a bare payment means "never recorded", so
+        // every path that CAN record must, or the sentence becomes a lie about
+        // paths we simply forgot.
         const { recordSettlement } = await import("@/lib/x402-settlements");
         await recordSettlement(price, settle.tx);
+        const { recordToolPayment, payerFromPayload } = await import("@/lib/wallet/spend-log");
+        await recordToolPayment(payerFromPayload(paymentPayload), slug, price, settle.tx, "community");
         await finish({
           status: "done",
           result: { contentType: run.contentType, body: run.body },

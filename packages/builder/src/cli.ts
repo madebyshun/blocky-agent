@@ -233,14 +233,14 @@ program
 
 program
   .command("post-task [handle]")
-  .description("Post a task to the Blue Agent Work Hub (interactive)")
+  .description("Draft a Work Hub task (interactive) — in-memory only, not published")
   .action(async (handle) => {
     await runPostTask(handle);
   });
 
 program
   .command("tasks")
-  .description("Browse open tasks in the Work Hub")
+  .description("List Work Hub tasks drafted in this process (starts empty every run)")
   .option("-c, --category <cat>", "Filter by category: audit | content | art | data | dev")
   .action(async (opts) => {
     await runListTasks({ category: opts.category });
@@ -255,7 +255,7 @@ program
 
 program
   .command("submit [taskId] [handle] [proof]")
-  .description("Submit completed work with proof URL or tx hash")
+  .description("Attach proof to a Work Hub task (records the result, sends nothing)")
   .action(async (taskId, handle, proof) => {
     await runSubmitTask(taskId, handle, proof);
   });
@@ -264,12 +264,12 @@ program
 
 const micro = program
   .command("micro")
-  .description("x402 microtask marketplace — $0.10–$20 fast-settlement tasks");
+  .description("Local microtask tracker — post, claim, and review small tasks (no payments)");
 
 micro
   .command("post [description]")
   .description("Post a new microtask with low-cost slots")
-  .option("--reward <n>", "Reward per slot in USDC (max $20)")
+  .option("--reward <n>", "Reward per slot in USD (max $20)")
   .option("--slots <n>", "Number of slots", "1")
   .option("--platform <p>", "Platform: x | farcaster | telegram | web", "web")
   .option("--proof <type>", "Proof type: reply | quote | screenshot | url | video | text", "url")
@@ -341,7 +341,7 @@ micro
 
 micro
   .command("approve [taskId]")
-  .description("Approve or reject a submission and release payment")
+  .description("Approve or reject a submission (records the result locally)")
   .option("--reject", "Reject the submission instead of approving")
   .option("--claim <id>", "Approve a specific claim ID")
   .action(async (taskId, opts) => {
@@ -350,7 +350,7 @@ micro
 
 micro
   .command("profile [handle]")
-  .description("Show doer performance, earnings, and reputation")
+  .description("Show doer performance, approved value, and reputation")
   .action(async (handle) => {
     await runMicroProfile(handle);
   });

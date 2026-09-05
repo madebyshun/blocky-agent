@@ -6,10 +6,9 @@
  * Layout intent: instead of a uniform vertical stack of identical cards,
  * different cards take different cell sizes so the page reads at a glance.
  * Mobile collapses to a clean 1-column flow; ≥sm steps up to a 2-col bento;
- * ≥lg the identity hero becomes the dominant cell and stake / alerts ride
- * alongside it.
- *
- * All data hooks identical to the previous version — no behavioural change.
+ * ≥lg the identity hero becomes the dominant cell and the remaining cells ride
+ * alongside it. (A STAKE cell used to sit in that row; it went out with the
+ * stake surface — see the comment where it stood.)
  */
 
 import { useState, useEffect } from "react";
@@ -22,10 +21,6 @@ import { useBasename } from "@/lib/useBasename";
 
 // ── Contracts (Base mainnet) ─────────────────────────────────────────────────
 
-const STAKING_ADDRESS = (
-  process.env.NEXT_PUBLIC_STAKING_CONTRACT ??
-  "0x69e539684EE48F71eCDAd58618d8e8a2423E279d"
-) as `0x${string}`;
 const BLUE_ADDRESS  = "0xf895783b2931c919955e18b5e3343e7c7c456ba3" as `0x${string}`;
 const USDC_ADDRESS  = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as `0x${string}`;
 const WETH_ADDRESS  = "0x4200000000000000000000000000000000000006" as `0x${string}`;
@@ -37,34 +32,15 @@ const ERC20_ABI = [
     inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
 ] as const;
 
-const STAKING_ABI = [
-  { name: "stakeInfo", type: "function", stateMutability: "view",
-    inputs: [{ name: "user", type: "address" }],
-    outputs: [
-      { name: "amount",       type: "uint256" },
-      { name: "stakedAt",     type: "uint256" },
-      { name: "dailyCredits", type: "uint256" },
-      { name: "cooldown",     type: "uint256" },
-      { name: "pendingUsdc",  type: "uint256" },
-    ] },
-  { name: "totalCreditsAccrued", type: "function", stateMutability: "view",
-    inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
-] as const;
-
-// ── Tier table ───────────────────────────────────────────────────────────────
-
-const TIERS = [
-  { name: "None",    min: 0,          color: "#475569" },
-  { name: "Starter", min: 500_000,    color: "#4FC3F7" },
-  { name: "Pro",     min: 2_000_000,  color: "#A78BFA" },
-  { name: "Max",     min: 10_000_000, color: "#F59E0B" },
-];
-function getTier(n: number) {
-  if (n >= 10_000_000) return TIERS[3];
-  if (n >= 2_000_000)  return TIERS[2];
-  if (n >= 500_000)    return TIERS[1];
-  return TIERS[0];
-}
+// Staking reads and the Starter/Pro/Max tier table lived here. Both were
+// removed with the stake surface: `lib/credits.ts` stopped honouring token
+// tiers (every wallet gets the same flat daily bucket), so rendering a tier
+// badge was asserting an entitlement the credit system no longer grants.
+//
+// The page accent used to be `tier.color`, which meant the whole dashboard
+// changed colour with stake size — a visual claim about entitlement. It is a
+// constant now, for the same reason the badge went.
+const ACCENT = "#4FC3F7";
 
 function fmtBlue(wei: bigint) {
   const n = Number(formatUnits(wei, 18));
@@ -176,11 +152,7 @@ function StatChip({ label, value, sub, color }: { label: string; value: string; 
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
-interface Props {
-  onSwitchTab?: (tab: "stake") => void;
-}
-
-export default function OverviewView({ onSwitchTab }: Props) {
+export default function OverviewView() {
   const { address, isConnected } = useAccount();
   const disconnect               = useWalletDisconnect();
   const { name: basename }       = useBasename(address);
@@ -188,13 +160,15 @@ export default function OverviewView({ onSwitchTab }: Props) {
   const [copied,       setCopied]       = useState(false);
   const [builderScore, setBuilderScore] = useState<number | null>(null);
   const [scoreLoading, setScoreLoading] = useState(false);
-  // Claimable credit balance from the new ledger API: accrued (on-chain
-  // staking accrual) + topup (off-chain USDC top-ups) - spent (off-chain
-  // ledger of chat + tool runs). This replaces the localStorage daily-quota
-  // model — credits accumulate continuously and are spendable as long as
-  // accrued + topup > spent.
+  // Only the two numbers this view renders. It used to hold accrued / topup /
+  // spent / dailyCr too and print three of them — the same figures /app/usage
+  // shows, off the same endpoint, relabelled. The breakdown belongs to the page
+  // that owns it; a dashboard keeps the headline.
+  // (`accrued` was already unrendered before that: a 0-returning stub since the
+  // token-free rebuild, and a permanent 0 labelled "accrued" invites the same
+  // misreading the stake tier ladder did.)
   const [ledger, setLedger] = useState<{
-    accrued: number; topup: number; spent: number; balance: number; dailyCr: number;
+    balance: number; dailyRemaining: number | null;
   } | null>(null);
 
   useEffect(() => { setChatStats(loadChatStats(address)); }, [address]);
@@ -211,8 +185,6 @@ export default function OverviewView({ onSwitchTab }: Props) {
 
   const { data: contractData } = useReadContracts({
     contracts: [
-      { address: STAKING_ADDRESS, abi: STAKING_ABI, functionName: "stakeInfo",           args: address ? [address] : undefined },
-      { address: STAKING_ADDRESS, abi: STAKING_ABI, functionName: "totalCreditsAccrued", args: address ? [address] : undefined },
       { address: BLUE_ADDRESS,    abi: ERC20_ABI,   functionName: "balanceOf",           args: address ? [address] : undefined },
       { address: USDC_ADDRESS,    abi: ERC20_ABI,   functionName: "balanceOf",           args: address ? [address] : undefined },
       { address: WETH_ADDRESS,    abi: ERC20_ABI,   functionName: "balanceOf",           args: address ? [address] : undefined },
@@ -222,9 +194,6 @@ export default function OverviewView({ onSwitchTab }: Props) {
     query: { enabled: !!address },
   });
 
-  const stakeInfo    = contractData?.[0]?.result as [bigint, bigint, bigint, bigint, bigint] | undefined;
-  const totalCredits = contractData?.[1]?.result as bigint | undefined;
-
   const BALANCE_TOKENS = [
     { sym: "BLUEAGENT", decimals: 18, color: "#4FC3F7" },
     { sym: "USDC",  decimals: 6,  color: "#22C55E" },
@@ -233,20 +202,11 @@ export default function OverviewView({ onSwitchTab }: Props) {
     { sym: "AERO",  decimals: 18, color: "#F472B6" },
   ];
   const balances = BALANCE_TOKENS.map((t, i) => {
-    const raw = contractData?.[2 + i]?.result as bigint | undefined;
+    const raw = contractData?.[i]?.result as bigint | undefined;
     const n = raw !== undefined ? Number(formatUnits(raw, t.decimals)) : null;
     return { ...t, amount: n };
   });
 
-  const stakedWei   = stakeInfo?.[0] ?? 0n;
-  const dailyCr     = stakeInfo?.[2] ?? 0n;
-  const pendingUsdc = stakeInfo?.[4] ?? 0n;
-  const staked      = Number(formatUnits(stakedWei, 18));
-  const tier        = getTier(staked);
-  // totalCredits (raw on-chain accrual) is fetched but rendered via the
-  // ledger API below — kept in the read batch for cheap analytics access.
-  void totalCredits;
-  const hasStake    = staked > 0;
   const memberSince = chatStats.firstUsed
     ? new Date(chatStats.firstUsed).toLocaleDateString("en-US", { month: "short", year: "numeric" })
     : null;
@@ -270,11 +230,10 @@ export default function OverviewView({ onSwitchTab }: Props) {
         if (cancelled) return;
         if (d?.balance === undefined) { setLedger(null); return; }
         setLedger({
-          accrued: Number(d.accrued ?? 0),
-          topup:   Number(d.topup   ?? 0),
-          spent:   Number(d.spent   ?? 0),
           balance: Number(d.balance ?? 0),
-          dailyCr: Number(d.dailyCr ?? 0),
+          // An older server that doesn't send this field leaves it null, and
+          // the sub-line drops the clause rather than printing a 0 free-today.
+          dailyRemaining: Number.isFinite(Number(d.dailyRemaining)) ? Number(d.dailyRemaining) : null,
         });
       })
       .catch(() => { if (!cancelled) setLedger(null); });
@@ -290,16 +249,16 @@ export default function OverviewView({ onSwitchTab }: Props) {
       {/* Ambient glow */}
       <div className="pointer-events-none overflow-hidden absolute inset-x-0 top-0 h-[320px]">
         <div className="absolute inset-0"
-          style={{ background: `radial-gradient(ellipse 80% 60% at 50% -10%, ${tier.color}12 0%, transparent 70%)` }} />
+          style={{ background: `radial-gradient(ellipse 80% 60% at 50% -10%, ${ACCENT}12 0%, transparent 70%)` }} />
       </div>
 
       <div className="relative px-3 sm:px-5 py-5 max-w-5xl mx-auto">
 
         {!isConnected ? (
           <AppConnectPrompt
-            accent={tier.color}
+            accent={ACCENT}
             title="Connect to see your dashboard"
-            subtitle="Wallet · holdings · stake — all in one place."
+            subtitle="Wallet · holdings · activity — all in one place."
             icon={
               <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
@@ -310,15 +269,15 @@ export default function OverviewView({ onSwitchTab }: Props) {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 
             {/* ─── Identity hero (2 col on ≥sm) ─────────────────────────── */}
-            <BentoCell flavor="gradient" accent={tier.color} className="sm:col-span-2 p-5">
+            <BentoCell flavor="gradient" accent={ACCENT} className="sm:col-span-2 p-5">
               <div className="flex items-start justify-between gap-3 mb-5">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="relative shrink-0">
                     <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-lg font-bold"
-                      style={{ background: `linear-gradient(135deg, ${tier.color}25, ${tier.color}08)`,
-                               border: `1px solid ${tier.color}40`,
-                               color: tier.color,
-                               boxShadow: `0 0 24px ${tier.color}20` }}>
+                      style={{ background: `linear-gradient(135deg, ${ACCENT}25, ${ACCENT}08)`,
+                               border: `1px solid ${ACCENT}40`,
+                               color: ACCENT,
+                               boxShadow: `0 0 24px ${ACCENT}20` }}>
                       {address?.slice(2, 4).toUpperCase()}
                     </div>
                   </div>
@@ -329,13 +288,10 @@ export default function OverviewView({ onSwitchTab }: Props) {
                       </span>
                       <span className="text-[9px] text-slate-600 shrink-0">{copied ? "✓" : "copy"}</span>
                     </button>
-                    {/* Tier + member-since only — disconnect moved to the right
-                        rail so this line stays uncluttered. */}
+                    {/* Member-since only — the stake tier badge was removed
+                        with the stake surface; it read a token ladder the
+                        credit system no longer applies. */}
                     <div className="flex items-center gap-2 mt-1.5">
-                      <span className="text-[9px] px-2 py-0.5 rounded-full font-bold"
-                        style={{ color: tier.color, background: `${tier.color}20`, border: `1px solid ${tier.color}40` }}>
-                        {tier.name === "None" ? "No Tier" : tier.name}
-                      </span>
                       {memberSince && <span className="text-[9px] text-slate-600">since {memberSince}</span>}
                     </div>
                   </div>
@@ -363,115 +319,38 @@ export default function OverviewView({ onSwitchTab }: Props) {
                 </div>
               </div>
 
-              {/* 4 stat chips reading from the unified credit ledger.
-                  BALANCE is the spendable number; ACCRUED, SPENT, STAKED give
-                  enough context to explain where balance came from + USDC
-                  yield is the only thing actually claimable. */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <StatChip
-                  label="BALANCE"
-                  value={ledger ? ledger.balance.toLocaleString() : "—"}
-                  sub="credits · spendable"
-                  color="#4FC3F7" />
-                <StatChip
-                  label="ACCRUED"
-                  value={ledger
-                    ? (ledger.accrued < 1 ? ledger.accrued.toFixed(2) : ledger.accrued.toFixed(0))
-                    : "—"}
-                  sub={`+${Number(dailyCr).toLocaleString()}/day`}
-                  color="#A78BFA" />
-                <StatChip
-                  label="STAKED"
-                  value={hasStake ? fmtBlue(stakedWei) : "0"}
-                  sub={tier.name === "None" ? "BLUE · no tier" : `BLUE · ${tier.name}`}
-                  color={tier.color} />
-                <StatChip
-                  label="USDC YIELD"
-                  value={Number(pendingUsdc) > 0 ? `$${(Number(pendingUsdc) / 1e6).toFixed(4)}` : "—"}
-                  sub={Number(pendingUsdc) > 0 ? "claimable" : "no yield yet"}
-                  color="#22C55E" />
-              </div>
+              {/* ONE credit number, not three.
+                  This cell printed BALANCE / TOP-UP / SPENT — three of the four
+                  headline figures on /app/usage, off the same
+                  /api/credits/balance call, relabelled. Under them ran the line
+                  "{topup} top-up − {spent} spent = {balance} balance", which is
+                  false: that subtraction gives the PAID POOL, and balance is
+                  pool + the day's unspent free allowance. It was short by
+                  dailyRemaining for anyone who hadn't burned through their daily
+                  credits — the common case — so the dashboard's own three
+                  numbers visibly failed to add up.
+                  The arithmetic now lives on the one page that owns it. */}
+              <StatChip
+                label="CREDITS"
+                value={ledger ? ledger.balance.toLocaleString() : "—"}
+                sub={ledger?.dailyRemaining != null
+                  ? `spendable now · ${ledger.dailyRemaining.toLocaleString()} free today`
+                  : "spendable now"}
+                color="#4FC3F7" />
 
-              {/* Ledger breakdown — surfaces the spent + top-up history so the
-                  user understands the BALANCE arithmetic. Only renders once
-                  the ledger has loaded so we don't flash a zero row. */}
-              {ledger && (ledger.spent > 0 || ledger.topup > 0) && (
-                <div className="mt-3 flex items-center gap-2 text-[10px] text-slate-600">
-                  <svg className="w-3 h-3 shrink-0 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                  </svg>
-                  <span>
-                    {ledger.accrued.toFixed(0)} accrued
-                    {ledger.topup > 0  && <> + <span className="text-[#22C55E]">{ledger.topup.toLocaleString()} {ledger.accrued === 0 ? "bonus" : "top-up"}</span></>}
-                    {ledger.spent > 0  && <> − <span className="text-[#A78BFA]">{ledger.spent.toLocaleString()} spent</span></>}
-                    {" "}= <span className="text-slate-400 font-medium">{ledger.balance.toLocaleString()} balance</span>
-                  </span>
-                </div>
-              )}
-              {ledger && ledger.dailyCr !== -1 && ledger.spent === 0 && ledger.topup === 0 && hasStake && (
-                <div className="mt-3 flex items-center gap-2 text-[10px] text-slate-600">
-                  <svg className="w-3 h-3 shrink-0 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                  </svg>
-                  <span>
-                    Credits accrue at{" "}
-                    <span className="text-slate-400 font-medium">{Number(dailyCr).toLocaleString()}/day</span>
-                    {" "}· spend on chat (
-                    <span className="text-slate-500">10–200 cr/msg</span>
-                    ) or tools (
-                    <span className="text-slate-500">100–2000 cr/call</span>
-                    )
-                  </span>
-                </div>
-              )}
+              <div className="mt-3 flex items-center justify-between gap-3 text-[10px]">
+                <span className="text-slate-600 truncate">Top-ups, spend and history</span>
+                <Link href="/app/usage" className="text-[#4FC3F7] hover:underline shrink-0">
+                  Usage →
+                </Link>
+              </div>
             </BentoCell>
 
-            {/* ─── Stake mini (1 col, full height of left) ─────────────── */}
-            <BentoCell flavor="gradient" accent="#4FC3F7" className="p-5 flex flex-col">
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-[10px] text-[#4FC3F7] tracking-widest font-bold">STAKE</div>
-                {hasStake && (
-                  <span className="text-[9px] text-slate-700">{tier.name}</span>
-                )}
-              </div>
-              {hasStake ? (
-                <>
-                  <div className="text-3xl font-bold text-white leading-none mb-1">
-                    {fmtBlue(stakedWei)}
-                    <span className="text-xs text-slate-600 ml-1.5">BLUE</span>
-                  </div>
-                  <div className="text-[11px] text-[#22C55E] mb-4">
-                    +${(Number(pendingUsdc) / 1e6).toFixed(4)} pending USDC
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="text-2xl font-bold text-slate-500 mb-1">No stake</div>
-                  <div className="text-[11px] text-slate-600 mb-4">Earn USDC yield + AI credits</div>
-                </>
-              )}
-              {/* Tier ladder */}
-              <div className="mt-3 mb-3 space-y-1.5">
-                {[
-                  { name: "Starter", min: "500K", color: "#4FC3F7", pct: staked >= 500_000 ? 100 : (staked / 500_000) * 100 },
-                  { name: "Pro",     min: "2M",   color: "#A78BFA", pct: staked >= 2_000_000 ? 100 : staked >= 500_000 ? (staked / 2_000_000) * 100 : 0 },
-                  { name: "Max",     min: "10M",  color: "#F59E0B", pct: staked >= 10_000_000 ? 100 : staked >= 2_000_000 ? (staked / 10_000_000) * 100 : 0 },
-                ].map(t => (
-                  <div key={t.name} className="flex items-center gap-2">
-                    <span className="font-mono text-[9px] w-12 shrink-0" style={{ color: t.pct > 0 ? t.color : "#334155" }}>{t.name}</span>
-                    <div className="flex-1 h-1 rounded-full bg-[#1A1A2E] overflow-hidden">
-                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.max(t.pct, t.pct > 0 ? 4 : 0)}%`, background: t.color, opacity: t.pct > 0 ? 1 : 0.3 }} />
-                    </div>
-                    <span className="font-mono text-[9px] text-slate-700 w-8 text-right shrink-0">{t.min}</span>
-                  </div>
-                ))}
-              </div>
-              <button
-                onClick={() => onSwitchTab?.("stake")}
-                className="mt-auto inline-flex items-center justify-center gap-1.5 text-[11px] font-bold px-3 py-2 rounded-lg bg-[#4FC3F7]/15 text-[#4FC3F7] border border-[#4FC3F7]/40 hover:bg-[#4FC3F7]/20 transition-colors">
-                {hasStake ? "Manage stake" : "Stake now"} →
-              </button>
-            </BentoCell>
+            {/* The STAKE mini-cell stood here — staked total, pending USDC,
+                Starter/Pro/Max ladder and a "Stake now" button into the stake
+                tab. Removed with the $BLUEAGENT relaunch: the ladder promised
+                credits that `lib/credits.ts` no longer grants, and the tab it
+                linked to is gone. */}
 
             {/* ─── Balances row (full width) ───────────────────────────── */}
             <BentoCell className="sm:col-span-3 p-5">
@@ -503,10 +382,11 @@ export default function OverviewView({ onSwitchTab }: Props) {
               <div className="text-[10px] text-slate-500 tracking-widest font-bold mb-3">QUICK ACTIONS</div>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: "Chat",      icon: "💬", href: "/chat",  color: "#4FC3F7" },
-                  { label: "Hub",       icon: "🧰", href: "/hub",   color: "#22C55E" },
-                  { label: "Blue Bank", icon: "🏦", href: "/bank",  color: "#818CF8" },
-                  // Blue Feed hidden while rebuilding — re-add when /feed relaunches.
+                  { label: "Chat",      icon: "💬", href: "/chat",   color: "#4FC3F7" },
+                  { label: "Hub",       icon: "🧰", href: "/hub",    color: "#22C55E" },
+                  // Was "Blue Bank" → /bank, but /bank 301s to /chat (Bank archived in
+                  // the Agent-OS relaunch). Point at the Wallet pillar instead.
+                  { label: "Wallet",    icon: "👛", href: "/wallet", color: "#818CF8" },
                 ].map(a => (
                   <Link key={a.label} href={a.href}
                     className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] hover:border-[#2a2a3e] hover:bg-white/[0.02] transition-all">
@@ -571,7 +451,7 @@ export default function OverviewView({ onSwitchTab }: Props) {
                 <div className="text-center py-5">
                   <div className="text-2xl mb-2">💬</div>
                   <p className="text-sm font-bold text-white mb-1">Start your first chat</p>
-                  <p className="text-[11px] text-slate-600 mb-4">5 commands · 69 tools · 3-agent consensus</p>
+                  <p className="text-[11px] text-slate-600 mb-4">5 commands · pay per call in USDC</p>
                   <Link href="/chat"
                     className="inline-flex items-center justify-center gap-1.5 text-[11px] font-bold px-4 py-2 rounded-lg bg-[#4FC3F7] text-[#050508] hover:bg-[#29ABE2] transition-colors">
                     Open Blue Chat →

@@ -6,11 +6,13 @@ const MAIN_HOST = "blueagent.dev";
 
 // Root routes that legitimately live on the app subdomain even though they're
 // outside the /app/* tree: public links generated with the app origin
-// (/pay from BlueBank, /share from chat) and public embeds (/badge). Everything
-// else outside APP_SEGMENTS is marketing — its canonical home is the main host,
-// so on the app subdomain it 301s to blueagent.dev to avoid duplicate pages
+// (/pay from BlueBank, /share from chat), public embeds (/badge), and the
+// /waitlist gate landing (served on the app host so appWaitlistGate can bounce
+// to it same-origin instead of 301'ing off to marketing). Everything else
+// outside APP_SEGMENTS is marketing — its canonical home is the main host, so on
+// the app subdomain it 301s to blueagent.dev to avoid duplicate pages
 // (e.g. app.blueagent.dev/docs was duplicating blueagent.dev/docs).
-const APP_PUBLIC = new Set(["pay", "share", "badge"]);
+const APP_PUBLIC = new Set(["pay", "share", "badge", "waitlist"]);
 
 // Top-level segments that belong to the in-app surface (src/app/app/*). On the
 // app subdomain these are served from the internal /app/* tree while the URL
@@ -26,7 +28,8 @@ const APP_SEGMENTS = new Set([
   // was removed in AppShell.tsx).
   "chat",
   "dashboard",
-  "feed",
+  // `feed` removed 2026-09-02 — Blue Feed retired. Its pages are deleted and
+  // /feed + /app/feed now 301 to /chat via archivedRedirect above.
   "hood",
   "hub",
   "launches",
@@ -34,32 +37,60 @@ const APP_SEGMENTS = new Set([
   // first-class /app pages, each backed by REAL data (installed skills, the
   // connector store, the wallet's crons, the credit ledger, CREDIT_PACKS).
   // Promotion is one-way: these are NO LONGER chat tabs, so this set is their
-  // only home (see ChatClient's TAB_META + AppSidebar's ACTION_ORDER).
+  // only home (the chat sub-nav has no tabs at all now — see chat/types.ts).
   // `skills` is unambiguous — the marketing SOUL.md page that used to own
   // /skills moved to /soul, and /skills 301s there on the main host.
   "skills",       // installed agent-skills catalog (SkillsPanel)
+  // `models` joined them 2026-09. Picking a model is still a per-conversation
+  // setting (`chatTier` is in-memory ChatContext state), so the page cannot set
+  // it directly — it routes a pick through /chat?preset=<id> instead.
+  //
+  // ⚠️ This segment collides with `public/models/*.svg` (the provider marks).
+  // Both rewrite branches below must skip paths containing a dot, or every
+  // mark 404s. See the guard in the off-prod branch.
+  "models",       // model catalog (ModelsPanel)
   "connectors",   // MCP servers / integrations gallery (ConnectorsPanel)
   "cron",         // the wallet's scheduled tasks (CronPanel)
   "usage",        // credit balance + ledger activity (getBalance)
   "plans",        // pricing comparison → TopUpModal (CREDIT_PACKS)
   "robinhood-router",
-  // `profile`, `rewards`, `terminal` removed 2026-07 (0.1 route
-  // consolidation) — all three now 301 to their canonical home via
-  // culledRedirect() below (profile → dashboard, rewards → dashboard?tab=stake,
-  // terminal → chat), so they intentionally do NOT rewrite into /app/* here.
-  // Their src/app/**/{profile,rewards,terminal} page stubs are kept as dead
-  // code (smaller diff, mirrors the /bank precedent).
+  // `rewards` is BACK in this set as of the stake retirement. It was culled in
+  // 2026-07 and 301'd to `dashboard?tab=stake`; that tab no longer exists, so the
+  // redirect pointed at a query param the dashboard silently ignores. It now
+  // rewrites to /app/rewards — a static tombstone naming the BlueMarketStaking
+  // contract — because the one visitor this URL still has is someone holding a
+  // position who needs the address, and "hide the page" must not mean "strand
+  // the holder". See the main-host /rewards 301 near the bottom of this file.
+  "rewards",
+  // `profile` and `terminal` removed 2026-07 (0.1 route consolidation) — both
+  // 301 to their canonical home via culledRedirect() below (profile →
+  // dashboard, terminal → chat), so they intentionally do NOT rewrite into
+  // /app/* here. Their src/app/**/{profile,terminal} page stubs are kept as
+  // dead code (smaller diff, mirrors the /bank precedent).
+  //
+  // `wallet` SHIPPED (#291) — the "Wallet support" pillar, live (noindex) at
+  // /app/wallet. It reuses the fully-built BlueBank dashboard (real wagmi
+  // balances, DefiLlama yield, Moralis tx, 0x swap, limit orders, Coinbase
+  // on/off-ramp) and has a nav entry in AppShell's AGENT group — it is a real
+  // page now, NOT a "coming soon" placeholder.
+  "wallet",
+  // `signup` is the front door, and it has to be an APP SEGMENT rather than a
+  // root route. On the app host every first segment that is NOT in this set 301s
+  // to the marketing host (see the bottom of the isAppHost branch). A root
+  // /signup would therefore throw a user from app.blueagent.dev to
+  // blueagent.dev in the middle of signing in — and the Privy session is
+  // per-origin, so that hop strands the session the page exists to create.
+  // Its main-host twin 301s the other way, near /hub and /hood below.
+  "signup",
   //
   // Reserved product URLs (0.1) — clean paths that resolve today to an
   // in-shell "coming soon" panel (src/app/app/<seg>/page.tsx, noindex) so the
   // canonical URL is stable before its provider ships:
   //   radar  → WatchlistProvider (drift/arb discovery)
-  //   wallet → WalletProvider (balances, $BLUE tier)
   //   trade  → ExecutionProvider (guarded swap engine; absorbs robinhood-router)
   //   bridge → bridge-flow entry (shares Wallet's bridge component)
   //   tasks  → automation (DCA / TP-SL / recurring via scoped session keys)
   "radar",
-  "wallet",
   "trade",
   "bridge",
   "tasks",
@@ -74,6 +105,13 @@ const APP_SEGMENTS = new Set([
  *     lands the visitor at Blue Chat instead of a 404.
  * Runs BEFORE host-specific rewrites so the semantic is identical on
  * blueagent.dev and app.blueagent.dev.
+ *
+ * Blue Feed joined this list when it was retired (2026-09-02). Its pages used
+ * to answer 404 while "parked for a rebuild"; the rebuild is cancelled, so the
+ * parked-404 becomes a permanent 301 like every other cull. This matters more
+ * than for a normal dead route: the feed published its own share links to X
+ * (app.blueagent.dev/feed/<id> from the card UI, blueagent.dev/app/feed in the
+ * tweet text), so those URLs are in the wild and outlive the product.
  */
 function archivedRedirect(pathname: string, search: string): NextResponse | null {
   const isBank =
@@ -81,7 +119,10 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
     pathname === "/app/bank" || pathname.startsWith("/app/bank/");
   const isPay =
     pathname === "/pay" || pathname.startsWith("/pay/");
-  if (!isBank && !isPay) return null;
+  const isFeed =
+    pathname === "/feed" || pathname.startsWith("/feed/") ||
+    pathname === "/app/feed" || pathname.startsWith("/app/feed/");
+  if (!isBank && !isPay && !isFeed) return null;
   return NextResponse.redirect(
     `https://${APP_HOST}/chat${search}`,
     { status: 301 },
@@ -99,12 +140,19 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
  *   /micro[/…]    → app Hub                (micro-apps were the ancestors of Hub tools)
  *   /terminal[/…] → Blue Chat              (the browser terminal folded into /chat)
  *   /profile[/…]  → app dashboard          (self-management folded into the dashboard)
- *   /rewards[/…]  → dashboard?tab=stake    (staking is the dashboard's Stake tab)
  *
- * profile + rewards used to 307 from a page-level redirect() (temporary, and a
- * 2-hop chain through /app/dashboard). Handling them here makes them a single
- * permanent 301 straight to the app host — the "every cull = 301, collapse the
- * double-hop" contract of 0.1.
+ * profile used to 307 from a page-level redirect() (temporary, and a 2-hop chain
+ * through /app/dashboard). Handling it here makes it a single permanent 301
+ * straight to the app host — the "every cull = 301, collapse the double-hop"
+ * contract of 0.1.
+ *
+ * /rewards LEFT this list with the stake retirement. It used to 301 to
+ * `dashboard?tab=stake`, and when the Stake tab was deleted that target became a
+ * lie — the dashboard drops the unknown param and shows the overview, so a
+ * staker following an old link got no signal that anything had changed. It is an
+ * APP_SEGMENT again now, rewriting to the /app/rewards tombstone. It must NOT be
+ * handled here: culledRedirect runs on every host, so a /rewards branch pointing
+ * at the app host would redirect the app host to itself, forever.
  */
 function culledRedirect(pathname: string): NextResponse | null {
   if (pathname === "/code" || pathname.startsWith("/code/")) {
@@ -118,9 +166,6 @@ function culledRedirect(pathname: string): NextResponse | null {
   }
   if (pathname === "/profile" || pathname.startsWith("/profile/")) {
     return NextResponse.redirect(`https://${APP_HOST}/dashboard`, { status: 301 });
-  }
-  if (pathname === "/rewards" || pathname.startsWith("/rewards/")) {
-    return NextResponse.redirect(`https://${APP_HOST}/dashboard?tab=stake`, { status: 301 });
   }
   return null;
 }
@@ -162,6 +207,80 @@ function bankGate(
   }
   // Unlocked — fall through to the app.
   return null;
+}
+
+// Public product surfaces that stay open even when the waitlist gate is armed:
+// Blue Chat (also the farcaster / Base-App deep-link target, homeUrl=/app/chat),
+// Blue Hood (public track record), Blue Hub (builder marketplace + publish
+// flow) and Wallet. Everything else in APP_SEGMENTS is the private workspace
+// and is walled.
+//
+// `wallet` joined the list when the spend console shipped, and it is a fix, not
+// an expansion: the product is named as four things — Chat / Hood / Hub /
+// Wallet — while this set shipped three, so the fourth pillar 307'd to the
+// waitlist for everyone including the users whose USDC it accounts for. It is
+// also the surface that makes the other three legible ("what did that tool call
+// actually cost me"), which is worth nothing behind a gate.
+//
+// Nothing here is private-by-address: /api/wallet/spend, /api/wallet/spend-
+// summary and /api/credits/balance/[address] are all unauthenticated GETs
+// already, so this opens a page, not a dataset. If those should be gated, they
+// get gated together behind one signature check — see the header of
+// lib/wallet/spend-log.ts — not by leaving the page walled and calling it
+// privacy.
+//
+// `signup` is exempt for a narrower reason: walling it would not stop a single
+// sign-in. The account control in the sidebar opens the same Privy modal from
+// /chat, /hood, /hub and /wallet, all of which are already public here — so
+// gating the page would only break the one honest, linkable URL for the thing
+// while leaving the button beside it working. A gate that blocks the door but
+// not the window is not a gate; it is a bug report waiting to happen.
+const WAITLIST_EXEMPT = new Set(["chat", "hood", "hub", "wallet", "signup"]);
+
+/**
+ * BlueAgent Agent-OS waitlist gate. OFF by default — arms only when
+ * `APP_WAITLIST=1`, so merging this changes nothing live until the flag is
+ * flipped. When armed it walls the private in-app workspace behind /waitlist,
+ * while WAITLIST_EXEMPT surfaces (Chat/Hood/Hub) and the farcaster deep-link
+ * stay public. `?key=<APP_WAITLIST_TOKEN>` on any in-app path drops a 30-day
+ * unlock cookie (same shape as bankGate) so the team + invited testers pass.
+ * Only ever fires on in-app segments; static files, /api and marketing routes
+ * (firstSeg not in APP_SEGMENTS) fall straight through, so /waitlist itself
+ * never loops.
+ */
+function appWaitlistGate(request: NextRequest, firstSeg: string): NextResponse | null {
+  if (process.env.APP_WAITLIST !== "1") return null; // flag off → inert
+  if (!APP_SEGMENTS.has(firstSeg)) return null;      // only gate in-app segments
+
+  const token = process.env.APP_WAITLIST_TOKEN;
+  const COOKIE = "app_waitlist";
+
+  // Valid ?key=<token> on ANY in-app path (incl. exempt ones like /chat) → drop
+  // the unlock cookie, bounce to the clean URL. Checked before the exempt short-
+  // circuit so the waitlist page's "Have a code?" → /chat?key=… works.
+  const queryKey = request.nextUrl.searchParams.get("key");
+  if (token && queryKey && queryKey === token) {
+    const clean = request.nextUrl.clone();
+    clean.searchParams.delete("key");
+    const res = NextResponse.redirect(clean);
+    res.cookies.set(COOKIE, token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+    });
+    return res;
+  }
+
+  if (WAITLIST_EXEMPT.has(firstSeg)) return null; // public surfaces stay open
+  const unlocked = !!token && request.cookies.get(COOKIE)?.value === token;
+  if (unlocked) return null; // invited → pass
+
+  // Not invited → the waitlist. 307 (temporary) so flipping the flag off later
+  // isn't defeated by a cached permanent redirect. Same-origin URL resolves to
+  // app.blueagent.dev/waitlist on prod and /waitlist on localhost/preview.
+  return NextResponse.redirect(new URL("/waitlist", request.url), { status: 307 });
 }
 
 export function middleware(request: NextRequest) {
@@ -214,9 +333,19 @@ export function middleware(request: NextRequest) {
     // segment above fixes both hosts at once. /skills is unambiguous now that
     // the marketing page moved to /soul.
     //
-    // API routes, framework internals and static files are never rewritten:
-    // their first segment isn't in APP_SEGMENTS, so they fall through.
-    if (APP_SEGMENTS.has(firstSeg)) {
+    // API routes and framework internals fall through on their own — their
+    // first segment isn't in APP_SEGMENTS. Static files under public/ do NOT:
+    // this matcher covers them, and `public/models/*.svg` (the provider marks)
+    // sits under the `models` app segment. So skip anything with a dot, the
+    // same guard the app-host branch below already applies. Without it every
+    // provider mark 404s on localhost and on every Vercel preview URL.
+    //
+    // Waitlist gate (env-flagged; see appWaitlistGate). Runs before the rewrite
+    // so a gated segment bounces to /waitlist instead of rendering.
+    const wl = appWaitlistGate(request, firstSeg);
+    if (wl) return wl;
+
+    if (APP_SEGMENTS.has(firstSeg) && !pathname.includes(".")) {
       const url = request.nextUrl.clone();
       url.pathname = `/app${pathname}`;
       return NextResponse.rewrite(url);
@@ -253,6 +382,11 @@ export function middleware(request: NextRequest) {
       pathname.startsWith("/pay/");
     const gate = bankGate(request, isBankSurface, "/bank/access");
     if (gate) return gate;
+
+    // Waitlist gate — walls the private workspace when APP_WAITLIST=1; Chat,
+    // Hood, Hub (WAITLIST_EXEMPT) stay open, as does the ?key unlock path.
+    const wl = appWaitlistGate(request, firstSeg);
+    if (wl) return wl;
 
     // Root of the app host → Blue Chat (product home). Rewrite straight to
     // /app/chat so the URL stays "/" with no redirect hop through /app.
@@ -331,6 +465,29 @@ export function middleware(request: NextRequest) {
   if (pathname === "/hood" || pathname.startsWith("/hood/")) {
     return NextResponse.redirect(
       `https://${APP_HOST}${pathname}${request.nextUrl.search}`,
+      { status: 301 },
+    );
+  }
+
+  // /signup → the app host, where APP_SEGMENTS rewrites it into /app/signup.
+  // Same shape as /hub and /hood above, and it is not optional: /signup is a URL
+  // people TYPE and paste, and without this branch blueagent.dev/signup falls
+  // through to `NextResponse.next()` and 404s, because the page only exists in
+  // the /app tree. Exact match only — the sign-up page has no sub-paths.
+  if (pathname === "/signup") {
+    return NextResponse.redirect(
+      `https://${APP_HOST}/signup`,
+      { status: 301 },
+    );
+  }
+
+  // /rewards → the app host, where APP_SEGMENTS rewrites it into the
+  // /app/rewards stake tombstone. Same shape as /hub and /hood above. This
+  // replaces the old culledRedirect hop to `dashboard?tab=stake`, whose target
+  // stopped existing when the Stake tab was retired.
+  if (pathname === "/rewards" || pathname.startsWith("/rewards/")) {
+    return NextResponse.redirect(
+      `https://${APP_HOST}/rewards`,
       { status: 301 },
     );
   }

@@ -13,6 +13,7 @@ import {
 } from "wagmi";
 import { formatUnits, isAddress } from "viem";
 import { ConnectButton } from "@/components/ConnectModal";
+import { TokenGlyph, AddrGlyph, ConfirmPreview, resolveQuantity } from "./ConfirmCardParts";
 
 const RH_CHAIN_ID = 4663;
 const RH_EXPLORER = "https://robinhoodchain.blockscout.com";
@@ -115,8 +116,21 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
   const balance  = isNative
     ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
     : (erc20Bal != null ? Number(formatUnits(erc20Bal as bigint, decimals)) : null);
-  const amtNum   = parseFloat(initialAmt);
-  const overBalance = balance != null && Number.isFinite(amtNum) && amtNum > balance;
+
+  // The amount may be a quantity word ("all"/"max"/"half"/"N%") — resolve it
+  // against the balance we just read (#138). Native ETH keeps a small gas
+  // reserve; ERC-20 uses the full balance (gas is paid in ETH, separately).
+  // While a word is still resolving (balance loading) `amount` is "" and we
+  // WAIT rather than firing prepare with an unresolvable value.
+  const q = resolveQuantity(initialAmt, balance, { isNative });
+  // Non-symbolic → the LLM's exact string (the server's amount regex rejects an
+  // exponential re-format like "1e-7", so never round-trip a plain number). The
+  // send-prepare route converts to base units with the token's own decimals.
+  const amount = q.symbolic ? (q.value != null ? String(q.value) : "") : initialAmt;
+  const amtDisplay = q.value != null
+    ? fmtAmount(q.value)
+    : (q.symbolic ? "…" : fmtAmount(initialAmt));
+  const overBalance = balance != null && q.value != null && q.value > balance;
 
   // Kick off the prepare fetch on mount. We only re-run when the incoming
   // marker changes, not on every render — the LLM emits the result once per
@@ -124,9 +138,16 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
   useEffect(() => {
     let cancelled = false;
     async function run() {
-      if (!fromAddress || !toAddress || !token || !initialAmt) {
+      if (!fromAddress || !toAddress || !token) {
         setLoading(false);
-        setPrepErr("Missing required field — need from, to, token, and amount.");
+        setPrepErr("Missing required field — need from, to, and token.");
+        return;
+      }
+      if (!amount) {
+        // A quantity word ("all"/"max"/…) that hasn't resolved yet because the
+        // balance is still loading — wait (keep the spinner), don't error.
+        setLoading(true);
+        setPrepErr("");
         return;
       }
       setLoading(true);
@@ -137,7 +158,7 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             fromAddress, toAddress, token,
-            amount: String(initialAmt),
+            amount: String(amount),
           }),
         });
         const j = (await r.json()) as PrepareResponse;
@@ -155,7 +176,7 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
     }
     void run();
     return () => { cancelled = true; };
-  }, [fromAddress, toAddress, token, initialAmt]);
+  }, [fromAddress, toAddress, token, amount]);
 
   // Watch the tx until the RPC returns a receipt. `isSuccess` flips to true
   // once mined; we transition the card to the final state at that point.
@@ -223,12 +244,15 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
   return (
     <div className="rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 font-mono text-[11px] text-slate-300 max-w-md">
       <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-white text-[12px] font-bold">
-            Send {fmtAmount(initialAmt)} {symbol} on Robinhood Chain
-          </div>
-          <div className="text-slate-600 text-[10px]">
-            direct transfer · you sign · non-custodial · chainId 4663
+        <div className="flex items-center gap-2 min-w-0">
+          <TokenGlyph symbol={symbol} />
+          <div className="min-w-0">
+            <div className="text-white text-[12px] font-bold truncate">
+              Send {amtDisplay} {symbol}
+            </div>
+            <div className="text-slate-600 text-[10px]">
+              Robinhood Chain · you sign · non-custodial · 4663
+            </div>
           </div>
         </div>
         {!isConnected && <ConnectButton label="Connect" />}
@@ -237,7 +261,7 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
       {step === "mined" ? (
         <div className="rounded-lg border p-3" style={{ borderColor: "#34D39940", background: "#34D39908" }}>
           <div className="font-bold mb-1" style={{ color: "#34D399" }}>
-            Sent {fmtAmount(initialAmt)} {symbol} to {shortTo}
+            Sent {amtDisplay} {symbol} to {shortTo}
           </div>
           {txHash && (
             <a href={`${RH_EXPLORER}/tx/${txHash}`} target="_blank" rel="noopener noreferrer"
@@ -248,35 +272,34 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
         </div>
       ) : (
         <>
-          {/* Preview: from → to */}
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[9px] text-slate-600">FROM</span>
-              {balance != null && (
-                <span className="text-[9px] text-slate-600">
-                  Bal {balance.toFixed(5)} {symbol}
-                </span>
-              )}
+          {/* Confirm-only preview: amount → recipient. No editable field (#107). */}
+          <ConfirmPreview
+            left={{
+              glyph: <TokenGlyph symbol={symbol} />,
+              top: amtDisplay || "0.0",
+              bottom: symbol,
+            }}
+            right={{
+              glyph: <AddrGlyph address={toAddress} />,
+              top: shortTo || "—",
+              bottom: "recipient",
+            }}
+          />
+
+          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to. */}
+          {q.symbolic && (
+            <div className="text-[9px] text-[#34D399] mb-2">
+              {q.value != null ? `${q.word} → ${fmtAmount(q.value)} ${symbol}` : "Resolving your balance…"}
             </div>
-            <div className="text-[12px] text-white truncate">{fromAddress ? shortAddr(fromAddress) : "—"}</div>
-          </div>
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="text-[9px] text-slate-600 mb-1">TO</div>
-            <div className="text-[12px] text-white truncate">{shortTo || "—"}</div>
-          </div>
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="text-[9px] text-slate-600 mb-1">AMOUNT</div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 text-[15px] text-white w-0 truncate">
-                {fmtAmount(initialAmt) || <span className="text-slate-700">0.0</span>}
-              </div>
-              <span className="text-[10px] text-slate-200 px-2 py-1 border border-[#1A1A2E] rounded-lg">{symbol}</span>
-            </div>
-            {overBalance && (
-              <div className="text-[9px] text-red-500 mt-1">Exceeds your {symbol} balance</div>
-            )}
+          )}
+
+          {/* Small meta: sender + balance. */}
+          <div className="text-[9px] text-slate-500 mb-2 flex items-center justify-between gap-2">
+            <span className="truncate">From {fromAddress ? shortAddr(fromAddress) : "—"}</span>
+            {balance != null && <span className="shrink-0">Bal {balance.toFixed(5)} {symbol}</span>}
           </div>
 
+          {overBalance && <p className="text-[10px] text-red-500 mb-2">Exceeds your {symbol} balance</p>}
           {loading && <p className="text-[9px] text-slate-600 mb-2">Preparing transaction…</p>}
           {!loading && prepErr && <p className="text-[10px] text-amber-400 mb-2">{prepErr}</p>}
           {step === "broadcasting" && (
@@ -297,7 +320,7 @@ export function RobinhoodSendCard({ result }: { result: RobinhoodSendResult }) {
                     ? (step === "signing" ? "Confirm in wallet…" : "Broadcasting…")
                     : overBalance
                       ? "Insufficient balance"
-                      : `Sign & Send ${fmtAmount(initialAmt)} ${symbol}`}
+                      : `Confirm · Send ${amtDisplay} ${symbol}`}
           </button>
         </>
       )}

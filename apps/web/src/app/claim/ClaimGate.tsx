@@ -43,9 +43,10 @@
  * root layout wraps every page in the wagmi providers, so /pledge, /about and
  * everything else already carry the connector chunks. The achievable and
  * asserted property is therefore that /claim ships nothing beyond that
- * site-wide floor — no claim surface, and the same client bundle weight as
- * /pledge. `scripts/claim-bundle-test.ts` measures exactly that, differentially
- * against /pledge, so it stays honest if the layout is ever slimmed down.
+ * site-wide floor — no claim surface, and the same client bundle weight as an
+ * ordinary page. `scripts/claim-bundle-test.ts` measures exactly that,
+ * differentially against the first prerendered page on the root layout, so it
+ * stays honest if the layout is ever slimmed down.
  *
  * ─── Build-time, not runtime ────────────────────────────────────────────────
  *

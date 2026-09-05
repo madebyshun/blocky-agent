@@ -1,17 +1,27 @@
 /**
  * Credit ledger — Phase 1 source of truth for spendable credits.
  *
- * Two-source model:
+ * Two-source model, now effectively one:
  *
- *   - On-chain ACCRUED  (BlueMarketStaking.totalCreditsAccrued)
- *       Read-only counter that increases with stake size × time.
- *       Never deducted on-chain.
+ *   - On-chain ACCRUED  — DEAD. Once read BlueMarketStaking.totalCreditsAccrued,
+ *       a counter that grew with stake size × time. The token-free rebuild
+ *       stopped honouring it and `readAccruedCredits()` has returned a hard 0
+ *       ever since; the stake surface that advertised it is now retired too.
+ *       The term is still threaded through the arithmetic below so the payload
+ *       shape stays stable for existing clients — it just always adds zero.
  *
  *   - Off-chain SPENT   (this file, backed by Upstash KV)
  *       Increases when the user runs a chat message or tool call.
  *       Increases (negatively) when the user tops up with USDC.
  *
- *   balance = max(0, accrued + topup_credits - spent)
+ *   pool    = max(0, accrued + topup_credits - spent)
+ *   balance = pool + dailyRemaining
+ *
+ * Note the second line. This header used to stop at the first and call it
+ * `balance`, and the dashboard printed exactly that — "topup − spent =
+ * balance" — which is short by the day's unspent free allowance, i.e. wrong
+ * for every user who hasn't burned through it. A wallet's spendable total is
+ * both buckets; the pool alone is only the paid one.
  *
  * The contract stays untouched: we don't need it to know about spending or
  * top-ups while we're still bootstrapping. If/when this hits real volume,
@@ -55,17 +65,64 @@ interface LedgerRow {
   history: LedgerEvent[];
   dailyDay?:   string;  // UTC day key of the current daily-allowance window
   dailySpent?: number;  // credits spent from the daily tier allowance today
+
+  /**
+   * Credits drained from the FREE daily bucket, cumulative across every day.
+   *
+   * `spent` deliberately counts only the overflow that hit the paid pool,
+   * because that is the term the pool arithmetic subtracts. Which means it is
+   * not, and never was, "how much has this wallet used": a wallet that never
+   * tops up drains the daily bucket every day and reports `spent: 0` for ever.
+   * Two surfaces printed that zero under the label "chat + tool runs".
+   *
+   * `undefined` means NOT MEASURED, not zero — see `freeSpentPartial`.
+   */
+  freeSpent?: number;
+
+  /**
+   * True when the count above started mid-life, on a row that already existed
+   * before this field did. Those rows cannot be backfilled — the free spend
+   * that happened before the first write is simply not recorded anywhere — so
+   * the number is a FLOOR and any surface printing it has to say so rather
+   * than round the unknown down to a confident total.
+   */
+  freeSpentPartial?: boolean;
 }
 
 export interface LedgerEvent {
   ts:        number;            // ms epoch
-  kind:      "spend" | "topup";
+  kind:      "spend" | "topup" | "refund";
   amount:    number;            // credits (positive)
   reason:    string;            // human label: "chat:pro", "tool:honeypot-check", "topup:big"
   ref?:      string;            // optional ref (tx hash, message id, etc.)
+
+  /**
+   * Which bucket(s) a SPEND actually came out of. Recorded because the two
+   * buckets are not interchangeable: the daily allowance expires at UTC
+   * midnight, the pool is money the user paid for. A refund that can't tell
+   * them apart either destroys a paid credit or mints a permanent one out of
+   * an expiring one — see `refund()`.
+   *
+   * `undefined` on any event written before this field existed. That means
+   * NOT RECORDED, and `refund()` refuses those rather than guessing a split.
+   */
+  fromDaily?: number;
+  fromPool?:  number;
+  /** UTC day key the `fromDaily` portion was taken from (`YYYY-MM-DD`). */
+  day?:       string;
+
+  /** On a REFUND event: the `ref` of the spend it reverses. */
+  refundOf?:  string;
 }
 
 const key = (addr: string) => `ledger:${addr.toLowerCase()}`;
+
+/**
+ * A wallet with no row has provably spent nothing — including out of the free
+ * bucket — so `freeSpent` starts at an EXACT 0 here, with no partial flag. The
+ * flag is for rows that predate the field, where 0 would be a guess.
+ */
+const emptyRow = (): LedgerRow => ({ spent: 0, topup: 0, freeSpent: 0, history: [] });
 
 /**
  * Read a wallet's row.
@@ -83,14 +140,27 @@ async function loadLedger(addr: string): Promise<LedgerRow> {
     (err as { code?: string }).code = "LEDGER_UNAVAILABLE";
     throw err;
   }
-  if (probe.status === "miss") return { spent: 0, topup: 0, history: [] };
+  if (probe.status === "miss") return emptyRow();
 
   const row = probe.value;
   if (typeof row === "string") {
-    try { return JSON.parse(row) as LedgerRow; } catch { return { spent: 0, topup: 0, history: [] }; }
+    // Unparseable row: everything in it is lost, so the zeros below are a
+    // fresh start rather than a reading. Flagged partial for the same reason —
+    // whatever this wallet had spent is now unmeasurable, not zero.
+    try { return JSON.parse(row) as LedgerRow; }
+    catch { return { ...emptyRow(), freeSpentPartial: true }; }
   }
   return row;
 }
+
+/**
+ * How many ledger events one wallet's row keeps. Exported because any surface
+ * that BREAKS DOWN this history — per tool, per day — is summarising a window,
+ * not a lifetime, and has to say so. A reader that hand-types `50` to decide
+ * whether to print that caveat is one edit away from printing a total it calls
+ * "all-time" over a silently-truncated list.
+ */
+export const HISTORY_CAP = 50;
 
 /**
  * Persist a wallet's row. Throws if the write didn't land — see `kvSetOrThrow`.
@@ -98,8 +168,8 @@ async function loadLedger(addr: string): Promise<LedgerRow> {
  * one place we want the caller to hear about a KV failure.
  */
 async function saveLedger(addr: string, row: LedgerRow): Promise<void> {
-  // Cap history at last 50 events so the row never grows unbounded.
-  if (row.history.length > 50) row.history = row.history.slice(-50);
+  // Cap history so the row never grows unbounded.
+  if (row.history.length > HISTORY_CAP) row.history = row.history.slice(-HISTORY_CAP);
   await kvSetOrThrow(key(addr), JSON.stringify(row));
 }
 
@@ -195,6 +265,16 @@ export async function getLedgerActivity(): Promise<LedgerActivity> {
         creditsSpent += e.amount || 0;
         if (typeof e.reason === "string" && e.reason.startsWith("chat:")) chatMessages += 1;
       }
+      // Net out reversals. A refunded chat turn is one the model never produced
+      // (#193) — counting it inflates "messages" with failures and "credits
+      // spent" with credits the user got back. Subtract what was RETURNED, not
+      // the original amount: a refund whose daily half had already expired only
+      // gave back the pool half, and the rest really was spent.
+      for (const e of row.history) {
+        if (e.kind !== "refund") continue;
+        creditsSpent -= e.amount || 0;
+        if (typeof e.reason === "string" && e.reason.startsWith("chat:")) chatMessages -= 1;
+      }
     }
     return { activeUsers, creditsSpent, chatMessages };
   } catch {
@@ -213,7 +293,51 @@ export interface BalanceSummary {
   pool?:           number;  // cumulative bucket: max(0, accrued + topup - spent)
   dailyCr?:        number;  // tier daily allowance (finite for every tier)
   dailyRemaining?: number;  // tier allowance left today
+
+  /** Credits taken out of the FREE daily bucket, cumulative across days.
+   *  `undefined` ⇒ never measured for this wallet. Do not render it as 0:
+   *  "we didn't count" and "they spent nothing" are different answers. */
+  freeSpent?:        number;
+  /** true ⇒ counting began mid-life, so `freeSpent` is a floor, not a total. */
+  freeSpentPartial?: boolean;
+
   recent:   LedgerEvent[];  // last few events
+}
+
+/**
+ * The one place a row becomes a `BalanceSummary`.
+ *
+ * `getBalance`, `spend` and `topup` each used to assemble this object by hand,
+ * and they had drifted apart exactly where it costs money: `topup` returned no
+ * `pool` field at all (so `/api/credits/purchase` read `summary.pool` as
+ * `undefined`) and computed `balance` as the pool alone, without the day's
+ * unspent allowance — showing a user who had just paid LESS than they held.
+ * Three hand-written literals is three chances to disagree; one builder is one
+ * answer.
+ */
+function summarize(
+  addr:    string,
+  accrued: number,
+  dailyCr: number,
+  ledger:  LedgerRow,
+): BalanceSummary {
+  const pool           = Math.max(0, accrued + ledger.topup - ledger.spent);
+  const dailySpent     = ledger.dailyDay === utcDay() ? (ledger.dailySpent ?? 0) : 0;
+  const dailyRemaining = Math.max(0, dailyCr - dailySpent);
+
+  return {
+    address: addr,
+    accrued,
+    topup:   ledger.topup,
+    spent:   ledger.spent,
+    pool,
+    dailyCr,
+    dailyRemaining,
+    balance: pool + dailyRemaining,
+    freeSpent:        ledger.freeSpent,
+    freeSpentPartial: ledger.freeSpentPartial,
+    recent:  ledger.history.slice(-10).reverse(),
+  };
 }
 
 /**
@@ -232,24 +356,58 @@ export async function getBalance(address: string): Promise<BalanceSummary> {
   ]);
 
   const dailyCr = getTierInfo(blueBalance).dailyCr;   // finite for every tier
-  const pool    = Math.max(0, accrued + ledger.topup - ledger.spent);
+  return summarize(addr, accrued, dailyCr, ledger);
+}
 
-  const dailySpent     = ledger.dailyDay === utcDay() ? (ledger.dailySpent ?? 0) : 0;
-  const dailyRemaining = Math.max(0, dailyCr - dailySpent);
+/** A wallet's recorded credit history, for surfaces that break it down. */
+export interface LedgerHistory {
+  /** Up to HISTORY_CAP events, oldest first (the order they were written). */
+  history: LedgerEvent[];
+  /**
+   * Cumulative credits drained from the PAID pool, all-time. This is the only
+   * figure here that survives the history cap, because `spend()` accumulates it
+   * on the row instead of deriving it from the event list.
+   */
+  spentFromPool: number;
+  /**
+   * True when the event list is at the cap and therefore probably truncated —
+   * i.e. any per-tool or per-day breakdown built from it is a floor, not a total.
+   */
+  truncated: boolean;
+}
 
-  const balance = pool + dailyRemaining;
-
-  return {
-    address: addr,
-    accrued,
-    topup:   ledger.topup,
-    spent:   ledger.spent,
-    pool,
-    dailyCr,
-    dailyRemaining,
-    balance,
-    recent:  ledger.history.slice(-10).reverse(),
-  };
+/**
+ * Read a wallet's credit history WITHOUT touching the row.
+ *
+ * Split out from `getBalance` on purpose: that one also does a tier lookup and
+ * returns only the last 10 events, which is right for a balance widget and
+ * useless for a breakdown. This returns the whole recorded window and nothing
+ * else, so a spend console can group it.
+ *
+ * `null` means WE DO NOT KNOW — `loadLedger` throws `LEDGER_UNAVAILABLE` when KV
+ * errors, and that is deliberately NOT flattened into an empty history here. A
+ * console that renders a KV outage as "you have spent nothing" tells a paying
+ * user a falsehood about their own money; the caller must render the two apart.
+ *
+ * ⚠ What this CANNOT tell you: how much of any single event was real money.
+ * `spend()` drains the free daily allowance first and only the overflow hits the
+ * paid pool, but `history` records the event's TOTAL and never the split. So a
+ * 50-credit event may have cost the user nothing. Per-event credits→USD is not
+ * derivable from this data and must not be printed; `spentFromPool` is the only
+ * honest dollar-convertible figure, and only in aggregate.
+ */
+export async function getLedgerHistory(address: string): Promise<LedgerHistory | null> {
+  try {
+    const ledger = await loadLedger(address.toLowerCase());
+    const history = Array.isArray(ledger.history) ? ledger.history : [];
+    return {
+      history,
+      spentFromPool: ledger.spent ?? 0,
+      truncated: history.length >= HISTORY_CAP,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -293,23 +451,148 @@ export async function spend(
     const fromDaily = Math.min(amount, dailyRemaining);
     dailySpent += fromDaily;
     ledger.spent += amount - fromDaily;   // overflow hits the cumulative pool
+
+    // …and count the free half too. `spent` alone is the paid half, which is
+    // the right input for the pool arithmetic and the wrong number to label
+    // "chat + tool runs": a wallet living inside its daily allowance never
+    // touches it. A row that predates this counter can't be backfilled, so it
+    // says so instead of pretending the missing days were free of charge.
+    if (ledger.freeSpent === undefined) ledger.freeSpentPartial = true;
+    ledger.freeSpent = (ledger.freeSpent ?? 0) + fromDaily;
+
     ledger.dailyDay   = today;
     ledger.dailySpent = dailySpent;
-    ledger.history.push({ ts: Date.now(), kind: "spend", amount, reason, ref });
+    // Record WHICH bucket paid, not just the total. `refund()` is the only
+    // reader and it cannot reconstruct this afterwards: by the time a refund
+    // fires, `dailySpent` has moved on and the UTC day may have rolled.
+    ledger.history.push({
+      ts: Date.now(), kind: "spend", amount, reason, ref,
+      fromDaily: fromDaily, fromPool: amount - fromDaily, day: today,
+    });
     await saveLedger(addr, ledger);
 
-    const newPool  = Math.max(0, accrued + ledger.topup - ledger.spent);
-    const newDaily = Math.max(0, dailyCr - dailySpent);
+    // `ledger` now carries the post-debit dailyDay/dailySpent, so the shared
+    // builder recomputes the same numbers this block just wrote.
+    return summarize(addr, accrued, dailyCr, ledger);
+  });
+}
+
+/** Outcome of a `refund()` attempt. Every branch is a distinct fact. */
+export interface RefundResult {
+  status:
+    | "refunded"      // credits returned (possibly only the pool half — see `expired`)
+    | "not-found"     // no spend event carries that ref (nothing was charged)
+    | "already"       // this ref was already refunded; no-op, safe to retry
+    | "unsplittable"; // pre-split event: we don't know which bucket paid, so we refuse
+  /** Credits actually returned to a bucket. 0 for every non-"refunded" status. */
+  returned:      number;
+  returnedDaily: number;
+  returnedPool:  number;
+  /**
+   * Daily-allowance credits that could NOT be returned because their UTC day
+   * has ended. They are gone by design, not by bug — see the comment in the
+   * body. The user still paid them; this is the honest count of that.
+   */
+  expiredDaily:  number;
+  balance?:      BalanceSummary;
+}
+
+/**
+ * Reverse ONE recorded spend, identified by its `ref`.
+ *
+ * Exists because `/api/chat` debits BEFORE calling the model (the right shape —
+ * it stops a failed call from serving free compute) and had no way back when the
+ * upstream then returned nothing. Over a gateway outage that quietly drained
+ * every user's allowance in exchange for an error string (#193).
+ *
+ * Three properties this deliberately has, each of which is the reason for a
+ * chunk of the code below:
+ *
+ * 1. **A caller cannot invent an amount.** There is no `amount` parameter. The
+ *    figure comes from the recorded spend event, so the worst a compromised
+ *    internal caller can do is un-charge a real debit that already happened. It
+ *    can never mint credits.
+ * 2. **It is idempotent.** A second call with the same ref is a no-op
+ *    (`already`), so a retried request or a double-fired failure path can't pay
+ *    the user twice.
+ * 3. **Credits go back to the bucket they came from.** The daily allowance is
+ *    use-it-or-lose-it; the pool is money. Returning a daily credit into the
+ *    pool would silently convert an expiring credit into a permanent one — a
+ *    slow mint, one failed message at a time. So the daily half is only
+ *    returned while its own UTC day is still running, and is otherwise reported
+ *    as `expiredDaily` rather than quietly re-homed.
+ */
+export async function refund(address: string, ref: string): Promise<RefundResult> {
+  const nil = (status: RefundResult["status"]): RefundResult => ({
+    status, returned: 0, returnedDaily: 0, returnedPool: 0, expiredDaily: 0,
+  });
+  if (!ref) return nil("not-found");
+  const addr = address.toLowerCase();
+
+  const [accrued, blueBalance] = await Promise.all([
+    readAccruedCredits(addr),
+    fetchBlueBalance(addr),
+  ]);
+  const dailyCr = getTierInfo(blueBalance).dailyCr;
+
+  return withLedgerLock(addr, async () => {
+    const ledger = await loadLedger(addr);
+
+    // Idempotency first: an already-refunded ref must not be re-read as a fresh
+    // spend. Checked before the spend lookup so the answer doesn't depend on
+    // whether the original event has since been pushed out by the history cap.
+    if (ledger.history.some((e) => e.kind === "refund" && e.refundOf === ref)) {
+      return { ...nil("already"), balance: summarize(addr, accrued, dailyCr, ledger) };
+    }
+
+    const ev = ledger.history.find((e) => e.kind === "spend" && e.ref === ref);
+    if (!ev) return { ...nil("not-found"), balance: summarize(addr, accrued, dailyCr, ledger) };
+
+    // An event from before the split was recorded. We know the total but not
+    // which bucket paid it, and both wrong answers cost someone real credits.
+    // "Cannot assess" is the correct output here, not a 50/50 guess.
+    if (typeof ev.fromDaily !== "number" || typeof ev.fromPool !== "number") {
+      return { ...nil("unsplittable"), balance: summarize(addr, accrued, dailyCr, ledger) };
+    }
+
+    const today = utcDay();
+    // The daily half is returnable only if BOTH the event's day and the row's
+    // current window are still today. If the day rolled over, that allowance
+    // has already been re-granted fresh; handing it back now would be a second
+    // grant on top.
+    const dayStillOpen  = ev.day === today && ledger.dailyDay === today;
+    const returnedDaily = dayStillOpen
+      ? Math.min(ev.fromDaily, ledger.dailySpent ?? 0)
+      : 0;
+    const expiredDaily  = ev.fromDaily - returnedDaily;
+    const returnedPool  = Math.min(ev.fromPool, ledger.spent);
+
+    ledger.dailySpent = Math.max(0, (ledger.dailySpent ?? 0) - returnedDaily);
+    ledger.spent      = Math.max(0, ledger.spent - returnedPool);
+    // `freeSpent` counts lifetime draw on the free bucket, so it unwinds with
+    // the daily half only — never with the pool half.
+    if (returnedDaily > 0 && typeof ledger.freeSpent === "number") {
+      ledger.freeSpent = Math.max(0, ledger.freeSpent - returnedDaily);
+    }
+
+    const returned = returnedDaily + returnedPool;
+    ledger.history.push({
+      ts: Date.now(),
+      kind: "refund",
+      amount: returned,
+      reason: ev.reason,
+      ref: `refund:${ref}`,
+      refundOf: ref,
+      fromDaily: returnedDaily,
+      fromPool:  returnedPool,
+      day: today,
+    });
+    await saveLedger(addr, ledger);
+
     return {
-      address: addr,
-      accrued,
-      topup:   ledger.topup,
-      spent:   ledger.spent,
-      pool:    newPool,
-      dailyCr,
-      dailyRemaining: newDaily,
-      balance: newPool + newDaily,
-      recent:  ledger.history.slice(-10).reverse(),
+      status: "refunded" as const,
+      returned, returnedDaily, returnedPool, expiredDaily,
+      balance: summarize(addr, accrued, dailyCr, ledger),
     };
   });
 }
@@ -327,7 +610,15 @@ export async function topup(
   if (credits <= 0) throw new Error("credits must be positive");
   const addr = address.toLowerCase();
 
-  const accrued = await readAccruedCredits(addr);
+  // Same two non-ledger reads `spend` takes, for the same reason: this return
+  // value is what `/api/credits/purchase` shows a user the instant their USDC
+  // lands, so it has to be the whole balance — pool AND the day's unspent
+  // allowance — not just the half this function happens to modify.
+  const [accrued, blueBalance] = await Promise.all([
+    readAccruedCredits(addr),
+    fetchBlueBalance(addr),
+  ]);
+  const dailyCr = getTierInfo(blueBalance).dailyCr;
 
   return withLedgerLock(addr, async () => {
     const ledger = await loadLedger(addr);
@@ -336,13 +627,6 @@ export async function topup(
     ledger.history.push({ ts: Date.now(), kind: "topup", amount: credits, reason, ref });
     await saveLedger(addr, ledger);
 
-    return {
-      address: addr,
-      accrued,
-      topup:   ledger.topup,
-      spent:   ledger.spent,
-      balance: Math.max(0, accrued + ledger.topup - ledger.spent),
-      recent:  ledger.history.slice(-10).reverse(),
-    };
+    return summarize(addr, accrued, dailyCr, ledger);
   });
 }

@@ -15,6 +15,7 @@ import {
 } from "wagmi";
 import { formatUnits, isAddress } from "viem";
 import { ConnectButton } from "@/components/ConnectModal";
+import { TokenGlyph, ChainDot, ConfirmPreview, resolveQuantity } from "./ConfirmCardParts";
 
 // Chain metadata — hard-coded rather than reused from viem, so this card has
 // no cross-file coupling to the wagmi config. Base blue vs Robinhood green
@@ -105,20 +106,12 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   const { sendTransactionAsync } = useSendTransaction();
   const walletChainId = useChainId();
 
-  // Initial state pulled from the marker; the user can swap the direction via
-  // the arrow toggle (cosmetic only — a real swap re-fetches the quote).
-  const [fromChain, setFromChain] = useState<ChainKey>(
-    result.fromChain === "robinhood" ? "robinhood" : "base",
-  );
-  const [toChain, setToChain] = useState<ChainKey>(
-    result.toChain === "base" ? "base" : "robinhood",
-  );
-  // Keep from/to opposite whenever one flips. The user's swap-direction button
-  // is the only way to change either — no dropdowns to keep in sync.
-  function toggleDirection() {
-    setFromChain(toChain);
-    setToChain(fromChain);
-  }
+  // Direction comes from the LLM marker and is display-only (#107). The bridge
+  // is only Base↔RH, so `toChain` is simply the opposite of `fromChain` — this
+  // also removes the old same-chain edge case. If the LLM picked the wrong
+  // direction the user re-chats; no in-card toggle = no drift (Issue 1).
+  const fromChain: ChainKey = result.fromChain === "robinhood" ? "robinhood" : "base";
+  const toChain: ChainKey   = fromChain === "base" ? "robinhood" : "base";
 
   const fromCfg = CHAINS[fromChain];
   const toCfg   = CHAINS[toChain];
@@ -129,10 +122,6 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   const isNative    = /^(eth|native)$/i.test(rawToken);
   const tokenSymHint = (result.tokenSymbol || "").replace(/^\$/, "");
   const initialAmt   = result.amount != null ? String(result.amount) : "";
-
-  // Editable amount — seeded from LLM's initial value but user can override.
-  // The quote fetch effect below re-runs (debounced 250ms) as this changes.
-  const [amount, setAmount] = useState(initialAmt);
 
   const [prep, setPrep]   = useState<PrepareResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -166,11 +155,22 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   const balance  = isNative
     ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
     : (erc20Bal != null ? Number(formatUnits(erc20Bal as bigint, decimals)) : null);
-  // Use the EDITABLE amount, not the LLM's initial value — otherwise a user
-  // who types 0.001 after LLM guessed "1 ETH" still sees "exceeds balance"
-  // even when the new amount is fine.
-  const amtNum = parseFloat(amount);
-  const overBalance = balance != null && Number.isFinite(amtNum) && amtNum > balance;
+
+  // The amount may be a quantity word ("all"/"max"/"half"/"N%") — resolve it
+  // against the SOURCE-chain balance we just read (#137/#138). Native ETH keeps
+  // a small gas reserve; ERC-20 uses the full balance (gas paid in ETH apart).
+  // While a word is still resolving (balance loading) `amount` is "" and the
+  // prepare effect WAITS instead of round-tripping Relay with a bad value.
+  const q = resolveQuantity(initialAmt, balance, { isNative });
+  // Non-symbolic → the LLM's exact string (bridge-prepare's amount regex rejects
+  // an exponential re-format like "1e-7", so never round-trip a plain number).
+  const amount = q.symbolic ? (q.value != null ? String(q.value) : "") : initialAmt;
+  // Display label for the amount-in — a plain decimal, NOT routed through
+  // fmtAmount() (whose base-units heuristic would misread a large whole number).
+  const amtLabel = q.value != null && q.value > 0
+    ? q.value.toLocaleString("en-US", { maximumFractionDigits: 6 })
+    : (q.symbolic ? "…" : "0.0");
+  const overBalance = balance != null && q.value != null && q.value > balance;
 
   // Watch the primary tx until the SOURCE-chain RPC returns a receipt — that's
   // the point where the funds are handed off to the Relay solvers and the
@@ -230,9 +230,16 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   // two Relay requests for a single click.
   useEffect(() => {
     let cancelled = false;
-    if (!fromAddress || !rawToken || !amount || fromChain === toChain) {
+    if (!fromAddress || !rawToken || fromChain === toChain) {
       setLoading(false);
-      setPrepErr(!amount ? "Enter an amount" : "Missing required field — need from/to chain, address, token, amount.");
+      setPrepErr("Missing required field — need from/to chain, address, token.");
+      return;
+    }
+    if (!amount) {
+      // A quantity word ("all"/"max"/…) still resolving against the source-chain
+      // balance — wait (keep the spinner), don't error or round-trip Relay yet.
+      setLoading(true);
+      setPrepErr("");
       return;
     }
     // Reject non-numeric / zero amounts early — no point round-tripping Relay.
@@ -361,20 +368,11 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
       <div className="flex items-center justify-between mb-3">
         <div>
           <div className="text-white text-[12px] font-bold flex items-center gap-1.5">
-            {/* From glyph */}
-            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: fromCfg.accent }} />
+            <ChainDot color={fromCfg.accent} />
             <span>{fromCfg.label}</span>
             <span className="text-slate-500">→</span>
-            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: toCfg.accent }} />
+            <ChainDot color={toCfg.accent} />
             <span>{toCfg.label}</span>
-            <button
-              onClick={toggleDirection}
-              disabled={busy}
-              title="Swap direction"
-              className="ml-2 px-1.5 py-0.5 text-[10px] rounded border border-[#1A1A2E] text-slate-400 hover:text-slate-200 disabled:opacity-40"
-            >
-              ⇅
-            </button>
           </div>
           <div className="text-slate-600 text-[10px]">
             via Relay Protocol · you sign · non-custodial
@@ -386,7 +384,7 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
       {step === "filled" ? (
         <div className="rounded-lg border p-3" style={{ borderColor: "#34D39940", background: "#34D39908" }}>
           <div className="font-bold mb-1" style={{ color: "#34D399" }}>
-            Bridged {fmtAmount(initialAmt, 18)} {symbol} to {toCfg.label}
+            Bridged {amtLabel} {symbol} to {toCfg.label}
           </div>
           <div className="flex gap-2 flex-wrap mt-1">
             {txHash && (
@@ -405,86 +403,51 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
         </div>
       ) : (
         <>
-          {/* Amount row */}
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[9px] text-slate-600">YOU PAY (on {fromCfg.label})</span>
-              {balance != null && (
-                <span className="text-[9px] text-slate-600">
-                  Bal {balance.toFixed(5)} {symbol}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                inputMode="decimal"
-                value={amount}
-                onChange={(e) => {
-                  // Allow digits + one decimal point; strip anything else so a
-                  // stray letter can't wedge the quote effect. Empty is fine —
-                  // the effect will show "Enter an amount".
-                  const cleaned = e.target.value.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
-                  setAmount(cleaned);
-                }}
-                disabled={busy}
-                placeholder="0.0"
-                className="flex-1 min-w-0 bg-transparent text-[15px] text-white outline-none placeholder:text-slate-700 disabled:opacity-60"
-              />
-              {balance != null && balance > 0 && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setAmount(balance.toString())}
-                  className="px-1.5 py-0.5 text-[9px] rounded border border-[#7ED4C840] text-[#7ED4C8] hover:bg-[#7ED4C812] disabled:opacity-40"
-                >
-                  MAX
-                </button>
-              )}
-              <span className="text-[10px] text-slate-200 px-2 py-1 border border-[#1A1A2E] rounded-lg">{symbol}</span>
-            </div>
-            {overBalance && (
-              <div className="text-[9px] text-red-500 mt-1">Exceeds your {symbol} balance on {fromCfg.label}</div>
-            )}
-          </div>
+          {/* Confirm-only preview: pay (source chain) → receive (dest). No edit (#107). */}
+          <ConfirmPreview
+            left={{
+              glyph: <TokenGlyph symbol={symbol} />,
+              top: amtLabel,
+              bottom: `${symbol} on ${fromCfg.label}`,
+            }}
+            right={{
+              glyph: <TokenGlyph symbol={symbol} />,
+              top: loading ? "…" : (amountOutDisplay ? `≈ ${amountOutDisplay}` : "0.0"),
+              bottom: `${symbol} on ${toCfg.label}`,
+            }}
+          />
 
-          {/* Quote panel */}
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="text-[9px] text-slate-600 mb-1">EST. RECEIVE (on {toCfg.label})</div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 text-[15px] text-white w-0 truncate">
-                {loading ? <span className="text-slate-600">…</span>
-                  : amountOutDisplay || <span className="text-slate-700">0.0</span>}
-              </div>
-              <span className="text-[10px] text-slate-200 px-2 py-1 border border-[#1A1A2E] rounded-lg">{symbol}</span>
-            </div>
-            {prep?.meta && (
-              <div className="text-[9px] text-slate-500 mt-1.5 flex items-center justify-between">
-                {/* Show the actual relayer fee amount instead of a derived bps
-                    figure — Relay's amountUsd field is often missing/unreliable
-                    for volatile tokens and the bps calc was falling back to raw
-                    ETH ratios (50%+ nonsense). Amount in the token is truthful. */}
-                <span>
-                  Relayer fee
-                  {prep.meta.relayerFeeFormatted
-                    ? <> ≈ {prep.meta.relayerFeeFormatted} {symbol}
-                        {prep.meta.relayerFeeUsd && <span className="text-slate-600"> (${(+prep.meta.relayerFeeUsd).toFixed(2)})</span>}
-                      </>
-                    : <span className="text-slate-600"> — unknown</span>}
-                </span>
-                <span>Est. fill ~{prep.meta.estFillSeconds}s</span>
-              </div>
-            )}
-          </div>
-
-          {/* Recipient — shown when explicit or when it differs from sender */}
-          {shortRecipient && recipient && recipient.toLowerCase() !== fromAddress.toLowerCase() && (
-            <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-              <div className="text-[9px] text-slate-600 mb-1">RECIPIENT (on {toCfg.label})</div>
-              <div className="text-[12px] text-white truncate">{shortRecipient}</div>
+          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to. */}
+          {q.symbolic && (
+            <div className="text-[9px] text-[#34D399] mb-2">
+              {q.value != null ? `${q.word} → ${amtLabel} ${symbol}` : "Resolving your balance…"}
             </div>
           )}
 
+          {/* Small meta text: relayer fee · est fill · recipient · balance.
+              Fee amount in the token is truthful; Relay's amountUsd is often
+              missing/unreliable for volatile tokens, so we never derive a bps. */}
+          <div className="text-[9px] text-slate-500 mb-2 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">
+                Relayer fee{" "}
+                {prep?.meta?.relayerFeeFormatted
+                  ? <>≈ {prep.meta.relayerFeeFormatted} {symbol}
+                      {prep.meta.relayerFeeUsd && <span className="text-slate-600"> (${(+prep.meta.relayerFeeUsd).toFixed(2)})</span>}
+                    </>
+                  : <span className="text-slate-600">— unknown</span>}
+              </span>
+              {prep?.meta && <span className="shrink-0">Est. fill ~{prep.meta.estFillSeconds}s</span>}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              {shortRecipient && recipient && recipient.toLowerCase() !== fromAddress.toLowerCase()
+                ? <span className="truncate">To {shortRecipient} on {toCfg.label}</span>
+                : <span />}
+              {balance != null && <span className="shrink-0">Bal {balance.toFixed(5)} {symbol}</span>}
+            </div>
+          </div>
+
+          {overBalance && <p className="text-[10px] text-red-500 mb-2">Exceeds your {symbol} balance on {fromCfg.label}</p>}
           {loading && <p className="text-[9px] text-slate-600 mb-2">Fetching Relay quote…</p>}
           {!loading && prepErr && <p className="text-[10px] text-amber-400 mb-2">{prepErr}</p>}
           {wrongChain && !busy && (
@@ -525,7 +488,7 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
               : wrongChain    ? `Switch to ${fromCfg.label}`
               : overBalance   ? "Insufficient balance"
               : needsApprove  ? `Approve ${symbol}`
-              : `Bridge ${fmtAmount(initialAmt, 18)} ${symbol} → ${toCfg.label}`}
+              : `Confirm · Bridge ${amtLabel} ${symbol} → ${toCfg.label}`}
           </button>
 
           {/* Tracker link is always available once the primary tx is broadcast,

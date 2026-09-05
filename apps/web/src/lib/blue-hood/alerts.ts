@@ -31,7 +31,7 @@
  * `bh:alert:addr:{addr}` + a `delivered.webpush` cursor and must NOT drain the
  * queue.
  */
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import {
   kvAlert,
   kvAlertsByAddr,
@@ -110,7 +110,7 @@ export interface AlertEmitResult {
   recipients: number;
   /** true only when the HEALTH gate suppressed emission. */
   skipped: boolean;
-  skip_reason?: "engine_blind" | "engine_stale" | "not_engine_origin" | "no_alert_kind";
+  skip_reason?: "engine_blind" | "engine_stale" | "not_engine_origin" | "no_alert_kind" | "low_ticker_confidence";
 }
 
 // ── Label ────────────────────────────────────────────────────────────────────
@@ -212,22 +212,28 @@ async function writeAlertRecord(args: {
 
   // Per-address index (newest-first, capped) — the read endpoint + web-push
   // cursor. Broadcast copies have no wallet, so they skip the index entirely.
+  // Both indexes use `kvMutate` (task #150): a failed read must not rewrite a
+  // whole queue as `[id]`. For the per-address index that would erase a user's
+  // entire alert history; for the pending queue it would drop every alert
+  // waiting to be delivered to Telegram — undeliverable and unrecoverable,
+  // since the queue is the only record that they had not been sent yet.
   if (address) {
-    const idxKey = kvAlertsByAddr(address);
-    const idx = (await kvGet<string[]>(idxKey)) ?? [];
-    if (!idx.includes(id)) {
-      idx.unshift(id);
-      await kvSet(idxKey, idx.slice(0, ALERT_ADDR_MAX), TTL_ALERT);
-    }
+    const res = await kvMutate<string[]>(
+      kvAlertsByAddr(address),
+      [],
+      (idx) => (idx.includes(id) ? null : [id, ...idx].slice(0, ALERT_ADDR_MAX)),
+      TTL_ALERT,
+    );
+    if (res === "skipped") console.error(`[alerts] ${id} not added to index for ${address} — KV read failed`);
   }
 
   // Telegram (2.2) pending queue (FIFO, ceilinged so a stalled consumer can't bloat KV).
-  const pend = (await kvGet<string[]>(KV_ALERT_PENDING)) ?? [];
-  if (!pend.includes(id)) {
-    pend.push(id);
-    const trimmed = pend.length > ALERT_PENDING_MAX ? pend.slice(pend.length - ALERT_PENDING_MAX) : pend;
-    await kvSet(KV_ALERT_PENDING, trimmed);
-  }
+  const pendRes = await kvMutate<string[]>(KV_ALERT_PENDING, [], (pend) => {
+    if (pend.includes(id)) return null;
+    const next = [...pend, id];
+    return next.length > ALERT_PENDING_MAX ? next.slice(next.length - ALERT_PENDING_MAX) : next;
+  });
+  if (pendRes === "skipped") console.error(`[alerts] ${id} not enqueued for Telegram — KV read failed`);
   return true;
 }
 
@@ -283,6 +289,30 @@ export async function emitAlertsForArrow(arrow: Arrow, health: AlertHealthGate):
         `health=${health.status} observable=true at=${at} (no backfill by design)`,
     );
     return { ...base, emitted: 0, recipients: recipients.length, skipped: true, skip_reason: "engine_stale" };
+  }
+
+  // ── Ticker-confidence gate (Drift Statistics v0) ─────────────────────────
+  // The ONLY place a low-confidence verdict costs anything. The arrow already
+  // fired, is already in the public feed, and will still be graded and still
+  // counted in the published hit rate — dropping it from the number we publish
+  // would be cherry-picking. What it loses is the DM/push fan-out, which is
+  // the surface where a noisy ticker actually wakes someone up at 4am.
+  //
+  // Reads the stamp made at fire time, not the live table: an arrow must be
+  // judged on what was known when it fired.
+  //
+  // Deliberately placed AFTER the health gate — when KV is unreachable the
+  // health path returns without counting recipients, and that must stay true.
+  if (arrow.ticker_confidence?.level === "low") {
+    const c = arrow.ticker_confidence;
+    const recipients = await recipientsForArrow(arrow.ticker, alertKind);
+    console.warn(
+      `[alert] skip arrow=${arrow.serial} arrow_id=${arrow.id} ticker=${arrow.ticker} ` +
+        `kind=${alertKind} recipients_skipped=${recipients.length} reason=low_ticker_confidence ` +
+        `basis=${c.basis} record=${c.hits}/${c.n} wilson_high=${c.wilson_high} ` +
+        `table_at=${c.computed_at} (arrow still public + still graded; no backfill by design)`,
+    );
+    return { ...base, emitted: 0, recipients: recipients.length, skipped: true, skip_reason: "low_ticker_confidence" };
   }
 
   // ── Emit (Req 1 + 5 + 2.2b fan-out) ──────────────────────────────────────

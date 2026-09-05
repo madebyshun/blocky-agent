@@ -10,8 +10,11 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { persistSnapshot, runPollCycle } from "@/lib/blue-hood/poller";
+import { pollBaseStocks } from "@/lib/base-stocks/base-poller";
+import { persistBaseSeriesPoint } from "@/lib/base-stocks/base-series";
 import { runRuleEngine } from "@/lib/blue-hood/rule-engine";
-import { runGrader, backfillVoidGrades } from "@/lib/blue-hood/grader";
+import { runGrader, backfillVoidGrades, backfillDriftRegrade } from "@/lib/blue-hood/grader";
+import { refreshTickerConfidence } from "@/lib/blue-hood/ticker-confidence";
 import { TOOL_CALLER_MODE } from "@/lib/blue-hood/tool-caller";
 import { kvDel, kvGet, kvSet, kvSetNX } from "@/lib/kv";
 import {
@@ -19,7 +22,10 @@ import {
   TTL_POLL_LOCK,
   KV_POLL_HEARTBEAT,
   TTL_POLL_HEARTBEAT,
+  KV_BASE_ROWS_LATEST,
+  TTL_BASE_ROWS,
 } from "@/lib/blue-hood/kv-keys";
+import type { BaseDeskLatest } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
 // Prod cycle observation (2026-07-21): with market open + 24 tokens ×
@@ -88,13 +94,83 @@ async function handle(req: NextRequest) {
   }
 
   try {
-    // 1. Fresh snapshot (M5 for the whole watchlist).
+    // 1. Fresh snapshot (M5 for the whole RH watchlist).
     const snap = await runPollCycle();
+    // Persist the RH-ONLY snapshot. This is deliberate: `persistSnapshot`
+    // writes the /hood board latest, the hour ring, AND the PERMANENT series
+    // archive — which is keyed by bare ticker. NVDA/META/GOOGL/AAPL exist on
+    // both chains, so a Base row here would corrupt the RH series irreversibly.
+    // Base rows are merged into the engine's in-memory snapshot only (below).
     await persistSnapshot(snap);
 
-    // 2. Rule engine — fires arrows for any row that matches drift/arb rules.
-    //    Deduped against open arrows via `bh:arrow:open:{ticker}:{type}`.
-    const engine = await runRuleEngine(snap);
+    // 1b. Base desk (Base P3) — poll the verified B20 stocks (BASE_STOCKS) into snapshot
+    //     rows. Wrapped so a Base-side failure DEGRADES to RH-only rather than
+    //     taking down the whole poll cycle (the RH board is the heartbeat).
+    let baseRows: Awaited<ReturnType<typeof pollBaseStocks>> = [];
+    try {
+      // Anchor Base `polled_at_ms` to the SAME cycle start the RH poller used,
+      // so freshness maths line up across both desks in one snapshot.
+      const cycleStart = new Date(snap.started_at).getTime();
+      baseRows = await pollBaseStocks(cycleStart);
+
+      // Base P1 — publish the Base rows for the board under their OWN key.
+      //
+      // This is the ONLY write on the Base path, and it deliberately does not
+      // go through `persistSnapshot`: that function also writes the PERMANENT
+      // bare-ticker series archive (`bh:series:day:*`), and NVDA/META/GOOGL/AAPL
+      // exist on BOTH chains, so a Base row landing there would corrupt RH
+      // price history irreversibly. `BaseDeskLatest` is structurally not a
+      // `HoodSnapshot`, so that mistake does not compile — see its doc comment.
+      //
+      // Inside the existing try/catch on purpose: a KV write failure here is a
+      // Base-desk failure, so it degrades to RH-only exactly like a poll
+      // failure does. The RH board is the heartbeat and must not depend on
+      // anything Base does.
+      const baseLatest: BaseDeskLatest = { started_at: snap.started_at, rows: baseRows };
+      await kvSet(KV_BASE_ROWS_LATEST, baseLatest, TTL_BASE_ROWS);
+
+      // Base P2 — append this cycle to the PERMANENT Base series
+      // (`bh:base:series:day:*`, no TTL). The key above expires in 15 minutes,
+      // so without this the Base desk keeps no history at all and can never
+      // answer whether Base drift reaches DRIFT_MIN_ABS_PCT — the question that
+      // decides whether the desk is a product. History cannot be backfilled;
+      // every un-persisted hour is gone permanently.
+      //
+      // Takes `baseRows` (Base-only) and writes ONLY the `bh:base:series:*`
+      // prefix — disjoint from the bare-ticker RH archive `bh:series:day:*`
+      // that `persistSnapshot` owns. The two are kept apart by a `chain`
+      // discriminator on each record type, NOT by their field lists: a
+      // `BaseSeriesDay` satisfies `SeriesDay`'s `{day, v, points}` on shape
+      // alone, so without that literal the two would be interchangeable. See
+      // the header of base-series.ts for what is and is not compiler-enforced.
+      //
+      // Also inside this try/catch, for the same reason as the write above.
+      await persistBaseSeriesPoint(baseRows, snap.started_at);
+    } catch (e) {
+      console.error(`[poller] base desk failed, degrading to RH-only: ${(e as Error).message}`);
+      baseRows = [];
+    }
+    const baseErrored = baseRows.filter((r) => r.verdict === "ERROR").length;
+
+    // 2. Rule engine — fires arrows for any row (RH or Base) that matches
+    //    drift/arb rules. The engine is chain-agnostic; Base rows carry
+    //    `chain:"base"` so fireArrow/grader qualify their KV keys and never
+    //    collide with the same-named RH ticker.
+    //
+    //    ⚠️ Metrics MUST be bumped by the Base row counts or the engine's
+    //    conservation identity breaks: `runRuleEngine` returns
+    //    tokens_watched/tokens_errored straight from `snap.metrics` while its
+    //    loop walks `snap.tickers`, so the two must describe the SAME rows.
+    const mergedSnap = {
+      ...snap,
+      tickers: [...snap.tickers, ...baseRows],
+      metrics: {
+        ...snap.metrics,
+        tokens_watched: snap.metrics.tokens_watched + baseRows.length,
+        tokens_errored: snap.metrics.tokens_errored + baseErrored,
+      },
+    };
+    const engine = await runRuleEngine(mergedSnap);
 
     // 3. Grader — closes any arrow whose grading window has elapsed.
     //    Runs after the engine so a just-fired arrow can't be graded in the
@@ -107,29 +183,69 @@ async function handle(req: NextRequest) {
     //     skips arrows already at outcome != "miss". Safe to run every cycle.
     const backfill = await backfillVoidGrades();
 
+    // 3c. (2026-08-12) — idempotent regrade of drift arrows whose gap was
+    //     measured against the grade-time oracle instead of the fire-time
+    //     one. Guarded on `grading_math.basis`, so it converges after the
+    //     first tick and is a no-op forever after.
+    const regrade = await backfillDriftRegrade();
+
+    // 3d. Drift Statistics v0 — recompute the per-ticker rolling record, but
+    //     only when it can actually have moved. All three steps above change
+    //     outcomes (a fresh grade, a miss→void, a regrade flip), so they sum
+    //     into one "did the record change" signal; a 1h floor and a 24h
+    //     ceiling do the rest. Placed after the engine on purpose — this
+    //     cycle's arrows were stamped from the PREVIOUS table, which is what
+    //     "what did we know at fire time" requires.
+    const confidence = await refreshTickerConfidence({
+      graded: grader.graded.length + backfill.voided + regrade.flipped,
+    });
+
     return NextResponse.json({
       ok: true,
       mode: TOOL_CALLER_MODE,
       cycle_id: snap.cycle_id,
       duration_ms: snap.duration_ms,
       registry_total: snap.metrics.registry_total,
+      tokens_eligible: snap.metrics.tokens_eligible,
       tokens_watched: snap.metrics.tokens_watched,
       tokens_no_feed: snap.metrics.tokens_no_feed,
+      tokens_not_enabled: snap.metrics.tokens_not_enabled,
       tokens_errored: snap.metrics.tokens_errored,
       market_is_open: snap.metrics.market_is_open,
       market_session: snap.metrics.market_session,
       tvl_scanned_usd: Math.round(snap.metrics.tvl_scanned_usd),
+      // Base desk (Base P3) — separate from the RH metrics above so the two
+      // chains are never conflated in the operator view. `gradeable` counts
+      // rows that passed every suppression gate (verdict != INSUFFICIENT_DATA
+      // and != ERROR); a bad-multiplier / paused / stale token shows here as
+      // NOT gradeable, which is the whole point of the guard.
+      base: {
+        watched: baseRows.length,
+        errored: baseErrored,
+        gradeable: baseRows.filter((r) => r.verdict !== "INSUFFICIENT_DATA" && r.verdict !== "ERROR").length,
+        rows: baseRows.map((r) => ({
+          ticker: r.ticker,
+          verdict: r.verdict,
+          drift_pct: r.drift_pct,
+          suppressed: r.warnings.find((w) => w.startsWith("base_suppressed_"))?.replace("base_suppressed_", "") ?? null,
+        })),
+      },
       engine: {
         // Matches the structured `[engine]` log line one-to-one so responses
         // and logs can never disagree.
         candidates_over_threshold: engine.candidates_over_threshold,
         skipped_dust: engine.skipped_dust,
         skipped_no_executable_pool: engine.skipped_no_executable_pool,
+        skipped_dead_pool: engine.skipped_dead_pool,
+        dead_pool_vol_unknown: engine.dead_pool_vol_unknown,
         skipped_feed_stale: engine.skipped_feed_stale,
         below_threshold: engine.below_threshold,
         deduped: engine.deduped,
         fired: engine.fired,
-        arrows: engine.arrows_fired.map((a) => ({ serial: a.serial, ticker: a.ticker, type: a.type, expected: a.expected_direction })),
+        fired_normal: engine.fired_normal,
+        fired_low_confidence: engine.fired_low_confidence,
+        fired_insufficient: engine.fired_insufficient,
+        arrows: engine.arrows_fired.map((a) => ({ serial: a.serial, ticker: a.ticker, type: a.type, expected: a.expected_direction, confidence: a.ticker_confidence?.level ?? null })),
       },
       grader: {
         graded: grader.graded.map((a) => ({ serial: a.serial, ticker: a.ticker, type: a.type, outcome: a.outcome, detail: a.outcome_detail })),
@@ -140,6 +256,22 @@ async function handle(req: NextRequest) {
         scanned: backfill.scanned,
         voided: backfill.voided,
         voided_ids: backfill.voided_ids,
+      },
+      drift_regrade: {
+        scanned: regrade.scanned,
+        regraded: regrade.regraded,
+        flipped: regrade.flipped,
+        flipped_ids: regrade.flipped_ids,
+        unmeasurable: regrade.unmeasurable,
+      },
+      ticker_confidence: {
+        refreshed: confidence.refreshed,
+        reason: confidence.reason,
+        sample_total: confidence.sample_total,
+        /** Entries past n=15 — i.e. actually being judged. 0 means the gate
+         *  is live but has no evidence to act on yet, which is expected. */
+        eligible: confidence.eligible,
+        low_count: confidence.low_count,
       },
     });
   } catch (e) {

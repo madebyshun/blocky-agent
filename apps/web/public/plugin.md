@@ -3,7 +3,7 @@
 > Source of truth: https://blueagent.dev/plugin.md
 > Hub UI: https://blueagent.dev/hub · Catalog (machine-readable): https://blueagent.dev/api/catalog
 
-30+ AI tools for Base builders and autonomous agents — audits, token signals,
+112 AI tools for Base builders and autonomous agents — audits, token signals,
 market-fit analysis, deep due diligence, launch readiness, ecosystem intel and
 more. Every tool is a paid HTTP endpoint that speaks **x402 v2** natively, so
 Base MCP can call any tool and settle the USDC payment without extra wiring.
@@ -12,7 +12,7 @@ Base MCP can call any tool and settle the USDC payment without extra wiring.
 - **Asset:** USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
 - **Payment:** x402 v2 · pay-per-call · no API key · no subscription
 - **Settlement:** Coinbase CDP facilitator (on-chain transferWithAuthorization)
-- **Receives:** Blue Hub wallet `0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f`
+- **Receives:** Blue Agent treasury `0x02950ad38ada1d599375bd447e080cd404809205`
 
 ---
 
@@ -44,7 +44,7 @@ no auth. Returns:
   "x402Version": 2,
   "network": "eip155:8453",
   "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  "payTo": "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f",
+  "payTo": "0x02950ad38ada1d599375bd447e080cd404809205",
   "count": 34,
   "tools": [
     {
@@ -98,7 +98,7 @@ client needs to sign and retry:
     "network": "eip155:8453",
     "asset":   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "amount":  "200000",
-    "payTo":   "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f",
+    "payTo":   "0x02950ad38ada1d599375bd447e080cd404809205",
     "maxTimeoutSeconds": 120,
     "extra":   { "name": "USD Coin", "version": "2" }
   }],
@@ -119,8 +119,8 @@ wallet (after explicit approval) and retries the request with the
 base64-encoded x402 payload in `X-Payment`. The server then:
 
 1. **Verifies** the payment via the Coinbase CDP facilitator (no charge).
-2. **Runs** the tool — 3-agent consensus (Blue · Aeon · MiroShark) over
-   live Base data.
+2. **Runs** the tool over live Base data. Most tools run one Blue persona;
+   a few (deep-analysis, the launch simulators) weight several personas.
 3. **Settles** the USDC transfer on-chain via CDP (the user is charged
    only on success).
 
@@ -264,7 +264,7 @@ approval prompts via Base MCP's built-in x402 handler.
 
 ## License & ownership
 
-Open for any Base MCP integration. Wallet `0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f`
+Open for any Base MCP integration. Wallet `0x02950ad38ada1d599375bd447e080cd404809205`
 receives all settlements. Built by Blocky Studio. Powered by `$BLUEAGENT`.
 
 For questions, manifest details, or to suggest tools:

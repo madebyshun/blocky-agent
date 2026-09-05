@@ -370,6 +370,8 @@ const NON_VENICE_LABEL = "Sonnet 5 · Virtuals";
 const MODEL_LABELS: Record<string, string> = {
   fast: NON_VENICE_LABEL, pro: NON_VENICE_LABEL, max: NON_VENICE_LABEL,
   deepseek: NON_VENICE_LABEL,
+  // V1 presets with a distinct runtime model (others resolve to the default).
+  free: "Qwen 3.5 9B · Free", flash: "Gemini 2.5 Flash · Virtuals", search: "Grok 4.3 · Venice",
   "venice-deepseek": "DeepSeek V4 Flash", "venice-deepseek-pro": "DeepSeek V4 Pro",
   "venice-kimi": "Kimi K2", "venice-claude": "Claude Opus 4",
   "venice-grok": "Grok 4", "venice-qwen": "Qwen3 235B",
@@ -380,7 +382,8 @@ const MODEL_LABELS: Record<string, string> = {
 };
 
 const MODEL_COLORS: Record<string, string> = {
-  fast: "#64748b", pro: "#4FC3F7", max: "#A78BFA",
+  free: "#34D399", fast: "#64748b", pro: "#4FC3F7", max: "#A78BFA",
+  flash: "#FBBF24", search: "#22D3EE",
   "venice-deepseek": "#34D399", "venice-deepseek-pro": "#2DD4BF",
   "venice-kimi": "#818CF8", "venice-claude": "#F472B6",
   "venice-grok": "#E879F9", "venice-qwen": "#FB923C",
@@ -390,98 +393,32 @@ const MODEL_COLORS: Record<string, string> = {
 };
 
 // ── Starters ──────────────────────────────────────────────────────────────────
-// Empty-state content is keyed by the active persona so that picking a role in
-// Settings (or via the composer pill) immediately changes "what to do next" —
-// the heading + 4 starter cards all reflect that expert role.
-
 // `label` = compact display; `text` = the natural language prompt sent on click.
 // Cards send immediately — they are plain English questions, not slash commands.
 interface Starter { icon: string; label: string; text: string; color: string; }
 interface EmptyState { heading: string; sub: string; starters: Starter[]; examples: string[]; }
 
-const PERSONA_EMPTY: Record<string, EmptyState> = {
-  "blue-agent": {
-    heading: "What are you building?",
-    sub:     "Build anything on Base",
-    examples: [
-      "build me a DeFi app on Base",
-      "launch a token called BlueBot",
-      "what's trending on Base today?",
-    ],
-    starters: [
-      { icon: "💡", label: "Idea",   text: "idea brief: USDC payroll app for freelancers on Base", color: "#4FC3F7" },
-      { icon: "🛠️", label: "Build",  text: "build an ERC-4337 agent wallet on Base",               color: "#A78BFA" },
-      { icon: "🛡️", label: "Audit",  text: "audit my token launch plan for risks",                 color: "#F87171" },
-      { icon: "🚀", label: "Launch", text: "launch a token called BlueBot on Base",                color: "#34D399" },
-    ],
-  },
-  "blue-trader": {
-    heading: "What's the trade?",
-    sub:     "Live alpha, smart money flow, safety checks — Base-native.",
-    examples: [
-      "best APY on Base right now?",
-      "is this token a honeypot: 0x...",
-      "show me whale activity for AERO",
-    ],
-    starters: [
-      { icon: "🎯", label: "Pick",      text: "what's the best token to buy on Base right now?", color: "#34D399" },
-      { icon: "🐋", label: "Whale",     text: "show me whale activity for AERO",                 color: "#4FC3F7" },
-      { icon: "🔍", label: "Scan",      text: "is this token a honeypot: 0x…",                   color: "#FB923C" },
-      { icon: "📊", label: "Yield",     text: "what's the best APY on Base right now?",          color: "#A78BFA" },
-    ],
-  },
-  "blue-auditor": {
-    heading: "What should I audit?",
-    sub:     "Vulnerabilities, severity ratings, Solidity fixes, and a go/no-go call.",
-    examples: [
-      "audit this smart contract for vulnerabilities",
-      "check if this token is safe: 0x...",
-      "screen this wallet for AML risks: 0x...",
-    ],
-    starters: [
-      { icon: "🛡️", label: "Audit",     text: "audit this smart contract for vulnerabilities",   color: "#F87171" },
-      { icon: "🔍", label: "Scan",      text: "check if this token is safe: 0x…",                color: "#4FC3F7" },
-      { icon: "⚠️", label: "Reentrancy",text: "audit for reentrancy risks",                       color: "#FB923C" },
-      { icon: "🧾", label: "AML",       text: "screen this wallet for AML risks: 0x…",            color: "#A78BFA" },
-    ],
-  },
-  "blue-researcher": {
-    heading: "What should I research?",
-    sub:     "Evidence-backed DD, on-chain data, and contrarian takes.",
-    examples: [
-      "deep DD on Aerodrome",
-      "what's the top narrative on Base now?",
-      "analyze my wallet strategy: 0x...",
-    ],
-    starters: [
-      { icon: "🔬", label: "Deep DD",   text: "deep DD on Aerodrome",                color: "#A78BFA" },
-      { icon: "🐋", label: "Whale",     text: "show me whale activity for AERO",     color: "#4FC3F7" },
-      { icon: "📡", label: "Narrative", text: "what's the top narrative on Base now?", color: "#E879F9" },
-      { icon: "📊", label: "Wallet",    text: "analyze my wallet strategy: 0x…",     color: "#34D399" },
-    ],
-  },
-  "custom": {
-    heading: "How can I help?",
-    sub:     "Your custom system prompt is active — ask anything.",
-    examples: [
-      "build me a DeFi app on Base",
-      "best APY on Base right now?",
-      "what's trending on Base today?",
-    ],
-    starters: [
-      { icon: "💡", label: "Idea",   text: "idea brief: USDC payroll app for freelancers on Base", color: "#4FC3F7" },
-      { icon: "🛠️", label: "Build",  text: "build an ERC-4337 agent wallet on Base",               color: "#A78BFA" },
-      { icon: "🛡️", label: "Audit",  text: "audit my token launch plan for risks",                 color: "#F87171" },
-      { icon: "🚀", label: "Launch", text: "launch a token called BlueBot on Base",                color: "#34D399" },
-    ],
-  },
+const EMPTY_STATE: EmptyState = {
+  heading: "What are you building?",
+  sub:     "Build anything on Base",
+  examples: [
+    "build me a DeFi app on Base",
+    "launch a token called BlueBot",
+    "what's trending on Base today?",
+  ],
+  starters: [
+    { icon: "💡", label: "Idea",   text: "idea brief: USDC payroll app for freelancers on Base", color: "#4FC3F7" },
+    { icon: "🛠️", label: "Build",  text: "build an ERC-4337 agent wallet on Base",               color: "#A78BFA" },
+    { icon: "🛡️", label: "Audit",  text: "audit my token launch plan for risks",                 color: "#F87171" },
+    { icon: "🚀", label: "Launch", text: "launch a token called BlueBot on Base",                color: "#34D399" },
+  ],
 };
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function ChatMessages() {
   const {
-    activeTask, streaming, outOfCredits, send, setInput, chatTier, personaId,
+    activeTask, streaming, outOfCredits, send, setInput, chatTier,
     triggerWalletRefresh,
   } = useChat();
 
@@ -494,7 +431,7 @@ export default function ChatMessages() {
   const messages   = activeTask?.messages ?? [];
   const isEmpty    = messages.length === 0;
   const tierColor  = MODEL_COLORS[chatTier] ?? "#4FC3F7";
-  const empty      = PERSONA_EMPTY[personaId] ?? PERSONA_EMPTY["blue-agent"];
+  const empty      = EMPTY_STATE;
   const { lang }   = useLang();
 
   // ── Share conversation ────────────────────────────────────────────────────
@@ -559,7 +496,7 @@ export default function ChatMessages() {
             </span>
           </div>
 
-          {/* Heading — persona-aware */}
+          {/* Heading */}
           <h2 className="font-mono text-2xl sm:text-3xl font-bold text-white tracking-tight mb-2">
             {empty.heading}
           </h2>
@@ -567,7 +504,7 @@ export default function ChatMessages() {
             {empty.sub}
           </p>
 
-          {/* NL example starters — 3 per persona */}
+          {/* NL example starters */}
           <div className="w-full max-w-sm space-y-2 mb-6">
             {empty.examples.map(q => (
               <div
@@ -690,37 +627,20 @@ export default function ChatMessages() {
                       {/* Tool execution logs + result cards */}
                       {!!msg.toolLogs?.length && (
                         <div className="flex flex-col gap-1.5 mb-4">
-                          {msg.toolLogs.map((log, j) => {
-                            const name = log.tool.replace(/^hub_/, "").replace(/_/g, " ");
-                            // Brand label per provider. hub_crypto_rpc is a
-                            // Blue Hub tool (it just happens to proxy Venice's
-                            // RPC infra under the hood) — surfacing "Venice
-                            // RPC" inside a Bankr-Pro chat was confusing, so
-                            // we rebrand to Blue Hub.
-                            const prov = log.tool === "hub_crypto_rpc"
-                              ? { icon: "🔗", color: "#4FC3F7", label: "Blue Hub" }
-                              : log.tool.includes("base") || log.tool.includes("contract") || log.tool.includes("deploy")
-                              ? { icon: "🔵", color: "#34D399", label: "Base MCP" }
-                              : { icon: "⚡", color: "#4FC3F7", label: "Blue Agent" };
-                            return (
-                              <React.Fragment key={j}>
-                                <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg border"
-                                  style={{ borderColor: `${prov.color}20`, background: `${prov.color}07` }}>
-                                  <span className="text-xs shrink-0">{prov.icon}</span>
-                                  <span className="font-mono text-[10px] font-semibold shrink-0" style={{ color: prov.color }}>{prov.label}</span>
-                                  <span className="font-mono text-[10px] text-slate-500 flex-1 truncate capitalize">{name}</span>
-                                  {log.status === "running"
-                                    ? <span className="font-mono text-[9px] text-slate-600 animate-pulse shrink-0">running…</span>
-                                    : <span className="font-mono text-[9px] shrink-0" style={{ color: "#34D399" }}>✓{log.ms !== undefined ? ` ${(log.ms / 1000).toFixed(1)}s` : ""}</span>
-                                  }
-                                </div>
-                                {/* Inline result card — rendered when tool has a result */}
-                                {log.status === "done" && log.result != null && (
-                                  <ToolResultCard tool={log.tool} result={log.result as Record<string, unknown>} />
-                                )}
-                              </React.Fragment>
-                            );
-                          })}
+                          {msg.toolLogs.map((log, j) => (
+                            // No tool-exec chip. The provider badge
+                            // ("⚡ Blue Agent · <tool> ✓ 1.2s") was noise above
+                            // every result; #139 dropped it for the action cards,
+                            // and we now drop it for ALL tools/skills. A skill
+                            // speaks through its result card (or the answer text);
+                            // "still working" is shown by the streaming dots
+                            // below, so no progress signal is lost.
+                            <React.Fragment key={j}>
+                              {log.status === "done" && log.result != null && (
+                                <ToolResultCard tool={log.tool} result={log.result as Record<string, unknown>} />
+                              )}
+                            </React.Fragment>
+                          ))}
                         </div>
                       )}
 

@@ -275,6 +275,9 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
     : null;
   const wrongChain = isConnected && chain?.id !== RH_CHAIN_ID;
   const marketClosedDrift = arrow.type === "drift" && arrow.market_at_fire && !arrow.market_at_fire.is_open;
+  // Unconditional for arb — this is not a state the arrow can be in or out of,
+  // it is what the arb grading rule does and does not measure. See the banner.
+  const isArb = arrow.type === "arb";
   const quoteStale = !!quote && (Date.now() - quoteFetchedAt) > QUOTE_STALE_MS;
   const deadlineExpired = !!quote?.execution && quote.execution.deadline_unix * 1000 < Date.now();
   const poolTvl = quote?.route?.direct_pool_gt?.tvl_usd ?? quote?.one_side_usd_used ? (quote?.one_side_usd_used ?? 0) * 2 : 0;
@@ -704,6 +707,37 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
           >
             market closed — DEX may snap toward oracle at open; this is price
             discovery, not arbitrage.
+          </div>
+        )}
+
+        {/* Arb banner — states what the published arb hit-rate does NOT measure.
+            Unconditional, because this is a property of the grading rule, not of
+            a state this arrow is in. Drift already warns that it is discovery
+            rather than arbitrage; arb had no banner at all, which was the wrong
+            way round: drift fires while the market is SHUT so nobody holds it,
+            while arb fires while the market is OPEN and this very panel turns
+            `expected_direction` into a default buy/sell (see `defaultSide`). Arb
+            is the lane where a user actually takes a position, so it is the lane
+            that owes the loudest statement of what the grade leaves out.
+
+            Both claims are checked against the code, not asserted:
+              • direction — grader.ts grades arb on `Math.abs(deltaPct)` against
+                ARB_HIT_SPREAD_PCT. A magnitude. The spread can close entirely
+                because the OTHER leg moved, and that still prints HIT while the
+                side this panel pre-selected went against the user.
+              • costs — the 0.5% pass mark is a fixed number in the grader. It
+                does not know this trade's fee, slippage or price impact, so a
+                HIT is not the same claim as a profit.
+            Do not soften either line into "may" — both are unconditional facts
+            about the rule as written. */}
+        {isArb && (
+          <div
+            className="mx-4 mt-3 rounded border px-3 py-2 text-[11px]"
+            style={{ borderColor: "#3b2a15", backgroundColor: "#1a1408", color: "#f6c88f" }}
+          >
+            spread signal — graded on the gap closing, not on direction: it counts
+            as a hit even if the leg you took moved against you. fees, slippage
+            and impact are yours and are not in the 0.5% pass mark.
           </div>
         )}
 

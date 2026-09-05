@@ -16,6 +16,7 @@
 
 import { AGENT_TOOLS } from "./agent-tools";
 import { getTierInfo, type TierInfo } from "./credits";
+import { VIRTUALS_PRESETS_V1 } from "@/app/chat/components/presets";
 
 // ─── Anchor rate ─────────────────────────────────────────────────────────────
 
@@ -27,6 +28,24 @@ export const CREDITS_PER_USDC = Math.round(1 / CREDIT_USD); // 2000
 // ─── Chat message costs ──────────────────────────────────────────────────────
 
 /**
+ * Every live preset, priced by the preset spec itself.
+ *
+ * These entries used to be retyped by hand below, and four of them —
+ * `balanced`, `deep`, `private`, `grok` — were simply never added. Because the
+ * lookup falls back to `pro` (50), a preset could be mispriced by OMISSION
+ * rather than by a wrong number, which is invisible in review. Measured
+ * 2026-09-04, before this change: Deep quoted 200 and debited 50, Grok quoted
+ * 60 and debited 50, and Private quoted 30 while debiting 50 — the user paid
+ * 67% more than the composer told them they would.
+ *
+ * Deriving the map means a preset cannot be added without a price, and cannot
+ * carry a price the picker disagrees with, because it is now the same number.
+ */
+const PRESET_COSTS: Record<string, number> = Object.fromEntries(
+  VIRTUALS_PRESETS_V1.map((p) => [p.id, p.credits]),
+);
+
+/**
  * Base chat-message cost in credits, before tier discount. These align with
  * the cost-of-LLM-call math at CREDIT_USD = $0.0005:
  *   Haiku (fast)   ~$0.001 cost  → 10 cr ($0.005 charge,  5x markup)
@@ -35,8 +54,10 @@ export const CREDITS_PER_USDC = Math.round(1 / CREDIT_USD); // 2000
  * Venice models are slotted by capability tier.
  */
 export const CHAT_BASE_COST: Record<string, number> = {
-  // Bankr (Anthropic + Google + Moonshot)
-  fast:     10,
+  // ── Legacy ids ──
+  // Not presets. These are `tier` values older builds persisted to
+  // localStorage and may still send; kept as literals so an old client keeps
+  // being charged what it was quoted.
   pro:      50,
   max:      200,
   deepseek: 10,
@@ -56,6 +77,14 @@ export const CHAT_BASE_COST: Record<string, number> = {
   "venice-e2ee-venice":  30,
   "venice-e2ee-gemma":   30,
   "venice-e2ee-qwen":    40,
+
+  // ── Live presets, LAST so the spec always wins ──
+  // Spread last on purpose: `fast` is both a preset id and a legacy Bankr tier,
+  // and any future collision must resolve to the price the picker is showing,
+  // not to a stale literal someone left above. `free` lands here as 0, which
+  // the server reads as "skip the ledger debit" (see `debitChatCredits`'s
+  // zero-cost-tier short-circuit) — not as a missing entry.
+  ...PRESET_COSTS,
 };
 
 /** Apply tier discount + minimum-1 to a base cost. */
@@ -66,6 +95,11 @@ function applyDiscount(base: number, tier: TierInfo): number {
 /** Credits to charge for a single chat message, after tier discount. */
 export function chatCreditCost(modelKey: string, tier: TierInfo): number {
   const base = CHAT_BASE_COST[modelKey] ?? CHAT_BASE_COST.pro;
+  // A genuinely free tier (base 0) resolves to 0, not the Math.max(1,…) floor
+  // in applyDiscount — that floor guards a discounted PAID tier from rounding
+  // to free, the opposite concern. Only an explicit 0 base is free. Mirrors the
+  // same guard in `creditCost` (credits.ts).
+  if (base <= 0) return 0;
   return applyDiscount(base, tier);
 }
 

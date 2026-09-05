@@ -25,19 +25,23 @@ export default function BlueHubDoc() {
       <DocHeader
         eyebrow="Products"
         title="Blue Hub"
-        lead={`${AGENT_TOOLS.length} AI tools for Base — security, market intelligence, on-chain, builder, and agent-network. Built from a 3-agent collaboration (Blue Agent + Aeon + MiroShark) and paid per call in USDC via x402.`}
+        lead={`${AGENT_TOOLS.length} AI tools for Base — security, market intelligence, on-chain, builder, and agent-network. Paid per call in USDC via x402.`}
       />
 
       <P>
         Every tool uses live data (never fabricated numbers) and is callable three ways: the{" "}
         <a href="/hub" className="text-[#4FC3F7] underline">Hub UI</a>, the{" "}
-        <a href="https://api.blueagent.dev/docs" className="text-[#4FC3F7] underline">x402 API</a>, or any MCP client.
+        <a href="/docs/api" className="text-[#4FC3F7] underline">x402 API</a>, or any MCP client.
       </P>
 
-      <H2 id="consensus">3-agent consensus</H2>
+      <H2 id="personas">Multi-persona tools</H2>
       <P>
-        High-stakes tools (deep analysis, risk gate, builder DD) run across three independent agents and reconcile their answers —
-        a consensus view, not a single model&apos;s guess. Real data in, cross-checked signal out.
+        A few high-stakes tools (deep analysis, the launch simulators) run several
+        personas — Blue, Aeon, MiroShark — and weight their answers into one verdict.
+        These are <strong>prompt personas on a single Virtuals endpoint</strong>, not
+        independent agents: no second model, no second vendor, no voting protocol.
+        Most tools run one Blue persona. The catalog&apos;s per-tool{" "}
+        <code className="text-[#4FC3F7]">agents</code> field reports which ones actually run.
       </P>
 
       <H2 id="catalog">Full catalog</H2>
@@ -68,7 +72,7 @@ export default function BlueHubDoc() {
 
       <Callout color="#fbbf24" title="Pricing & API">
         Pay-per-call in USDC on Base — no keys, no subscription. See <Link href="/docs/x402" className="text-[#fbbf24] underline">x402 Tools</Link> for
-        the core command suite, or the <a href="https://api.blueagent.dev/docs" className="text-[#fbbf24] underline">OpenAPI spec</a>.
+        the core command suite, or the <a href="https://blueagent.dev/.well-known/openapi.json" className="text-[#fbbf24] underline">OpenAPI spec</a>.
       </Callout>
 
       <PrevNext current="/docs/blue-hub" />

@@ -14,14 +14,16 @@ export const STATS = [
 ];
 
 export const PRODUCTS = [
-  { name: "Blue Hood", color: "#34D399", desc: "RH Chain copilot · Chainlink vs DEX drift · non-custodial trading",       link: "/app/hood", label: "Open Hood →" },
+  { name: "Blue Hood", color: "#34D399", desc: "Oracle-vs-DEX drift · tokenized stocks on Base + RH · graded in public",  link: "/app/hood", label: "Open Hood →" },
   { name: "Blue Chat", color: "#A78BFA", desc: "AI agent chat · multi-model · skill-based · Built for RH + Base",         link: "/app/chat", label: "Open Chat →" },
-  { name: "Blue Hub",  color: "#4FC3F7", desc: `${TOOL_COUNT} AI tools · 3-agent consensus · x402 pay-per-call · no API key`, link: "/app/hub",  label: "Open Hub →" },
+  { name: "Blue Hub",  color: "#4FC3F7", desc: `${TOOL_COUNT} AI tools · live on-chain data · x402 pay-per-call · no API key`, link: "/app/hub",  label: "Open Hub →" },
 ];
 
 export const FOUNDATION = [
-  { label: "Venice AI",  desc: "Primary LLM for x402 handlers + web search",       color: "#4FC3F7" },
-  { label: "Virtuals",   desc: "RH-native inference for Blue Hood arrow briefs",   color: "#22C55E" },
+  // Venice was removed from the fallback chain 2026-07-25 and Bankr was
+  // 403-banned 2026-07-20; every LLM call now goes to Virtuals via
+  // api/_lib/llm.ts → callLLM. This list used to name Venice as primary.
+  { label: "Virtuals",   desc: "The LLM gateway — every x402 handler and chat call", color: "#22C55E" },
   { label: "x402",       desc: "Pay per call in USDC on Base — EIP-3009 via CDP",  color: "#34D399" },
   { label: "RH Chain",   desc: "Robinhood Chain (chain ID 4663) — RWA trading",    color: "#22C55E" },
   { label: "Base",       desc: "Base (chain ID 8453) — builder + token surface",   color: "#2563EB" },
@@ -42,7 +44,6 @@ export const CHAT_MODELS = [
 export const CHAT_CAPABILITIES = [
   { t: "Slash commands", d: "/idea /build /audit /ship /raise · /pick /scan /wallet — same power as the CLI, inline." },
   { t: "Hub tools",      d: "Live token prices, whale flow, risk gate, wallet PnL — the Hub tools the model calls for you." },
-  { t: "Personas",       d: "Swap the agent's expert role (Trader · Cipher · Oracle · Custom) without changing the model." },
   { t: "Web search",     d: "Toggle on to let the model pull live web data and cite sources (the Grok preset is built for live web)." },
 ];
 

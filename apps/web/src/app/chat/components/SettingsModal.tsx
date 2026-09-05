@@ -6,21 +6,17 @@ import SettingsPanel, { type SettingsSection } from "./SettingsPanel";
 
 // Mobile-only quick links — kept out of the nav drawer so the drawer stays
 // focused. Hidden on desktop (lg:hidden), so the web Settings experience is
-// unchanged. Only Models is a tab jump now: Skills was promoted to its own
-// shell page (/skills), so it navigates like Docs instead of switching a chat
-// tab — otherwise the same catalog would sit behind two different controls.
-type JumpTab = "models";
-const QUICK_LINKS: { id: JumpTab; label: string; icon: string }[] = [
-  { id: "models", label: "Models", icon: "🤖" },
-];
+// unchanged. Every entry is a route: Models joined Skills on its own shell page
+// (/models) and is no longer a chat tab, so nothing here switches tab state.
 const QUICK_ROUTES: { href: string; label: string; icon: string }[] = [
+  { href: "/models", label: "Models", icon: "🤖" },
   { href: "/skills", label: "Skills", icon: "⚡" },
   { href: "/docs/blue-chat", label: "Docs", icon: "📄" },
 ];
 
 /**
  * Account / Settings modal — Claude-style two-pane layout: a left category
- * rail (Account · Credits · Persona · Memory) and a right content pane that
+ * rail (Account · Credits · Memory) and a right content pane that
  * renders the selected section. Replaces the old single-column long-scroll.
  * Opens from the sidebar account chip.
  */
@@ -41,15 +37,6 @@ const SECTIONS: { id: SettingsSection; label: string; icon: React.ReactNode }[] 
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 9v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-  },
-  {
-    id: "persona",
-    label: "Persona",
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
       </svg>
     ),
   },
@@ -76,11 +63,9 @@ const SECTIONS: { id: SettingsSection; label: string; icon: React.ReactNode }[] 
 export default function SettingsModal({
   open,
   onClose,
-  onJumpTab,
 }: {
   open: boolean;
   onClose: () => void;
-  onJumpTab?: (tab: JumpTab) => void;
 }) {
   const [section, setSection] = useState<SettingsSection>("account");
 
@@ -145,21 +130,11 @@ export default function SettingsModal({
 
           {/* Right content pane */}
           <div className="flex-1 min-h-0 overflow-y-auto">
-            {/* Mobile-only quick links (Models tab + Skills/Docs routes) —
-                desktop has these in the chat sidebar / shell nav, so hidden lg+. */}
+            {/* Mobile-only quick links (Models/Skills/Docs routes) — desktop
+                has these in the chat sidebar / shell nav, so hidden lg+. */}
             <div className="lg:hidden px-5 pt-5">
               <p className="font-mono text-[10px] text-slate-500 tracking-widest mb-2">BLUE CHAT</p>
               <div className="grid grid-cols-2 gap-2">
-                {QUICK_LINKS.map(q => (
-                  <button
-                    key={q.id}
-                    onClick={() => onJumpTab?.(q.id)}
-                    className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-[#1A1A2E] bg-[#0A0A12] hover:bg-[#ffffff06] transition-colors"
-                  >
-                    <span className="text-sm leading-none shrink-0">{q.icon}</span>
-                    <span className="font-mono text-[13px] text-slate-200">{q.label}</span>
-                  </button>
-                ))}
                 {QUICK_ROUTES.map(r => (
                   <Link
                     key={r.href}

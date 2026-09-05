@@ -5,6 +5,19 @@
  * flushed without touching other KV-backed features. Do NOT hardcode
  * these strings anywhere else — always import from here.
  */
+import type { HoodChain } from "./types";
+
+/**
+ * Chain segment for the per-ticker arrow keys. `"robinhood"` (the default and
+ * the origin chain) yields the EMPTY string, so every RH key stays byte-for-byte
+ * what it was before the Base desk existed — the live open-arrow + cooldown keys
+ * already in KV keep resolving. `"base"` inserts a `base:` segment so a Base
+ * NVDA arrow can't collide with the RH NVDA arrow on the same ticker (both
+ * chains list NVDA/META/GOOGL/AAPL). Never reorder: a value here becomes a KV key.
+ */
+function chainSeg(chain: HoodChain = "robinhood"): string {
+  return chain === "robinhood" ? "" : `${chain}:`;
+}
 
 /** Latest completed snapshot (written by the 60s poller). Readers of /hood + the alert engine hit this. */
 export const KV_SNAPSHOT_LATEST = "bh:snapshot:latest";
@@ -12,15 +25,86 @@ export const KV_SNAPSHOT_LATEST = "bh:snapshot:latest";
 /** Ring buffer entry for hour `H` (YYYYMMDDHH). Keep 24h for sparkline history. */
 export const kvSnapshotHour = (yyyymmddhh: string) => `bh:snapshot:hour:${yyyymmddhh}`;
 
+/**
+ * Base P1 — the Base desk's latest rows. Payload is `BaseDeskLatest`.
+ *
+ * NOTE THE NAMESPACE: `bh:base:*`, NOT `bh:snapshot:base:latest`. That second
+ * name would read like a sibling of `KV_SNAPSHOT_LATEST` and invite a future
+ * reader to hand it to `persistSnapshot` — which also writes the PERMANENT
+ * bare-ticker series archive and would corrupt RH history with Base rows
+ * (NVDA/META/GOOGL/AAPL exist on both chains). A separate namespace makes the
+ * two impossible to confuse by eye; the incompatible `BaseDeskLatest` type
+ * makes them impossible to confuse by compiler. Belt and braces, on purpose.
+ *
+ * The three keys `persistSnapshot` writes — `bh:snapshot:latest`,
+ * `bh:snapshot:hour:*`, `bh:series:day:*` — share no prefix with this one, so
+ * a prefix scan proves the disjointness rather than asserting it.
+ */
+export const KV_BASE_ROWS_LATEST = "bh:base:rows:latest";
+
+/**
+ * PERMANENT Base-desk price series — one key per UTC day. Payload
+ * `BaseSeriesDay`.
+ *
+ * WHY THIS EXISTS: until now the ONLY Base write was `KV_BASE_ROWS_LATEST`
+ * above, which carries `TTL_BASE_ROWS` = 15 minutes. So the Base desk had no
+ * history at all — three poll cycles and the evidence was gone. That is the
+ * exact hole that makes the RH archive so valuable, restated: 107 of 112
+ * published RH drift arrows predate `SERIES_ARCHIVE_START` and can therefore
+ * never be audited after the fact. Base is currently at the *start* of that
+ * curve, and every hour not persisted now is an hour that can never be
+ * recovered later.
+ *
+ * WHY A SEPARATE KEY AND NOT `bh:series:day:*`: that archive is keyed by BARE
+ * TICKER and NVDA/META/GOOGL/AAPL trade on both chains. One Base row landing
+ * there silently corrupts RH price history — irreversibly, because history
+ * cannot be backfilled. The `bh:base:` prefix keeps the two disjoint under a
+ * prefix scan, and the two record types are held apart by paired `chain`
+ * discriminators — NOT by their field lists, which overlap enough that
+ * `BaseSeriesDay` was silently assignable to `SeriesDay` until the
+ * discriminator was added. See the header of `base-series.ts` for exactly what
+ * the compiler does and does not enforce here. Same belt-and-braces reasoning
+ * as `KV_BASE_ROWS_LATEST`, for the same reason.
+ *
+ * NO TTL, deliberately — this is the archive, not a cache.
+ *
+ * MEASURED COST at the current 4-ticker `BASE_STOCKS` registry: ~0.4 KB per
+ * hourly point (the RH archive measures 2.6 KB at 24 tickers), so ~10 KB/day
+ * and under 4 MB/year. Request budget is ~288 reads/day (one per 5-min cycle)
+ * plus ~24–40 writes — roughly 2% of the 500K/month Upstash cap that starved
+ * this engine in task #123. Same order as the RH archive already deemed
+ * affordable; revisit if `BASE_STOCKS` grows past ~20 tickers.
+ */
+export const kvBaseSeriesDay = (yyyymmdd: string) => `bh:base:series:day:${yyyymmdd}`;
+
+/**
+ * First UTC day the Base archive recorded anything.
+ *
+ * ⚠️ NOT YET CONSUMED. There is no Base series READ route yet — this ships
+ * with the writer only, deliberately, because history cannot be backfilled and
+ * every hour spent building a reader first is an hour permanently lost. The RH
+ * twin `SERIES_ARCHIVE_START` *is* wired (see `/api/hood/series`), and this
+ * constant exists so whoever builds the Base reader inherits the distinction
+ * already made rather than reinventing it: a day before this is
+ * "before_archive" — a KNOWN gap — not "no data", which would read as the
+ * unknown/empty case. Conflating those is how an absent record becomes a
+ * claimed fact.
+ *
+ * Set to the day the writer shipped. Do NOT move it backwards to make a chart
+ * look fuller: that converts a known gap into a silent lie.
+ */
+export const BASE_SERIES_ARCHIVE_START = "20260828";
+
 /** Monotonic counter for the aesthetic `#0001` serial. */
 export const KV_ARROW_SERIAL_COUNTER = "bh:arrow:serial";
 
 /** Individual arrow record. */
 export const kvArrow = (id: string) => `bh:arrow:${id}`;
 
-/** Index of currently-open (not yet graded) arrow ids per (ticker, type) — used for de-dup. */
-export const kvArrowOpenIndex = (ticker: string, type: string) =>
-  `bh:arrow:open:${ticker.toLowerCase()}:${type}`;
+/** Index of currently-open (not yet graded) arrow ids per (ticker, type) — used for de-dup.
+ *  `chain` defaults to robinhood → RH key unchanged; base gets a `base:` segment. */
+export const kvArrowOpenIndex = (ticker: string, type: string, chain: HoodChain = "robinhood") =>
+  `bh:arrow:open:${chainSeg(chain)}${ticker.toLowerCase()}:${type}`;
 
 /**
  * P3.1 (v3 spec, 2026-07-24): index of currently-open arrows keyed by
@@ -30,21 +114,74 @@ export const kvArrowOpenIndex = (ticker: string, type: string) =>
  * COIN drift + COIN arb 42min apart) and it looked spammy.
  *
  * Same 30d TTL as the typed key so we're consistent.
+ *
+ * `chain` defaults to robinhood → RH key unchanged. On base the `base:` segment
+ * keeps a Base NVDA arrow independent of the RH NVDA arrow (both chains list it).
  */
-export const kvArrowOpenByTicker = (ticker: string) =>
-  `bh:arrow:open_ticker:${ticker.toLowerCase()}`;
+export const kvArrowOpenByTicker = (ticker: string, chain: HoodChain = "robinhood") =>
+  `bh:arrow:open_ticker:${chainSeg(chain)}${ticker.toLowerCase()}`;
 
 /**
  * P3.1: per-ticker cooldown key. Set when an arrow closes (graded),
  * TTL = 4h. `fireArrow` refuses if this key exists — no follow-up
  * arrow on the same ticker until the cooldown expires. Prevents the
  * "one ticker fires arb 15min after drift grade" pattern.
+ *
+ * `chain` defaults to robinhood → RH key unchanged; base gets a `base:` segment
+ * so a Base cooldown never suppresses the RH ticker of the same name (or vice
+ * versa) — they are independent signals on independent chains.
  */
-export const kvArrowTickerCooldown = (ticker: string) =>
-  `bh:arrow:cooldown:${ticker.toLowerCase()}`;
+export const kvArrowTickerCooldown = (ticker: string, chain: HoodChain = "robinhood") =>
+  `bh:arrow:cooldown:${chainSeg(chain)}${ticker.toLowerCase()}`;
 
 /** Rolling list of all arrow ids (newest first) — used by /hood feed + hit-rate math. */
 export const KV_ARROW_FEED = "bh:arrow:feed";
+
+/**
+ * #148 ② — the HYDRATED arrow feed: one KV value holding the newest
+ * `ARROW_HYDRATED_MAX` arrow RECORDS, not just their ids.
+ *
+ * WHY: reading the feed used to cost `1 + N` commands — one for the id index
+ * above, then one per arrow. At N≈200 that is ~401 commands PER REQUEST, and
+ * four pollers hit it every 15s. That fan-out (not tab count — `s-maxage`
+ * fixed tab count in ①) is what put a 500K/month Upstash allowance on the
+ * floor three separate times. Through this key the same read costs **1**.
+ *
+ * This is a CACHE, never the source of truth. `bh:arrow:feed` +
+ * `bh:arrow:{id}` remain authoritative; this key is rebuilt from them and is
+ * safe to delete at any moment. Deleting it costs one rebuild, never data.
+ * Same precedent as `KV_TICKER_CONFIDENCE` — recompute-per-request is the
+ * thing the budget cannot afford.
+ */
+export const KV_ARROW_HYDRATED = "bh:arrow:hydrated";
+
+/**
+ * How many arrow records the hydrated blob carries.
+ *
+ * 250 is derived, not taste. The widest read any caller performs is
+ * `?limit=200` (`MAX_LIMIT` on /api/hood/arrows, and what both the Inbox and
+ * Track Record pollers request), so the blob must cover 200 with headroom for
+ * the origin/test filter to cull without starving the result — hence ×1.25.
+ *
+ * The ceiling is a byte budget, and it was MEASURED (2026-08-27, live prod
+ * feed, n=200): p50 1,998 B/arrow, max 2,484 B, 394 KB total. So 250 ≈ 490 KB
+ * — under the 1 MB KV value limit with ~2× room. Do NOT raise this past ~400
+ * without re-measuring: at 600 the blob is ~1.13 MB and the write silently
+ * starts failing. If the feed needs to be deeper than this, shard the key —
+ * do not grow the value.
+ */
+export const ARROW_HYDRATED_MAX = 250;
+
+/**
+ * Backstop TTL only — freshness comes from write-time patching in
+ * `arrow-cache.ts` (fire prepends, grade patches in place), NOT from expiry.
+ *
+ * That distinction sets the number. If the TTL were the freshness mechanism it
+ * would have to be minutes, and a rebuild costs ~252 commands: at 10 min that
+ * is 36K commands/day, which re-creates the problem this key exists to solve.
+ * As a pure corruption backstop, 6h costs 4 rebuilds/day ≈ 1K commands — free.
+ */
+export const TTL_ARROW_HYDRATED = 60 * 60 * 6; // 6h
 
 /** T-B1 — hourly sparkline series per ticker. 24 close prices from M2.
  *  Refreshed by a separate cron (not the hot 72s poll cycle) so cycle
@@ -227,6 +364,19 @@ export const KV_ALERT_PENDING = "bh:alert:pending";
  */
 export const kvSeriesDay = (yyyymmdd: string) => `bh:series:day:${yyyymmdd}`;
 
+/**
+ * Drift Statistics v0 — the per-ticker rolling confidence table, as ONE blob.
+ *
+ * One key, not one per ticker: the engine needs the whole table on every cycle
+ * (any of ~20 tickers may fire), so per-ticker keys would turn one read into
+ * twenty. Recomputing from the feed instead of caching would be ~300 reads ×
+ * 288 cycles/day ≈ 86K/day against the 500K/month Upstash cap that starved this
+ * engine once (task #123). Written only when the grader actually closes an
+ * arrow — see `CONFIDENCE_MIN_REFRESH_MS`. No TTL: a stale table is still a
+ * useful table, and the 24h ceiling forces a rebuild anyway.
+ */
+export const KV_TICKER_CONFIDENCE = "bh:ticker:confidence";
+
 /** TTL constants (seconds). */
 export const TTL_SNAPSHOT_HOUR = 60 * 60 * 25; // 25h so we always have a full 24h window
 export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are at most 24h
@@ -234,6 +384,20 @@ export const TTL_ARROW_INDEX = 60 * 60 * 24 * 30; // 30d — grading windows are
  *  "one open arrow at a time" and "let the next real setup fire soon". */
 export const TTL_TICKER_COOLDOWN = 60 * 60 * 4; // 4h
 export const TTL_SPARKLINE = 60 * 20; // 20 min — hourly candles don't need to be fresher than that
+/**
+ * Base P1 — 15 min = 3 poll cycles at the 5-min cron cadence.
+ *
+ * Short ON PURPOSE. If the Base desk dies (DexScreener ceiling, RPC outage,
+ * a bad deploy) this key EXPIRES and the board renders "Base desk offline"
+ * instead of quietly serving three-hour-old stock prices as if they were live.
+ * Failing loud beats failing plausible — a stale price that looks fresh is
+ * worse than no price, because it is actionable and wrong.
+ *
+ * Three cycles, not one, so a single transient miss doesn't blank the desk.
+ * The read path ALSO checks `started_at` against `BASE_ROWS_MAX_AGE_MS`, so
+ * freshness does not depend on the TTL landing precisely.
+ */
+export const TTL_BASE_ROWS = 60 * 15; // 15 min = 3 poll cycles
 export const TTL_PUSH_SUB = 60 * 60 * 24 * 90; // 90d — browser subs expire on their own well before this
 export const TTL_CHAT_CARD = 60 * 60 * 24 * 30; // 30d — matches TTL_ARROW_INDEX so cards don't outlive arrows
 /** 2.1 — an alert record self-expires so KV never accumulates unboundedly, even

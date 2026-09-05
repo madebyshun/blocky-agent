@@ -46,7 +46,7 @@ export default function X402Doc() {
 
       <Callout color="#fbbf24" title="Full catalog">
         {TOOL_COUNT} tools total. Discover the live catalog with <code className="text-[#4FC3F7]">blue-registry</code> or browse the OpenAPI spec at{" "}
-        <a href="https://api.blueagent.dev/docs" className="text-[#fbbf24] underline">api.blueagent.dev/docs</a>.
+        <a href="https://blueagent.dev/.well-known/openapi.json" className="text-[#fbbf24] underline">blueagent.dev/.well-known/openapi.json</a>.
       </Callout>
 
       <PrevNext current="/docs/x402" />

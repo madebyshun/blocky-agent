@@ -16,9 +16,10 @@ export type CompositeSkill = {
 
 const X402_BASE = "https://blueagent.dev/api/x402";
 
-// Blue Hub treasury — default builder address for Blue Agent first-party tools.
+// Blue Agent treasury — default builder address for first-party tools, and the
+// single x402 payee (same wallet as x402-cdp PAY_TO and payments TOPUP_TREASURY).
 // Builder-submitted tools (Hub v2 Phase 3) will set this to the builder's own wallet.
-export const BLUE_TREASURY = "0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f" as const;
+export const BLUE_TREASURY = "0x02950ad38ada1d599375bd447e080cd404809205" as const;
 
 export type AgentTool = {
   id: string;
@@ -1386,15 +1387,30 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
     x402Url: `${X402_BASE}/narrative-scan`,
     x402Body: () => ({}),
   },
+  // ⚠ RETIRED, AND FREE BECAUSE IT IS RETIRED. This sold for $0.05 while its
+  // input queue had been structurally unwritable since 2026-06-27: the only
+  // writer of `feed:picks:pending` was `base-token-scan` running inside the
+  // HOURLY feed cron, which short-circuited on a pause flag and had had no
+  // scheduler since its GH Actions workflow was deleted 2026-07-17. Both KV
+  // keys aged out (pending 7d, history 30d) in July. So a paying caller could
+  // only ever receive an empty record. Charging for a measurement the system
+  // cannot take is the same dishonesty as #143/#144/#145, with money attached.
+  //
+  // 2026-09-02: Blue Feed was retired outright — cron, pages and _shared.ts
+  // deleted — so "paused" became a false promise of a resume. The entry stays
+  // listed rather than deleted so the tool declares its own death instead of
+  // silently vanishing, and so catalog count == handler count still holds.
+  // `priceUnits === 0` is an explicitly supported path in
+  // api/x402/[tool]/route.ts (see the `!priceUnits` warnings there).
   {
     id: "picks-check",
-    name: "Signal Track Record",
-    description: "Measures base-token-scan signal filter accuracy 22h after detection. WIN/LOSS = filter direction correct, not trading profit. Not financial advice.",
+    name: "Signal Track Record (retired)",
+    description: "RETIRED — Blue Feed stopped writing the signal queue on 2026-06-27 and was retired on 2026-09-02, so this returns an EMPTY record, not a measured one, and will not resume. Free. When it ran it measured base-token-scan filter accuracy 22h after detection; WIN/LOSS = filter direction correct, not trading profit. Not financial advice.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "signal",
     inputs: [],
     isComposite: false,
-    price: "$0.05", priceUSDC: 50000,
+    price: "$0.00", priceUSDC: 0,
     x402Url: `${X402_BASE}/picks-check`,
     x402Body: () => ({}),
   },
@@ -1420,7 +1436,7 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
   {
     id: "rh-rwa-index",
     name: "RH RWA Index",
-    description: "Full canonical Robinhood Chain RWA catalog — 20+ tokenized stocks, 5 ETFs, plus Chainlink-only feeds. Zero-input. For portfolio dashboards + sector basket builders.",
+    description: "Full canonical Robinhood Chain RWA catalog — every token the RHJ factory has deployed (180+ tokenized stocks, 20+ ETFs), plus Chainlink-only feeds. Zero-input. A listing proves RHJ issued the token; it does not imply the token is tradable. For portfolio dashboards + sector basket builders.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "on-chain",
     inputs: [],
@@ -1615,7 +1631,7 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
   {
     id: "rh-stock-holdings",
     name: "RH Stock Holdings",
-    description: "Full RH RWA portfolio for a wallet: reads balanceOf for all 26 canonical tokenized stocks/ETFs, prices non-zero balances via Chainlink (fallback DEX). Real on-chain reads. Never fabricates. Value_usd is null when no price source exists.",
+    description: "Full RH RWA portfolio for a wallet: reads balanceOf for every canonical tokenized stock/ETF in the registry, prices non-zero balances via Chainlink (fallback DEX). Real on-chain reads. Never fabricates — value_usd is null when no price source exists, and any balance read that failed is reported in unread_count rather than counted as a zero.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "portfolio",
     inputs: [
@@ -1720,7 +1736,7 @@ const AGENT_TOOLS_RAW: AgentTool[] = [
   {
     id: "rh-stock-new-listings",
     name: "RH New Listings",
-    description: "Detects newly-deployed contracts by the canonical RHJ deployer via Blockscout — anything not in our registry is a candidate for the next RWA listing. Auto-diff vs canonical registry.",
+    description: "Reads every `Deployed` event from the canonical RHJ token factory and diffs it against our registry. Provenance is structural — an impersonator cannot emit the real factory's events — so anything listed here is a genuine RH stock token, and anything missing from the registry is a real new listing.",
     agentHandle: "blueagent", agentName: "Blue Agent", agentType: "blue",
     category: "on-chain",
     inputs: [

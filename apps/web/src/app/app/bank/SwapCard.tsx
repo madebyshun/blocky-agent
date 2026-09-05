@@ -4,6 +4,21 @@
 // routed via the 0x Swap API. BlueBank fetches the route from /api/swap/quote;
 // the user approves (for ERC-20 sells) and signs the swap from their own wallet.
 // Base mainnet only — 0x doesn't route testnet liquidity.
+//
+// ⚠️ NETWORK-BLIND BY DESIGN; THE CALLER MUST GATE — see BankClient.
+// This component takes no `network` prop and reads none. Every address in
+// `TOKENS` is Base mainnet, every balance read pins `chainId: base.id`, and
+// `swap()` calls `switchChainAsync({ chainId: base.id })` BEFORE signing. So
+// rendering it while the surrounding page is on a testnet does not produce a
+// testnet swap — it silently yanks the wallet to MAINNET and spends REAL funds
+// under a page captioned "no real value". BankClient is what stops that: its
+// Convert panel refuses to mount this card when `isTestnet`.
+//
+// The hazard is a SECOND caller. Import this anywhere else and you inherit the
+// mainnet-blindness without inheriting the guard, and nothing here will warn
+// you — there is no runtime check, only that one call site. Add the gate at
+// the new call site too, or give this component a `network` prop and make the
+// refusal its own responsibility.
 
 import { useState, useEffect, useRef } from "react";
 import { useAccount, useBalance, useReadContract, useSwitchChain, useWriteContract, useSendTransaction } from "wagmi";
@@ -11,15 +26,24 @@ import { formatUnits, parseUnits } from "viem";
 import { base } from "wagmi/chains";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { DATA_SUFFIX } from "@/constants/builderCode";
+import { BASE_MAJORS, NATIVE_SENTINEL } from "@/lib/wallet/token-trust";
 
-const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+// The tradable majors come from `token-trust.ts`, which is also what decides
+// whether a token in the portfolio may be sold at all. They used to be two
+// hand-typed lists that happened to agree; now the list this card offers to buy
+// IS the list the app vouches for, and adding a major in one place adds it in
+// both. Looked up by symbol rather than index — an imported array can be
+// reordered upstream, a local literal cannot.
+const NATIVE = NATIVE_SENTINEL;
 type Token = { sym: string; addr: string; decimals: number; native?: boolean };
-const TOKENS: Token[] = [
-  { sym: "ETH",   addr: NATIVE, decimals: 18, native: true },
-  { sym: "USDC",  addr: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 },
-  { sym: "WETH",  addr: "0x4200000000000000000000000000000000000006", decimals: 18 },
-  { sym: "cbBTC", addr: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", decimals: 8 },
-];
+const TOKENS: Token[] = BASE_MAJORS;
+const ETH  = TOKENS.find(t => t.native)!;
+const USDC = TOKENS.find(t => t.sym === "USDC")!;
+
+// A quick-sell pre-fill pushed in from the portfolio token table: an arbitrary
+// sell token (beyond the 4 majors) + a concrete amount. `nonce` bumps on every
+// click so re-selling the same token re-applies.
+export type SellPreset = { addr: string; sym: string; decimals: number; amount: string; nonce: number };
 
 const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 6 });
 
@@ -30,14 +54,14 @@ type Quote = {
   issues?: { allowance?: { spender: `0x${string}` } | null };
 };
 
-export default function SwapCard({ account }: { account?: `0x${string}` }) {
+export default function SwapCard({ account, preset }: { account?: `0x${string}`; preset?: SellPreset | null }) {
   const { isConnected } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
   const { sendTransactionAsync } = useSendTransaction();
 
-  const [sell, setSell] = useState<Token>(TOKENS[0]); // ETH
-  const [buy, setBuy]   = useState<Token>(TOKENS[1]); // USDC
+  const [sell, setSell] = useState<Token>(ETH);
+  const [buy, setBuy]   = useState<Token>(USDC);
   const [amount, setAmount] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
   const [loading, setLoading] = useState(false);
@@ -76,6 +100,19 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
     return () => clearTimeout(t);
   }, [sellBase, sell.addr, buy.addr, account]);
 
+  // Apply a quick-sell pre-fill from the token table: set the (possibly
+  // non-major) sell token + amount and default the buy side to USDC — but sell
+  // *to ETH* when the token being sold IS USDC. Keyed on nonce so repeat clicks
+  // re-fill. The user still reviews and signs via the normal Convert button.
+  useEffect(() => {
+    if (!preset) return;
+    setSell({ sym: preset.sym, addr: preset.addr, decimals: preset.decimals });
+    setBuy(preset.addr.toLowerCase() === USDC.addr.toLowerCase() ? ETH : USDC);
+    setAmount(preset.amount);
+    setQuote(null); setStep("idle"); setErr("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.nonce]);
+
   const buyAmount = quote?.buyAmount ? Number(formatUnits(BigInt(quote.buyAmount), buy.decimals)) : null;
   const minBuy = quote?.minBuyAmount ? Number(formatUnits(BigInt(quote.minBuyAmount), buy.decimals)) : null;
   const rate = buyAmount != null && amt > 0 ? buyAmount / amt : null;
@@ -85,12 +122,16 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
     if (balance == null) return;
     setAmount(String(sell.native ? Math.max(0, balance - 0.00005) : balance));
   }
-  function pick(side: "sell" | "buy", sym: string) {
-    const tok = TOKENS.find(t => t.sym === sym)!;
+  function pick(side: "sell" | "buy", addr: string) {
+    const tok = [sell, buy, ...TOKENS].find(t => t.addr.toLowerCase() === addr.toLowerCase());
+    if (!tok) return;
     if (side === "sell") { if (tok.addr === buy.addr) setBuy(sell); setSell(tok); }
     else { if (tok.addr === sell.addr) setSell(buy); setBuy(tok); }
     setAmount(""); setQuote(null);
   }
+  // Sell-side options include an injected non-major token so it renders + stays selectable.
+  const inMajors = (t: Token) => TOKENS.some(x => x.addr.toLowerCase() === t.addr.toLowerCase());
+  const sellOptions = inMajors(sell) ? TOKENS : [sell, ...TOKENS];
 
   const canSwap = !!account && !!quote?.transaction && amt > 0 && !overBalance && !loading;
   const busy = step === "approving" || step === "swapping";
@@ -101,6 +142,9 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
     if (!quote?.transaction) { setErr(quote?.error || "No route for this pair"); setStep("error"); return; }
     setErr(""); setTxHash("");
     try {
+      // Unconditional jump to MAINNET, whatever chain the page thinks it is on
+      // — network-blind by design; the caller MUST gate (see the file header
+      // and BankClient's `isTestnet` refusal). Real funds move after this line.
       await switchChainAsync({ chainId: base.id });
       // ERC-20 sells need an allowance to the 0x AllowanceHolder first.
       if (!sell.native && quote.issues?.allowance?.spender) {
@@ -141,10 +185,10 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
     );
   }
 
-  const TokenSelect = ({ side, value }: { side: "sell" | "buy"; value: Token }) => (
-    <select value={value.sym} onChange={e => pick(side, e.target.value)}
+  const TokenSelect = ({ side, value, options }: { side: "sell" | "buy"; value: Token; options: Token[] }) => (
+    <select value={value.addr} onChange={e => pick(side, e.target.value)}
       className="bg-[#050508] border border-[#1A1A2E] rounded-lg px-2 py-1.5 font-mono text-[11px] text-slate-200 outline-none">
-      {TOKENS.map(t => <option key={t.sym} value={t.sym}>{t.sym}</option>)}
+      {options.map(t => <option key={t.addr} value={t.addr}>{t.sym}</option>)}
     </select>
   );
 
@@ -167,7 +211,7 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
         <div className="flex items-center gap-2">
           <input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.0"
             className="flex-1 bg-transparent font-mono text-[16px] text-white outline-none placeholder:text-slate-700 w-0" />
-          <TokenSelect side="sell" value={sell} />
+          <TokenSelect side="sell" value={sell} options={sellOptions} />
         </div>
         {overBalance && <div className="font-mono text-[9px] text-red-500 mt-1">Exceeds your {sell.sym} balance</div>}
       </div>
@@ -184,7 +228,7 @@ export default function SwapCard({ account }: { account?: `0x${string}` }) {
           <div className="flex-1 font-mono text-[16px] text-white w-0 truncate">
             {loading ? <span className="text-slate-600">…</span> : buyAmount != null ? fmt(buyAmount) : <span className="text-slate-700">0.0</span>}
           </div>
-          <TokenSelect side="buy" value={buy} />
+          <TokenSelect side="buy" value={buy} options={TOKENS} />
         </div>
       </div>
 

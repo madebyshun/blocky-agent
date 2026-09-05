@@ -109,12 +109,10 @@ function Reveal({ children, delay = 0, className = "" }: { children: React.React
 
 // ─── formatting helpers ──────────────────────────────────────────────────────
 
-/** Split a compact string like "822.3M" into value + suffix. "—" → not ok. */
-function parseCompact(s: string): { value: number; suffix: string; ok: boolean } {
-  const m = /^([\d.]+)\s*([KMBT]?)$/.exec((s ?? "").trim());
-  if (!m) return { value: 0, suffix: "", ok: false };
-  return { value: parseFloat(m[1]), suffix: m[2] || "", ok: true };
-}
+/* `parseCompact` lived here — it split the pre-formatted "822.3M" that
+   public-stats returned for total BLUE staked back into a number the animated
+   counter could tick. Every other stat on this page arrives as a raw number,
+   so once the staking panel went, nothing needed re-parsing. */
 
 /** Compact token/number formatting: 3_300_000 → "3.3M". */
 function compact(n: number): string {
@@ -353,15 +351,16 @@ function ModelUsageSection({ usage }: { usage: BankrUsage }) {
 // ─── main view ───────────────────────────────────────────────────────────────
 
 export default function StatsView({ stats, usage: modelUsage }: { stats: PublicStats; usage: BankrUsage }) {
-  const { launches, staking, product, usage, users, credits, settlement } = stats;
-  const staked = parseCompact(staking.totalStakedBlue);
+  const { launches, product, usage, users, credits, settlement } = stats;
   const revenue = parseFloat((usage.revenueEst ?? "").replace(/[^0-9.]/g, "")) || 0;
 
+  // "BLUE Staked" used to sit in the middle of the hero. It was removed with the
+  // stake surface: the staking contract is unchanged on Base, but this page is
+  // no longer selling a stake, so headlining its TVL advertised a product that
+  // isn't offered. Active Users replaces it — same ledger the rest of the page reads.
   const heroCards: Cell[] = [
     { label: "Tool Runs", color: "#4FC3F7", value: usage.totalRuns },
-    staked.ok
-      ? { label: "BLUE Staked", color: "#34D399", value: staked.value, decimals: staked.suffix ? 1 : 0, suffix: staked.suffix }
-      : { label: "BLUE Staked", color: "#34D399", raw: staking.totalStakedBlue },
+    { label: "Active Users", color: "#34D399", value: users.total },
     { label: "Tokens Launched", color: "#A78BFA", value: launches.total },
   ];
 
@@ -467,8 +466,8 @@ export default function StatsView({ stats, usage: modelUsage }: { stats: PublicS
           </Reveal>
           <MetricGrid cells={usageCells} cols="grid-cols-2 lg:grid-cols-4" />
           <p className="font-mono text-[10px] text-slate-600 mt-3 leading-relaxed">
-            Credits are earned by staking $BLUEAGENT or claimed free at signup, then spent per Blue Chat message.
-            Balances are per-wallet and private — only these aggregate counts are shown.
+            Credits are claimed free on signup, refilled daily per connected wallet, and topped up in USDC —
+            then spent per Blue Chat message. Balances are per-wallet and private; only these aggregate counts are shown.
           </p>
         </section>
 
@@ -539,30 +538,13 @@ export default function StatsView({ stats, usage: modelUsage }: { stats: PublicS
           </Reveal>
         </section>
 
-        {/* ══ STAKING + PRODUCT ══ */}
-        <section className="max-w-5xl mx-auto px-6 py-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* ══ PRODUCT ══
+            A "Staking" panel sat to the left of this one, headlining total BLUE
+            locked in BlueMarketStaking. It went out with the stake surface —
+            the contract is untouched on Base, but the app no longer sells a
+            stake, so quoting its TVL here was advertising a retired product. */}
+        <section className="max-w-5xl mx-auto px-6 py-6">
           <Reveal>
-            <div className="h-full rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-6 transition-colors hover:border-[#34D39930]">
-              <p className="font-mono text-[10px] text-slate-600 tracking-widest uppercase mb-3">Staking</p>
-              <div className="flex items-baseline gap-2 mb-2">
-                {staked.ok ? (
-                  <AnimatedNumber
-                    value={staked.value} decimals={staked.suffix ? 1 : 0} suffix={staked.suffix}
-                    className="font-mono text-3xl font-bold text-[#34D399]"
-                  />
-                ) : (
-                  <span className="font-mono text-3xl font-bold text-[#34D399]">{staking.totalStakedBlue}</span>
-                )}
-                <span className="font-mono text-sm text-slate-500">BLUE</span>
-              </div>
-              <p className="font-mono text-[11px] text-slate-500 leading-relaxed">
-                Total $BLUEAGENT staked in the BlueMarketStaking contract, earning
-                USDC yield + Blue Chat credits. Verifiable on-chain on Base (8453).
-              </p>
-            </div>
-          </Reveal>
-
-          <Reveal delay={100}>
             <div className="h-full rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-6 transition-colors hover:border-[#4FC3F730]">
               <p className="font-mono text-[10px] text-slate-600 tracking-widest uppercase mb-3">Product surface</p>
               <div className="grid grid-cols-2 gap-4">

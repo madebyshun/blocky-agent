@@ -96,12 +96,12 @@ export const CATEGORIES: Category[] = [
     description: '6 commands   post · list · accept · submit · approve · profile',
     type: 'builder',
     items: [
-      { name: 'blue micro post',    description: 'post a new microtask with USDC reward' },
+      { name: 'blue micro post',    description: 'post a new microtask with a stated reward' },
       { name: 'blue micro list',    description: 'browse open microtasks' },
       { name: 'blue micro accept',  description: 'claim a slot on an open microtask' },
       { name: 'blue micro submit',  description: 'submit proof for a claimed slot' },
-      { name: 'blue micro approve', description: 'approve submission and release USDC' },
-      { name: 'blue micro profile', description: 'view earnings and reputation' },
+      { name: 'blue micro approve', description: 'approve or reject a submission' },
+      { name: 'blue micro profile', description: 'view approved value and reputation' },
     ],
   },
   {

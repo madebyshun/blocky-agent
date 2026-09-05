@@ -136,7 +136,7 @@ async function showDetail(id: string): Promise<void> {
   process.stdout.write(`  Deadline:    ${fmtDeadline(task.deadline)}\n`);
   process.stdout.write(`  Approval:    ${task.approval_mode}\n`);
   process.stdout.write(`  Status:      ${fmtStatus(task.status)}\n`);
-  process.stdout.write(`  Escrow:      $${task.escrow.amount_locked.toFixed(2)} locked / $${task.escrow.amount_released.toFixed(2)} released\n`);
+  process.stdout.write(`  Budget:      $${task.escrow.amount_locked.toFixed(2)} unclaimed / $${task.escrow.amount_released.toFixed(2)} approved (local ledger)\n`);
   process.stdout.write(`\n  Claims:      ${claims.length} total — ${approved} approved, ${pending} pending\n`);
   process.stdout.write(`\n${LINE}\n`);
   process.stdout.write(`  Accept: blue micro accept ${id} @handle\n\n`);

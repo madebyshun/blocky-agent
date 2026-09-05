@@ -7,11 +7,13 @@
  * the React `WatchlistProvider` is just a client-side cache over these same
  * routes, never a second copy of the rules.
  *
- * WHY NOT the Sentinel shape: Sentinel keeps ALL watches in one global array
- * (`sentinel:watches`), read+written whole on every edit — race-prone and
- * unbounded. Per-user alerting can't scale on that. Here each wallet owns its
- * own key, and the alert engine's hot lookup ("who watches COIN?") is a single
- * Redis SET read, not a scan of every watcher.
+ * WHY NOT ONE GLOBAL ARRAY: the shape this deliberately rejects keeps ALL
+ * watches in a single key, read+written whole on every edit — two concurrent
+ * edits lose one, and the blob grows without bound. Per-user alerting cannot
+ * scale on that. Here each wallet owns its own key, and the alert engine's hot
+ * lookup ("who watches COIN?") is a single Redis SET read, not a scan of every
+ * watcher. (The concrete example was Sentinel's `sentinel:watches`; Sentinel
+ * was retired 2026-08-31 — the reasoning is what matters, not the corpse.)
  *
  * TWO KEYS, KEPT SYMMETRIC:
  *   • bh:watch:{address}       — forward, the user's list (UI edits this)
@@ -23,6 +25,7 @@
 
 import {
   kvGet,
+  kvGetProbe,
   kvSet,
   kvDel,
   kvSAdd,
@@ -80,7 +83,7 @@ interface TgLinkCode {
   expiresAt: string;   // ISO
 }
 
-export type WatchlistErrorCode = "bad_address" | "bad_ticker" | "at_cap";
+export type WatchlistErrorCode = "bad_address" | "bad_ticker" | "at_cap" | "kv_unavailable";
 export interface WatchlistError {
   code: WatchlistErrorCode;
   message: string;
@@ -157,6 +160,42 @@ export function evaluateAdd(currentCount: number, tier: WatchlistTierName): AddD
 
 // ── Read ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Read a wallet's watchlist, distinguishing "empty" from "we could not read it".
+ *
+ * ⚠ MUTATORS MUST USE THIS, not `getWatchlist`. `getWatchlist` returns an empty
+ * default on a KV read error, and every mutation here is a read-modify-write
+ * against the same key — so under the old code a throttled read made
+ * `addTicker` persist a one-entry list over the user's real one, and made
+ * `removeTicker` see `entries.length === 0` and `kvDel` the watchlist outright
+ * plus deregister the wallet from the global index. Silent, total, and only
+ * noticed the next time that user opened /hood. See task #150.
+ */
+async function readWatchlistForWrite(a: string): Promise<Watchlist | "unavailable"> {
+  const probe = await kvGetProbe<Watchlist>(kvWatchlist(a));
+  if (probe.status === "error") {
+    console.error(`[watchlist] refusing to mutate ${a} — KV read failed: ${probe.message}`);
+    return "unavailable";
+  }
+  if (probe.status === "miss") return emptyWatchlist(a);
+  return normalizeStored(a, probe.value);
+}
+
+const KV_UNAVAILABLE_ERR = {
+  code: "kv_unavailable" as const,
+  message: "watchlist store is temporarily unreachable — nothing was changed",
+};
+
+/** Guarantee the shape even if an older/partial record was stored. */
+function normalizeStored(a: string, stored: Watchlist): Watchlist {
+  return {
+    address: a,
+    entries: Array.isArray(stored.entries) ? stored.entries : [],
+    source: stored.source === "custom" ? "custom" : "default",
+    updatedAt: stored.updatedAt ?? new Date().toISOString(),
+  };
+}
+
 /** A wallet's watchlist. Returns an empty default (never null) so callers don't branch on absence. */
 export async function getWatchlist(address: string): Promise<Watchlist> {
   const a = normAddress(address);
@@ -231,7 +270,9 @@ export async function addTicker(
     return { ok: false, error: { code: "bad_ticker", message: `${T} is not a Robinhood Chain RWA ticker` } };
   }
 
-  const wl = await getWatchlist(a);
+  const wlRead = await readWatchlistForWrite(a);
+  if (wlRead === "unavailable") return { ok: false, error: KV_UNAVAILABLE_ERR };
+  const wl = wlRead;
   const kinds = normalizeKinds(opts?.kinds);
 
   // Already watching → idempotent: refresh kinds, no double-count, no cap hit.
@@ -280,7 +321,12 @@ export async function removeTicker(address: string, ticker: string): Promise<Rem
   if (!a) return { ok: false, error: { code: "bad_address", message: "not a 0x… address" } };
 
   const T = ticker.trim().toUpperCase();
-  const wl = await getWatchlist(a);
+  // ⚠ Must be the strict read: the `entries.length === 0` branch below DELETES
+  // the watchlist key and deregisters the wallet globally. An unreadable list
+  // reaching that branch as "empty" wipes a real one. See #150.
+  const wlRead = await readWatchlistForWrite(a);
+  if (wlRead === "unavailable") return { ok: false, error: KV_UNAVAILABLE_ERR };
+  const wl = wlRead;
   const before = wl.entries.length;
   wl.entries = wl.entries.filter((e) => e.ticker !== T);
   const removed = wl.entries.length < before;

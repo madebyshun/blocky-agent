@@ -1,16 +1,12 @@
 // Blue Chat v2 — Shared Types
 
-// "tools" tab retired from chat — the Hub tool catalog now lives only on the Hub
-// (/hub). Tools still run inside chat (the model auto-calls them); they're just
-// not a browsable surface users must learn. Skills are the user-facing unit.
-//
-// "skills" + "connectors" retired 2026-08 (AgentOS Control): both were promoted
-// to first-class shell pages (/skills, /connectors) rendering the SAME panels.
-// Keeping them as chat tabs too meant the identical catalog was reachable from
-// two navs — so the chat sub-nav no longer owns them. "models" stays because it
-// is a per-conversation setting, not a catalog (the composer dropdown in
-// ChatInput is its primary control; this tab is the expanded comparison view).
-export type ActiveTab = "chat" | "models" | "settings";
+// The chat sub-nav has no tabs left, so there is no `ActiveTab` union any more.
+// Each tab left the same way — promoted to a shell page, then deleted here once
+// keeping both meant one surface behind two navs: "tools" → /hub, then "skills"
+// + "connectors" → /skills, /connectors (2026-08), then "models" → /models
+// (2026-09). Tools still run inside chat and a model is still picked per
+// conversation; the composer dropdown in ChatInput is that control. Settings
+// was never a tab — it opens as a modal from the sidebar account chip.
 
 export type ToolLog = {
   tool:    string;
@@ -73,25 +69,6 @@ export interface ChatTask {
   createdAt:  number;
   updatedAt:  number;
   model:      string;     // e.g. "pro"
-  persona:    PersonaId;
-}
-
-// ── Persona ────────────────────────────────────────────────────────────────────
-
-export type PersonaId =
-  | "blue-agent"
-  | "blue-trader"
-  | "blue-auditor"
-  | "blue-researcher"
-  | "custom";
-
-export interface Persona {
-  id:           PersonaId;
-  label:        string;
-  icon:         string;
-  desc:         string;   // one-line role summary shown in the picker
-  systemPrompt: string;   // empty = use BASE_SYSTEM only
-  color:        string;
 }
 
 // ── Artifact ───────────────────────────────────────────────────────────────────
@@ -112,11 +89,39 @@ export interface CronTask {
   id:          string;
   label:       string;
   schedule:    CronSchedule;
-  time:        string;      // "HH:MM" local
+  time:        string;      // "HH:MM" in `tz`
+  /**
+   * IANA zone the `time` is written in, stamped from the browser at creation.
+   * An OFFSET would be wrong here: it is a snapshot, and half the world's
+   * offsets change twice a year, so a task created in January would fire an
+   * hour off in July. Older tasks have no `tz` and degrade to UTC.
+   */
+  tz?:         string;
   prompt:      string;
   active:      boolean;
+  /**
+   * Model preset this task runs on, stamped at creation from the composer's
+   * current pick. Stored PER TASK rather than read live, because a background
+   * run has no session behind it: if it followed whatever preset happened to be
+   * selected last, switching the composer to Deep would silently re-price every
+   * standing task, and the user would find out from their balance.
+   */
+  tier?:       string;
+  /**
+   * Run on the server while the tab is closed. Off by default and requires a
+   * signed-in session (see /api/chat/schedule) — a background task is a standing
+   * instruction to spend the owner's credits, so it needs a stronger proof of
+   * ownership than a message the user is watching. Tasks without this still work
+   * exactly as before: they fire when Blue Chat is next opened.
+   */
+  background?: boolean;
+  /** Server-computed firing instant. Present only while `background` is on. */
+  nextAt?:     number;
   lastRun?:    number;      // epoch ms
   lastResult?: string;      // truncated output
+  lastError?:  string;      // why the last run produced nothing
+  /** Set by the scheduler when it disabled the task (e.g. out of credits). */
+  pausedReason?: string;
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────

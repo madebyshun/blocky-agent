@@ -1,42 +1,82 @@
 "use client";
 
 // BlueBank dashboard — responsive grid layout: sidebar | grid content.
-// Non-custodial Base neobank: real on-chain balances (wagmi), live yield rates
-// (DefiLlama), real transactions (Moralis). Nothing is fabricated.
+// Non-custodial Base neobank: real on-chain balances (wagmi), real transactions
+// (Moralis). Nothing is fabricated.
+//
+// This wallet does NOT sell yield. The Earn entrance was closed one release ago
+// (supply deferred to phase 2) and this one removes the shop window that stayed
+// up after it: the APY boards, the rate sparkline, the DeFi app grid. What
+// survives is the part that is about the user's own money — a position they
+// already hold, and the exit from it. See the `earn*` block below.
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useAccount, useReadContract, useBalance } from "wagmi";
+import Link from "next/link";
+import { useAccount, useReadContract, useBalance, useSwitchChain } from "wagmi";
 import { useWalletDisconnect } from "@/lib/walletSession";
 import { useWallet } from "@/hooks/useWallet";
+import PrivyLoginButton from "@/components/PrivyLoginButton";
+import { PRIVY_ENABLED, describeLoginMethods } from "@/lib/privy/config";
 import { formatUnits } from "viem";
 import { QRCodeSVG } from "qrcode.react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-import {
-  YIELD_NETWORKS, ERC20_ABI, AAVE_POOL_ABI, ERC4626_ABI, VENUES, supplyApyPct,
-  type YieldNetwork,
-} from "@/lib/yield-execution";
+import { WALLET_CHAINS, WALLET_CHAIN_ORDER, type WalletChain } from "@/lib/wallet/chains";
+// ⚠️ EARN-ONLY import, and now WITHDRAW-only: the contract addresses needed to
+// read a position the user already holds and hand them back out of it. The
+// wallet's identity (chain, explorer, what counts as cash) comes from
+// @/lib/wallet/chains — nothing here decides what the wallet IS.
+//
+// `AAVE_POOL_ABI` + `supplyApyPct` were dropped with the rate boards: an APY is
+// only actionable if you can supply more, and you can't.
+import { YIELD_NETWORKS, ERC20_ABI, ERC4626_ABI, VENUES } from "@/lib/yield-execution";
 import { MoveToYieldCard, SendCard } from "@/app/chat/components/ToolCards";
 import { useBasename, shortAddr } from "@/lib/useBasename";
 import QrScanner from "./QrScanner";
-import SwapCard from "./SwapCard";
+import SwapCard, { type SellPreset } from "./SwapCard";
 import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payment-qr";
+// `B20_ENABLED` was imported alongside this, purely to hide the Orders tab.
+// OrdersPanel reads the same flag itself and renders its own degraded-mode
+// banner from it, so gating the entrance here only ever meant the user could
+// not reach the explanation. See the VIEWS list below.
 import OrdersPanel from "./OrdersPanel";
-import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
+import TokenTable from "./TokenTable";
+import StockTable from "./StockTable";
+import type { WalletHolding } from "@/lib/wallet/holdings";
+import { useWalletIdentity } from "@/lib/wallet/identity";
 import { buildWalletState } from "@/lib/state";
 
 const usd = (n: number | null | undefined) =>
   n == null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const CAMPAIGNS: { name: string; desc: string; badge: string; color: string }[] = [
-  { name: "Base Ecosystem Fund", desc: "Builder grants — up to $50K", badge: "OPEN", color: "#4FC3F7" },
-  { name: "Morpho Boost", desc: "+0.5% APY on USDC deposits", badge: "LIVE", color: "#A78BFA" },
-];
+// A `CAMPAIGNS` array sat here with two entries — "Base Ecosystem Fund" and
+// "Morpho Boost · +0.5% APY on USDC deposits" — and NOTHING rendered it. Dead
+// on arrival, but the second one is why it goes in this commit rather than a
+// tidy-up: it advertised a deposit bonus for an entrance that is closed, and a
+// dead advert is one `{CAMPAIGNS.map(…)}` away from being a live lie.
 
-type Panel = "positions" | "earn" | "send" | "receive" | "convert" | "orders";
+// "withdraw" was "earn" until yield was deferred to phase 2. The panel still
+// renders MoveToYieldCard, but withdraw-only: no new supply can be started from
+// this surface, while anyone already deposited keeps a way out.
+//
+// `orders` left this union for the page-level `View` below. It was the one tab
+// here that is not a transaction you start and finish in a modal — payment
+// requests are a list you keep, come back to, and reconcile against — and it
+// was gated on B20_ENABLED, which is off, so the panel had NO entrance at all
+// while its own copy said "payment links work now". A feature with no door.
+type Panel = "positions" | "withdraw" | "send" | "receive" | "convert";
+
+// The page's own long-tail sections, one at a time. Distinct from `Panel`:
+// a Panel is a thing you DO (and it lives in a modal you dismiss), a View is a
+// record you READ. Conflating them is what put Orders in a modal.
+type View = "portfolio" | "activity" | "orders";
+
+// Sticky testnet unlock. Deliberately NOT the same key family as `bluebank:*`
+// user settings — this is a developer escape hatch, not a preference.
+const TESTNET_KEY = "bluebank:testnet";
 
 export default function BankPage() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId: walletChainId, chain: walletChain } = useAccount();
   const acct = address as `0x${string}` | undefined;
   const { name } = useBasename(acct);
   const [fname, setFname] = useState<string | null>(null);
@@ -58,14 +98,96 @@ export default function BankPage() {
       .catch(() => null);
   }, [acct, name]);
   const disconnect = useWalletDisconnect();
-  const [network, setNetwork] = useState<YieldNetwork>("baseSepolia");
+
+  // ── Network ──────────────────────────────────────────────────────────────
+  // Base MAINNET is the default and must stay that way. This used to default to
+  // `baseSepolia` while every label around it said "Base", so the receive QR,
+  // the payment link, and the transaction list were all testnet while the UI
+  // claimed mainnet — a money-adjacent lie, not a cosmetic one.
+  //
+  // Testnet is now OPT-IN: the toggle does not render at all unless testnet mode
+  // is unlocked with `?testnet=1` (sticky, cleared with `?testnet=0`). A normal
+  // user therefore has no way to land on Sepolia by a stray click, and when
+  // testnet IS active a banner says so in the one place they cannot miss.
+  //
+  // Both pieces of state start at their SSR-safe values and are only widened in
+  // an effect — reading localStorage/searchParams during the first render would
+  // hydration-mismatch, and the safe value (mainnet, locked) is the right first
+  // paint anyway.
+  const [network, setNetwork] = useState<WalletChain>("base");
+  const [testnetUnlocked, setTestnetUnlocked] = useState(false);
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search).get("testnet");
+      if (q === "1")      localStorage.setItem(TESTNET_KEY, "1");
+      else if (q === "0") localStorage.removeItem(TESTNET_KEY);
+      const on = localStorage.getItem(TESTNET_KEY) === "1";
+      setTestnetUnlocked(on);
+      if (!on) setNetwork("base"); // locking testnet must also leave it
+    } catch { /* private mode — stay locked on mainnet */ }
+  }, []);
+
+  // Hoisted above the onramp handlers on purpose: `addCash` / `cashOut` read
+  // `isTestnet` to refuse a mainnet-only flow, so it has to be initialised
+  // before the first render that can bind those handlers.
+  const net         = WALLET_CHAINS[network];
+  const chainId     = net.chainId;
+  const isTestnet   = net.testnet;
+  // Not the same question as `!isTestnet`, even though they return the same
+  // answer today. Onramp, offramp and swap are pinned to Base MAINNET by their
+  // own URLs and routers — they need "am I on 8453", and they were asking "is
+  // this play money". Those coincide only because WALLET_CHAIN_ORDER happens to
+  // hold exactly base + baseSepolia; the moment a third mainnet is listed, an
+  // `isTestnet` guard waves real funds through to the wrong chain. Asking the
+  // question the code actually depends on costs one line and removes a trap
+  // that would otherwise be armed by an edit in a different file.
+  const isBaseMainnet = network === "base";
+
+  // ⚠️ EARN-ONLY — the wallet's last dependency on the yield module, deliberately
+  // narrowed to these three lines so removing Earn is a delete, not a hunt.
+  // Lending markets exist on Base only; `earnNet` is undefined on any chain
+  // without one, and every read below is gated on it rather than assuming.
+  const earnKey     = network === "base" || network === "baseSepolia" ? network : null;
+  const earnNet     = earnKey ? YIELD_NETWORKS[earnKey] : undefined;
+  const morphoVnet  = earnKey ? VENUES.morpho.nets[earnKey] : undefined;
+
+  // The wallet's OWN chain, which is not the same thing as the network this
+  // dashboard is reading. Balances are read with an explicit `chainId`, so they
+  // are right either way — but every write (send, swap, supply) goes through the
+  // wallet, so a mismatch here is the difference between a transaction and a
+  // rejection. Surfacing it beats letting the user find out at signing time.
+  const { switchChainAsync } = useSwitchChain();
+  const [switchBusy, setSwitchBusy] = useState(false);
+  const chainMismatch = isConnected && walletChainId != null && walletChainId !== chainId;
+  async function switchToAppChain() {
+    setSwitchBusy(true);
+    try { await switchChainAsync({ chainId }); } catch { /* user declined */ }
+    finally { setSwitchBusy(false); }
+  }
+
   const [panel, setPanel]     = useState<Panel>("positions");
+  const [view, setView]       = useState<View>("portfolio");
   const [actionOpen, setActionOpen] = useState(false);
   const [copied, setCopied]   = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const openAction = (p: Panel) => {
     if (p === "send") { setScanPrefill(null); setScanKey(k => k + 1); }
     setPanel(p); setActionOpen(true);
+  };
+
+  // Quick-sell from the token table → pre-fill + open the Convert panel. Amount
+  // is computed from the exact base-unit balance (Moralis `raw`), leaving a small
+  // gas buffer when selling 100% of native ETH. The user reviews and signs in the
+  // Convert card — this only pre-fills it, it never auto-executes.
+  const [sellPreset, setSellPreset] = useState<SellPreset | null>(null);
+  const quickSell = (h: WalletHolding, pct: number) => {
+    try {
+      let sellRaw = (BigInt(h.raw) * BigInt(pct)) / 100n;
+      if (h.isNative && pct === 100) { const buf = 50_000_000_000_000n; sellRaw = sellRaw > buf ? sellRaw - buf : 0n; } // ~0.00005 ETH
+      if (sellRaw <= 0n) return;
+      setSellPreset({ addr: h.address, sym: h.symbol, decimals: h.decimals, amount: formatUnits(sellRaw, h.decimals), nonce: Date.now() });
+      openAction("convert");
+    } catch { /* malformed raw — ignore */ }
   };
 
   // Scan-to-pay
@@ -86,11 +208,19 @@ export default function BankPage() {
   const [reqAmount, setReqAmount] = useState("");
   const [reqAsset, setReqAsset] = useState<"USDC" | "ETH">("USDC");
 
-  // Coinbase Onramp — add cash
+  // Coinbase Onramp — add cash.
+  //
+  // ⚠️ The Onramp session is MAINNET-ONLY (`/api/onramp/session` pins
+  // `blockchains: ["base"]`, and the popup URL below pins `defaultNetwork=base`).
+  // While the app was defaulting to Sepolia, this shipped real USDC to Base
+  // mainnet while the dashboard showed testnet balances — the money arrived
+  // somewhere the UI was not looking. Refuse on testnet instead of hardcoding
+  // `base` into a flow the rest of the page thinks is Sepolia.
   const [onrampBusy, setOnrampBusy] = useState(false);
   const [onrampMsg, setOnrampMsg]   = useState("");
   async function addCash() {
     if (!acct) return;
+    if (!isBaseMainnet) { setOnrampMsg(`Deposit is Base mainnet only — you are on ${net.short}.`); return; }
     setOnrampBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -106,6 +236,7 @@ export default function BankPage() {
   const [cashOutBusy, setCashOutBusy] = useState(false);
   async function cashOut() {
     if (!acct) return;
+    if (!isBaseMainnet) { setOnrampMsg(`Cash out is Base mainnet only — you are on ${net.short}.`); return; }
     setCashOutBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -117,23 +248,18 @@ export default function BankPage() {
     finally { setCashOutBusy(false); }
   }
 
-  const net = YIELD_NETWORKS[network];
-  const chainId = net.chainId;
-  const morphoVnet = VENUES.morpho.nets[network];
-
   // ── Live on-chain reads ──────────────────────────────────────────────────
   const { data: walletRaw } = useReadContract({
-    address: net.usdc, abi: ERC20_ABI, functionName: "balanceOf",
+    address: net.stable, abi: ERC20_ABI, functionName: "balanceOf",
     args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct },
   });
   const { data: ethRaw } = useBalance({ address: acct, chainId, query: { enabled: !!acct } });
+  // Balance reads only. The Aave `getReserveData` call that fed the supply-APY
+  // display is gone with the display — a rate the user cannot act on is not
+  // worth an RPC round-trip on every render of the wallet.
   const { data: aaveRaw } = useReadContract({
-    address: net.aUsdc, abi: ERC20_ABI, functionName: "balanceOf",
-    args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct },
-  });
-  const { data: aaveReserve } = useReadContract({
-    address: net.pool, abi: AAVE_POOL_ABI, functionName: "getReserveData",
-    args: [net.usdc], chainId,
+    address: earnNet?.aUsdc, abi: ERC20_ABI, functionName: "balanceOf",
+    args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct && !!earnNet },
   });
   const { data: morphoRaw } = useReadContract({
     address: morphoVnet?.target, abi: ERC4626_ABI, functionName: "maxWithdraw",
@@ -141,33 +267,32 @@ export default function BankPage() {
     query: { enabled: !!acct && !!morphoVnet },
   });
 
-  const walletUsdc = walletRaw != null ? Number(formatUnits(walletRaw as bigint, net.usdcDecimals)) : null;
+  const walletUsdc = walletRaw != null ? Number(formatUnits(walletRaw as bigint, net.stableDecimals)) : null;
   const ethBal     = ethRaw ? Number(formatUnits(ethRaw.value, ethRaw.decimals)) : null;
   const aavePos    = aaveRaw != null ? Number(formatUnits(aaveRaw as bigint, 6)) : null;
   const morphoPos  = morphoRaw != null ? Number(formatUnits(morphoRaw as bigint, 6)) : null;
-  const aaveApy    = aaveReserve ? supplyApyPct((aaveReserve as { currentLiquidityRate: bigint }).currentLiquidityRate) : null;
 
-  // ── Best yield rate (DefiLlama) ──────────────────────────────────────────
-  type Rate = { project: string; label: string; apy: number };
-  const [rates, setRates] = useState<Rate[] | null>(null);
-  useEffect(() => {
-    let off = false;
-    fetch("/api/yield/rates").then(r => r.json()).then(d => { if (!off) setRates((d?.rates as Rate[]) ?? []); }).catch(() => {});
-    return () => { off = true; };
-  }, []);
-  const bestApy   = rates && rates.length ? rates[0].apy : null;
-  const morphoApy = rates?.find(r => r.project === "morpho-blue")?.apy ?? null;
-
-  // Morpho 30d APY sparkline for sidebar
-  const [hist, setHist] = useState<{ points: number[]; current: number | null } | null>(null);
-  useEffect(() => {
-    let off = false;
-    fetch("/api/yield/morpho-history").then(r => r.json()).then(d => { if (!off) setHist({ points: d.points ?? [], current: d.current ?? null }); }).catch(() => {});
-    return () => { off = true; };
-  }, []);
-
+  // ── Two rate fetches used to run here, on every wallet load ──────────────
+  // `/api/yield/rates` (DefiLlama) fed three APY boards, and
+  // `/api/yield/morpho-history` fed a 30-day sparkline. All four surfaces are
+  // gone, so the calls are too.
+  //
+  // Worth recording why they were a liability and not just clutter: neither was
+  // passed `network`. They returned MAINNET pool yields regardless of the chain
+  // the dashboard was reading, so on testnet the page quoted real-money APYs
+  // over play-money balances. That was survivable only because mainnet is the
+  // default — a comment used to sit here saying exactly that, load-bearing and
+  // one config change from being wrong. Deleting the fetches deletes the trap.
+  //
+  // `/api/yield/morpho-history` goes in THIS commit rather than a cleanup pass:
+  // its header named the sparkline above as its only consumer, and a repo-wide
+  // grep confirms it now has zero callers. The retiring rule is one commit, and
+  // an orphaned route that still answers is the shape of every surface this repo
+  // has had to retire late. `/api/yield/rates` STAYS — the chat tool cards
+  // (`chat/components/ToolCards.tsx`) still call it, so it is not orphaned.
+  //
   // ── Real wallet history (Moralis) ────────────────────────────────────────
-  type TxStats = { transferCountMonth: number; netFlowUsdcMonth: number; gasSavedUsd: number | null };
+  type TxStats = { transferCountMonth: number; netFlowUsdcMonth: number; gasSavedUsd: number | null; ethUsdPrice: number | null };
   const [txData, setTxData] = useState<{ transactions: WalletTx[]; stats?: TxStats; needsKey?: boolean; error?: string } | null>(null);
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError]     = useState(false);
@@ -186,9 +311,31 @@ export default function BankPage() {
   const inYield = (aavePos ?? 0) + (morphoPos ?? 0);
   const total   = (walletUsdc ?? 0) + inYield;
 
+  // Have the balance reads actually RESOLVED? `walletUsdc` is null while the
+  // contract read is in flight or has failed, and `?? 0` above erases that
+  // distinction — so `total === 0` conflates "you hold nothing" with "we have
+  // not looked yet". Anything that makes a CLAIM about the user's position
+  // (the health score, the mission summary) has to gate on this, not on
+  // `total`, or a slow RPC gets rendered as a fact about their money.
+  const balancesKnown = walletUsdc != null;
+
+  // Same trap, but with money on the other side of it. `inYield` collapses
+  // "the read has not resolved" into 0, and the withdraw path is gated on
+  // `inYield > 0` — so an RPC that fails and stays null would hide the ONLY
+  // exit from a user who really does have USDC supplied. Anything that gates
+  // the exit must ask "is it positively known to be zero", not "is it zero".
+  // Cosmetic gates (widgets that print a dollar figure) stay on `inYield > 0`:
+  // those must not assert $0.00 from a read that never landed.
+  const noPositions = aavePos != null && morphoPos != null && inYield === 0;
+
   // Stats from real wallet history (this calendar month)
   const netFlowMonth      = txData?.stats?.netFlowUsdcMonth ?? 0;
   const transferCountMonth = txData?.stats?.transferCountMonth ?? 0;
+  // Live ETH/USD (CoinGecko, via the transactions route). `null` = the feed did
+  // not answer — kept null all the way to the render so nothing downstream can
+  // quietly substitute a constant, which is what `ethBal * 2500` used to be.
+  const ethUsdPrice        = txData?.stats?.ethUsdPrice ?? null;
+  const gasSavedUsd        = txData?.stats?.gasSavedUsd ?? null;
 
   // ── AI Chat popup ────────────────────────────────────────────────────────
   const [chatOpen, setChatOpen]       = useState(false);
@@ -201,16 +348,6 @@ export default function BankPage() {
   const fabDrag = useRef<{ ox: number; oy: number; sx: number; sy: number; moved: boolean } | null>(null);
   const [fabXY, setFabXY]       = useState<{ x: number; y: number } | null>(null);
   const [fabDragging, setFabDragging] = useState(false);
-
-  // ── Auto Earn ────────────────────────────────────────────────────────────
-  const [autoEarn, setAutoEarn]               = useState(false);
-  const [autoEarnThreshold, setAutoEarnThreshold] = useState(50);
-  useEffect(() => {
-    try { const s = localStorage.getItem("bluebank:autoEarn"); if (s) { const p = JSON.parse(s); setAutoEarn(!!p.enabled); setAutoEarnThreshold(p.threshold ?? 50); } } catch {}
-  }, []);
-  useEffect(() => {
-    try { localStorage.setItem("bluebank:autoEarn", JSON.stringify({ enabled: autoEarn, threshold: autoEarnThreshold })); } catch {}
-  }, [autoEarn, autoEarnThreshold]);
 
   function fabDown(e: React.PointerEvent<HTMLButtonElement>) {
     e.preventDefault();
@@ -253,7 +390,14 @@ export default function BankPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: historySnapshot,
-          system: `You are BlueAgent Banking assistant. User: ${name ?? shortAddr(acct)}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · In yield: $${usd(inYield)} at ${bestApy?.toFixed(1) ?? "—"}%. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Focus on Base DeFi and banking.`,
+          // The prompt states balances and no rate. It used to end
+          // "In yield: $X at Y%", where Y was `bestApy` — DefiLlama's top USDC
+          // pool, a market-wide figure, not this user's position. The assistant
+          // read it as the user's own rate and quoted it back. With the yield
+          // entrance closed there is no rate to state at all, and the old
+          // "Focus on Base DeFi" steer pointed answers at a product this page
+          // no longer sells.
+          system: `You are BlueAgent Wallet assistant. User: ${name ?? shortAddr(acct)}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · Supplied, withdraw-only: $${usd(inYield)}. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Help with balances, sending and receiving on Base, and withdrawing supplied funds. Do not recommend yield strategies or quote APYs — this wallet no longer offers them.`,
           model: "fast",
         }),
       });
@@ -312,7 +456,9 @@ export default function BankPage() {
     const qs = new URLSearchParams({ asset: reqAsset, network });
     if (parseFloat(reqAmount) > 0) qs.set("amount", reqAmount);
     const url = `${origin}/pay/${acct}?${qs.toString()}`;
-    const title = parseFloat(reqAmount) > 0 ? `Pay me ${reqAmount} ${reqAsset} on Base` : "Pay me on Base";
+    // `network` is already in the query string — the human title has to agree
+    // with it, or a Sepolia link gets shared reading "Pay me on Base".
+    const title = parseFloat(reqAmount) > 0 ? `Pay me ${reqAmount} ${reqAsset} on ${net.short}` : `Pay me on ${net.short}`;
     if (typeof navigator !== "undefined" && navigator.share) {
       navigator.share({ title, url }).catch(() => {});
     } else {
@@ -326,31 +472,63 @@ export default function BankPage() {
     aavePos: aavePos ?? 0,
     morphoPos: morphoPos ?? 0,
     ethBal: ethBal ?? 0,
-    bestApy,
     netFlowMonth,
     transferCountMonth,
-  }), [walletUsdc, aavePos, morphoPos, ethBal, bestApy, netFlowMonth, transferCountMonth]);
+    ethUsdPrice,
+    gasSavedUsd,
+  }), [walletUsdc, aavePos, morphoPos, ethBal, netFlowMonth, transferCountMonth, ethUsdPrice, gasSavedUsd]);
+
+  // What the connected account IS — read off the live connector + on-chain
+  // bytecode, never asserted. Called here (above the early return) because it
+  // is a hook; it returns a fully "unknown" identity when nothing is connected.
+  const identity = useWalletIdentity(chainId);
 
   if (!isConnected) {
-    return <BankLanding bestApy={bestApy} />;
+    return <BankLanding />;
   }
 
+  // The Withdraw tab is hidden only for a wallet POSITIVELY known to hold
+  // nothing — it is the exit from a feature whose entrance is closed, so a
+  // read that has not resolved keeps it visible. Hiding it on a stale null
+  // would strand a depositor's funds; showing it on an empty wallet costs a
+  // tab that reports "no positions".
   const TABS: { id: Panel; label: string; icon: string; desc: string }[] = [
     { id: "positions", label: "Positions", icon: "📊", desc: "Your yield" },
-    { id: "earn",      label: "Earn",      icon: "🌾", desc: "Grow USDC" },
+    ...(noPositions ? [] : [{ id: "withdraw" as Panel, label: "Withdraw", icon: "↩︎", desc: "Exit yield" }]),
     { id: "send",      label: "Send",      icon: "➡",  desc: "Pay anyone" },
     { id: "receive",   label: "Receive",   icon: "⬇",  desc: "Get paid" },
     { id: "convert",   label: "Convert",   icon: "⇅",  desc: "Swap tokens" },
-    ...(B20_ENABLED ? [{ id: "orders" as Panel, label: "Orders", icon: "🧾", desc: "Get paid in B20" }] : []),
+  ];
+
+  // Orders is NOT gated on B20_ENABLED, unlike the modal tab it replaces.
+  // That gate hid the whole panel while the panel's own banner read "Payment
+  // links work now. B20 USDC auto-settlement … go live at B20 mainnet" — so the
+  // flag that only turns off AUTO-SETTLEMENT was turning off the feature. With
+  // it off today, the AI mission below still offered a "Try" button that opened
+  // the modal onto a tab that did not exist: an empty box. OrdersPanel already
+  // states its own degraded mode; the tab lets a user reach it to read that.
+  const VIEWS: { id: View; label: string }[] = [
+    { id: "portfolio", label: "Portfolio" },
+    { id: "activity",  label: "Activity" },
+    { id: "orders",    label: "Payment requests" },
   ];
 
   // ── Portfolio allocation (for pie chart) ─────────────────────────────────
-  const stableTotal   = (walletUsdc ?? 0) + (aavePos ?? 0) + (morphoPos ?? 0);
-  const ethUsd        = (ethBal ?? 0) * 2500;
-  const portfolioTotal = stableTotal + ethUsd;
+  // `ethUsd` was `(ethBal ?? 0) * 2500` — a hardcoded ETH price, invented at a
+  // moment when it happened to be roughly right and never true again. It fed
+  // both this chart and `divScore` below, so a stale constant was silently
+  // grading the user's portfolio. It is now the live price or nothing: `null`
+  // drops the ETH slice out of the chart rather than drawing it at a made-up
+  // size, and the caption says the leg is unpriced.
+  //
+  // These four values were then recomputed HERE with the same expressions that
+  // `buildWalletState` already runs. Two copies of one derivation is how the
+  // card ended up disagreeing with itself; the copies are gone and this reads
+  // the canonical state.
+  const { ethUsd, pricedTotal, ethUnpriced, holdsAssets } = walletState;
   const portfolioData = [
-    { name: "Stablecoin", value: stableTotal, color: "#4FC3F7" },
-    { name: "ETH",        value: ethUsd,      color: "#94A3B8" },
+    { name: "Stablecoin", value: walletState.balance, color: "#4FC3F7" },
+    { name: "ETH",        value: ethUsd ?? 0,         color: "#94A3B8" },
   ].filter(d => d.value > 0);
 
   // ── Chat popup position relative to FAB ──────────────────────────────────
@@ -369,45 +547,97 @@ export default function BankPage() {
     : { right: 16, bottom: 76, height: POPUP_H };
 
   // ── Portfolio health score ────────────────────────────────────────────────
-  const deployedRatio  = total > 0 ? inYield / total : 0;
-  const yieldScore     = deployedRatio > 0.8 ? 95 : deployedRatio > 0.5 ? 80 : deployedRatio > 0.2 ? 60 : deployedRatio > 0 ? 40 : 20;
-  const divScore       = portfolioTotal > 0 && ethUsd / portfolioTotal > 0.05 ? 88 : ethUsd > 0 ? 65 : 45;
+  // `null` means NO SCORE, and that is the whole point of this block.
+  //
+  // It used to read `total === 0 ? 0 : …`, which rendered a brand-new empty
+  // wallet as a red **0/100 · D** with a Share button under it. That is worse
+  // than an invented number: it invents a BAD one, out of the absence of data,
+  // and shows it to the user least equipped to dismiss it — someone who just
+  // connected and has no idea whether the app is grading them or their wallet.
+  // Every input here (deployed ratio, diversification, gas, activity) is
+  // undefined on an empty or unread wallet, so the honest output is "—", not a
+  // failing grade. CLAUDE.md: missing data is "unknown", never an inferred
+  // negative score.
+  //
+  // `balancesKnown` guards the loading case too — during the RPC round-trip a
+  // funded wallet also looks empty, and it must not flash a grade it is about
+  // to contradict.
+  //
+  // The heaviest term used to be `yieldScore` — 40% of the grade, keyed on what
+  // fraction of the balance was supplied into Aave/Morpho, floor 20 for anyone
+  // supplying nothing. With the Earn entrance closed that is a 40% penalty for
+  // declining to use a feature the wallet no longer offers, which every user
+  // now permanently fails and none of them can fix. A score has to be about
+  // something the user can act on, so it is gone and the surviving three
+  // dimensions are reweighted to sum to 1 rather than silently rescaled.
+  const scoreReady     = balancesKnown && total > 0;
+  // Diversification degrades honestly when ETH has no price: "holds ETH at all"
+  // is still knowable from the balance, only the ">5% of portfolio" tier needs
+  // a price. Previously both tiers were decided by a constant.
+  const divScore       = ethUsd != null && pricedTotal > 0 && ethUsd / pricedTotal > 0.05 ? 88
+                       : (ethBal ?? 0) > 0 ? 65 : 45;
   const gasScore       = ethBal == null ? 50 : ethBal > 0.05 ? 95 : ethBal > 0.01 ? 80 : ethBal > 0.005 ? 60 : 20;
   const actScore       = transferCountMonth > 10 ? 90 : transferCountMonth > 5 ? 75 : transferCountMonth > 1 ? 55 : 20;
-  const portfolioScore = total === 0 ? 0 : Math.round(yieldScore * 0.4 + divScore * 0.25 + gasScore * 0.2 + actScore * 0.15);
-  const scoreGrade     = portfolioScore >= 85 ? "A" : portfolioScore >= 70 ? "B" : portfolioScore >= 55 ? "C" : "D";
-  const scoreColor     = portfolioScore >= 85 ? "#34D399" : portfolioScore >= 70 ? "#4FC3F7" : portfolioScore >= 55 ? "#F59E0B" : "#EF4444";
-  const scoreDims      = [
-    { label: "Yield", s: yieldScore }, { label: "Diversify", s: divScore },
-    { label: "Gas", s: gasScore },     { label: "Activity", s: actScore },
-  ];
+  const portfolioScore: number | null =
+    scoreReady ? Math.round(divScore * 0.4 + gasScore * 0.35 + actScore * 0.25) : null;
+  const scoreGrade     = portfolioScore == null ? null : portfolioScore >= 85 ? "A" : portfolioScore >= 70 ? "B" : portfolioScore >= 55 ? "C" : "D";
+  // Slate, not red, when there is no score — colour is a claim too.
+  const scoreColor     = portfolioScore == null ? "#475569"
+    : portfolioScore >= 85 ? "#34D399" : portfolioScore >= 70 ? "#4FC3F7" : portfolioScore >= 55 ? "#F59E0B" : "#EF4444";
 
   // ── Mission Control items ─────────────────────────────────────────────────
   interface MC { priority: "high"|"warn"|"good"|"info"; icon: string; text: string; action?: string; onAction?: () => void; color: string }
   const allMissions: MC[] = [];
-  if (total === 0) {
-    allMissions.push({ priority: "info", icon: "💡", text: "Add USDC to start earning yield on Base", action: "Add cash", onAction: addCash, color: "#F59E0B" });
+  // `!balancesKnown` deliberately produces NO missions rather than the
+  // "add USDC" one: a mission is advice about the user's position, and we have
+  // not read it yet. An empty list for one RPC round-trip beats telling a
+  // funded wallet it is empty.
+  if (!balancesKnown) {
+    /* nothing to advise until the balance read lands */
+  } else if (total === 0) {
+    allMissions.push({ priority: "info", icon: "💡", text: `Add USDC to fund your wallet on ${net.short}`, action: "Add cash", onAction: addCash, color: "#F59E0B" });
   } else {
-    if ((walletUsdc ?? 0) > 50 && inYield === 0 && bestApy != null)
-      allMissions.push({ priority: "high", icon: "📈", text: `$${usd(walletUsdc)} idle — earn ~$${(((walletUsdc ?? 0) * bestApy / 100) / 12).toFixed(0)}/mo at ${bestApy.toFixed(1)}%`, action: "Earn now", onAction: () => openAction("earn"), color: "#34D399" });
-    if (inYield > 0 && bestApy != null)
-      allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} earning ${bestApy.toFixed(1)}% · ~$${((inYield * bestApy / 100) / 12).toFixed(0)}/month`, color: "#34D399" });
-    if ((walletUsdc ?? 0) > 50 && !autoEarn)
-      allMissions.push({ priority: "info", icon: "⚙️", text: "Enable Auto Earn to auto-deploy idle USDC", action: "Enable", onAction: () => setAutoEarn(true), color: "#A78BFA" });
+    // The two missions that used to sit here — "$X idle, earn ~$Y/mo" and
+    // "Enable Auto Earn" — both invited a NEW supply, which is the entrance
+    // the last release closed. Only the passive one below survives: it reports
+    // a position the user already holds rather than asking for another.
+    //
+    // Auto Earn is gone outright, not hidden. It persisted a flag to
+    // localStorage and nothing anywhere read it back, so the toggle promised
+    // an auto-deploy that never ran once.
+    //
+    // The surviving line no longer quotes a rate or projects a monthly figure.
+    // Both came from `bestApy` — the TOP pool on DefiLlama, not the pool this
+    // user is actually in — so "$500 earning 6.1% · ~$3/month" was a real
+    // balance multiplied by someone else's yield. The balance is measured; the
+    // return on it was never something this page could read.
+    if (inYield > 0)
+      allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} supplied — withdrawable any time`, action: "Withdraw", onAction: () => openAction("withdraw"), color: "#34D399" });
     if (ethBal != null && ethBal < 0.005)
       allMissions.push({ priority: "warn", icon: "⛽", text: "ETH too low for gas fees", action: "Get ETH", onAction: () => openAction("convert"), color: "#F59E0B" });
+    // "Try" used to call `openAction("orders")`. With B20_ENABLED off that
+    // opened the action modal onto a panel whose tab had been filtered out of
+    // TABS and whose body had no branch — a modal containing a close button and
+    // nothing else. It now scrolls to a tab that always exists.
     if (new Date() >= new Date("2026-06-25"))
-      allMissions.push({ priority: "info", icon: "⚡", text: "Beryl live — B20 payments + faster L1 withdrawals", action: "Try", onAction: () => openAction("orders"), color: "#4FC3F7" });
+      allMissions.push({ priority: "info", icon: "⚡", text: "Beryl live — B20 payments + faster L1 withdrawals", action: "Try", onAction: () => setView("orders"), color: "#4FC3F7" });
   }
   const topMissions = allMissions.slice(0, 3);
+  // Gated on the BALANCE READ, not on `total`.
+  //
+  // The first branch used to be `total === 0 ? "Connect and add funds…"`, which
+  // is unreachable-by-intent nonsense: this whole render sits below
+  // `if (!isConnected) return <BankLanding/>`, so the wallet is ALREADY
+  // connected here. A connected user with a zero balance — every new user, and
+  // every existing user for the second or two the RPC takes — was told to
+  // connect a wallet they were looking at the address of, right beside a
+  // "Disconnect" button. Same defect family as the score above: a balance of
+  // zero was read as a statement about the connection.
   const missionSummary =
-    total === 0 ? "Connect and add funds to get started." :
-    (walletUsdc ?? 0) > 100 && inYield === 0 ? "Idle cash detected — put it to work." :
-    inYield > 0 && (walletUsdc ?? 0) < 50 ? `Fully deployed · earning ${bestApy?.toFixed(1) ?? "—"}% APY` :
-    `$${usd(walletUsdc)} liquid · $${usd(inYield)} earning`;
-
-  // ── Auto Earn surplus ─────────────────────────────────────────────────────
-  const autoEarnSurplus = Math.max(0, (walletUsdc ?? 0) - autoEarnThreshold);
+    !balancesKnown ? "Reading your balances…" :
+    total === 0 ? `Wallet connected · add USDC on ${net.short} to get started.` :
+    inYield > 0 ? `$${usd(walletUsdc)} liquid · $${usd(inYield)} supplied` :
+    `$${usd(walletUsdc)} USDC on ${net.short}`;
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
@@ -420,33 +650,61 @@ export default function BankPage() {
         {/* 1. Header */}
         <div className="px-4 h-14 flex items-center gap-2 border-b border-[#1A1A2E] shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-[#4FC3F7] animate-pulse shrink-0" />
-          <p className="font-mono text-[11px] text-[#4FC3F7] tracking-widest">// BLUEBANK</p>
+          <p className="font-mono text-[11px] text-[#4FC3F7] tracking-widest">// WALLET</p>
         </div>
 
         {/* 2. Net Worth widget */}
         <div className="m-3 rounded-xl border border-[#1A1A2E] bg-gradient-to-b from-[#0d1117] to-[#0a0a0f] p-3.5">
-          <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">NET WORTH</div>
-          <div className="font-mono text-[22px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
-          <div className="font-mono text-[9px] text-slate-600 mt-0.5 mb-2">USDC + yield · Base</div>
-          <Spark points={hist?.points ?? []} color="#34D399" height={28} />
-          <div className="font-mono text-[8px] text-slate-700 mt-1">Morpho USDC · 30d trend</div>
+          {/* Was "NET WORTH", over a number that is stablecoins only. A wallet
+              holding ETH and no USDC read "NET WORTH $0.00" while the card
+              below it charted that same ETH — the heading claiming a total it
+              never computed. The caption already said "USDC + yield"; the
+              heading says it now, and the caption carries the ETH it excludes. */}
+          {/* "USDC + YIELD" while the wallet sold yield; plain "USDC" now. The
+              figure itself is unchanged — it still includes a supplied position
+              if one exists, which is why the caption below names it. */}
+          <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">USDC</div>
+          {/* White, not green. Green is this app's "good / up" colour — it means
+              a gain in the mission list, a paid order, an incoming ledger row.
+              On a bare balance it is a direction claim over data the app keeps
+              no baseline for: there is no yesterday's balance to be up against.
+              A balance is neither good nor bad, it is just what you have. */}
+          <div className="font-mono text-[22px] font-bold text-white">${usd(walletState.balance)}</div>
+          <div className="font-mono text-[9px] text-slate-600 mt-0.5">
+            {net.short}
+            {walletState.inYield > 0 ? ` · incl. $${usd(walletState.inYield)} supplied` : ""}
+            {ethBal != null && ethBal > 0 ? ` · ${ethBal.toFixed(4)} ETH held separately` : ""}
+          </div>
+          {/* A 30-day Morpho APY sparkline used to close this card. It was
+              MARKET data drawn inside the user's balance widget — never their
+              balance history, which this app does not keep — and it survived an
+              earlier fix that only recoloured and relabelled it. The honest
+              version of a chart you cannot draw is no chart. */}
         </div>
 
-        {/* 3. Earn widget */}
-        <div className="mx-3 mb-3 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3">
-          <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-1">EARNING</div>
-          <div className="font-mono text-[18px] font-bold text-[#A78BFA]">${usd(walletState.inYield)}</div>
-          <div className="font-mono text-[9px] text-slate-600 mt-0.5">
-            best {bestApy != null ? `${bestApy.toFixed(1)}%` : "—"} APY
-          </div>
-          {walletState.inYield === 0 && walletState.balance > 0 && (
-            <button onClick={() => openAction("earn")}
+        {/* 3. Supplied position — only for a wallet that HAS one. It used to
+            render at $0.00 with a "Deploy →" button underneath, which made an
+            empty widget the loudest pitch on the page for the one feature this
+            phase withdraws. Nothing supplied, nothing to say.
+
+            Headed "EARNING" over a "best X% APY" caption, where X was the top
+            pool on DefiLlama rather than the pool the money is in. The heading
+            is now what we can actually read from chain — a balance — and the
+            only control on it is the way out. */}
+        {walletState.inYield > 0 && (
+          <div className="mx-3 mb-3 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3">
+            <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-1">SUPPLIED</div>
+            <div className="font-mono text-[18px] font-bold text-[#4FC3F7]">${usd(walletState.inYield)}</div>
+            <div className="font-mono text-[9px] text-slate-600 mt-0.5">
+              Aave · Morpho on Base
+            </div>
+            <button onClick={() => openAction("withdraw")}
               className="w-full font-mono text-[10px] font-bold mt-2 py-1.5 rounded-lg"
-              style={{ background: "#A78BFA15", color: "#A78BFA", border: "1px solid #A78BFA40" }}>
-              Deploy →
+              style={{ background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
+              ↩︎ Withdraw
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* 4. BlueAgent mini chat */}
         <div className="mx-3 mb-3">
@@ -474,44 +732,86 @@ export default function BankPage() {
           </div>
         </div>
 
-        {/* 5. Base Apps grid */}
-        <div className="mx-3 mb-3">
-          <div className="font-mono text-[9px] text-slate-600 mb-1.5">⚡ BASE APPS</div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {[
-              { name: "Aerodrome", url: "https://aerodrome.finance",    color: "#EF4444" },
-              { name: "Moonwell",  url: "https://moonwell.fi",          color: "#A78BFA" },
-              { name: "Morpho",    url: "https://morpho.org",           color: "#4FC3F7" },
-              { name: "Uniswap",   url: "https://app.uniswap.org",      color: "#FF007A" },
-              { name: "Aave",      url: "https://app.aave.com",         color: "#B6509E" },
-              { name: "Compound",  url: "https://app.compound.finance", color: "#00D395" },
-            ].map(p => (
-              <a key={p.name} href={p.url} target="_blank" rel="noopener noreferrer"
-                className="font-mono text-[9px] py-1.5 px-2 rounded-lg text-center hover:opacity-80 transition-opacity"
-                style={{ background: `${p.color}10`, color: p.color, border: `1px solid ${p.color}25` }}>
-                {p.name}
-              </a>
-            ))}
-          </div>
-        </div>
+        {/* 5. ⚡ BASE APPS was here — a six-tile grid of outbound links to
+            Aerodrome, Moonwell, Morpho, Uniswap, Aave and Compound, in six
+            different brand colours, pinned above the network switcher.
+
+            Three separate reasons it goes, any one of which is sufficient:
+            it is a lending/yield shop window in a wallet that no longer sells
+            yield; it is the only block on the page whose every control leaves
+            the product; and its six brand colours were the single largest
+            source of decorative colour in the app (see the palette pass). */}
 
         {/* 6. Spacer */}
         <div className="flex-1" />
 
-        {/* 7. Network */}
+        {/* 7. Chains — the two this wallet reads, and what each one carries.
+            Titled NETWORK (singular) over one switchable chain, while the stock
+            table below has been reading a second one all along: readStockHoldings
+            returns `legs: [base, rh]` on every call, unconditionally. So the
+            wallet already spanned two chains and said so nowhere.
+
+            Robinhood is a ROW, not a button, and that asymmetry is deliberate —
+            it is not `WALLET_CHAIN_ORDER` being conservative for its own sake.
+            Making it selectable would repoint `chainId` at 4663, and three
+            things downstream would keep answering in Base:
+
+              /api/wallet/transactions  CHAIN[network] ?? "base"  → Base txs
+              /api/wallet/holdings      same shape                → Base tokens
+              TokenTable                84532 ? sepolia : base    → labelled Base
+
+            …and two would still MOVE REAL MONEY on Base: addCash/cashOut pin
+            `defaultNetwork=base` in the Coinbase Onramp URL, and SwapCard
+            force-switches the wallet to mainnet before signing. A picker that
+            silently sends Base data and Base money under a Robinhood heading is
+            the "testnet balances under a Base label" bug with the chains
+            swapped. Until those five are chain-aware, the honest surface is the
+            one below: name the chain, say what is actually read from it, and
+            offer the only control that works there — its own explorer. */}
         <div className="px-3 pb-3">
-          <div className="font-mono text-[9px] text-slate-600 mb-1.5">NETWORK</div>
-          <div className="flex gap-1">
-            {(["baseSepolia", "base"] as const).map(nk => (
-              <button key={nk} onClick={() => setNetwork(nk)}
-                className="flex-1 font-mono text-[10px] py-1.5 rounded-md transition-colors"
-                style={network === nk
-                  ? { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
-                  : { color: "#64748b", border: "1px solid #1A1A2E" }}>
-                {nk === "base" ? "Mainnet" : "Sepolia"}
-              </button>
-            ))}
-          </div>
+          <div className="font-mono text-[9px] text-slate-600 mb-1.5">CHAINS</div>
+          {testnetUnlocked ? (
+            <div className="flex gap-1">
+              {WALLET_CHAIN_ORDER.map(nk => (
+                <button key={nk} onClick={() => setNetwork(nk)}
+                  className="flex-1 font-mono text-[10px] py-1.5 rounded-md transition-colors"
+                  style={network === nk
+                    ? WALLET_CHAINS[nk].testnet
+                      ? { background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B30" }
+                      : { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
+                    : { color: "#64748b", border: "1px solid #1A1A2E" }}>
+                  {WALLET_CHAINS[nk].short}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="font-mono text-[10px] py-1.5 px-2 rounded-md"
+              style={{ background: "#4FC3F70d", color: "#4FC3F7", border: "1px solid #4FC3F725" }}>
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#4FC3F7]" />
+                {net.label}
+              </div>
+              <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
+                cash · send · swap · agent payments
+              </div>
+            </div>
+          )}
+          {/* Gated on the SAME predicate as StockTable's mount, so this row can
+              never claim a leg the page is not reading. On testnet the stock
+              table is absent (no B20 or RWA testnet twin), so this is too. */}
+          {!isTestnet && (
+            <a href={`${WALLET_CHAINS.robinhood.explorer}/address/${acct}`}
+              target="_blank" rel="noopener noreferrer"
+              className="block mt-1.5 font-mono text-[10px] py-1.5 px-2 rounded-md border border-[#1A1A2E] hover:border-[#4FC3F730] transition-colors">
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#1A1A2E] border border-slate-700" />
+                {WALLET_CHAINS.robinhood.label}
+              </div>
+              <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
+                tokenized stocks · read-only ↗
+              </div>
+            </a>
+          )}
         </div>
 
         {/* 8. Account chip */}
@@ -519,7 +819,7 @@ export default function BankPage() {
           <div className="font-mono text-[11px] text-slate-300 truncate">{name ?? fname ?? shortAddr(acct)}</div>
           <div className="flex items-center gap-2 mt-0.5">
             <a href={`${net.explorer}/address/${acct}`} target="_blank" rel="noopener noreferrer"
-              className="font-mono text-[9px] text-slate-600 hover:text-[#4FC3F7]">Basescan ↗</a>
+              className="font-mono text-[9px] text-slate-600 hover:text-[#4FC3F7]">{net.explorerName} ↗</a>
             <span className="text-slate-700 text-[9px]">·</span>
             <button onClick={() => disconnect()}
               className="font-mono text-[9px] text-slate-600 hover:text-red-400 transition-colors">Disconnect</button>
@@ -538,13 +838,31 @@ export default function BankPage() {
               <p className="font-mono text-[13px] text-white">
                 Good {greeting}, <span className="text-[#4FC3F7]">{name ?? fname ?? shortAddr(acct)}</span>
               </p>
-              <p className="font-mono text-[9px] text-slate-600 truncate">Base · Non-custodial · You hold the keys</p>
+              <p className="font-mono text-[9px] text-slate-600 truncate">{net.short} · Non-custodial · You hold the keys</p>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-            {["Non-custodial", "Base", "Passkey"].map(c => (
-              <span key={c} className="font-mono text-[9px] px-2 py-1 rounded-md text-slate-400"
-                style={{ border: "1px solid #1A1A2E", background: "#0d0d12" }}>{c}</span>
+            {/* Every chip here reads live state.
+                - The network chip was the literal "Base" while the app
+                  defaulted to Sepolia — the single most misleading pixel on the
+                  page, because it sat directly above the receive QR.
+                - "Passkey" was hardcoded in this row TOO (a fourth copy of the
+                  same defect, alongside the two on the health card), so it
+                  showed for MetaMask users who have no passkey. It is now the
+                  name of the connector actually connected, and the passkey chip
+                  appears only when the derivation can affirm one.
+                - "Non-custodial" stays constant legitimately: it describes THIS
+                  APP, which holds no key and no fund, not the wallet. */}
+            {[
+              { label: "Non-custodial",            warn: false },
+              { label: net.short,                  warn: isTestnet },
+              { label: identity.connectionLabel,   warn: false },
+              ...(identity.passkey === "yes" ? [{ label: "Passkey", warn: false }] : []),
+            ].map(c => (
+              <span key={c.label} className="font-mono text-[9px] px-2 py-1 rounded-md"
+                style={c.warn
+                  ? { color: "#F59E0B", border: "1px solid #F59E0B40", background: "#F59E0B10" }
+                  : { color: "#94A3B8", border: "1px solid #1A1A2E", background: "#0d0d12" }}>{c.label}</span>
             ))}
             {new Date() >= new Date("2026-06-25") && (
               <span className="font-mono text-[9px] px-2 py-1 rounded-md font-bold"
@@ -556,13 +874,63 @@ export default function BankPage() {
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 xl:p-5 2xl:p-6 3xl:p-8">
 
+          {/* Testnet banner — the whole point of the opt-in. If a page can show
+              testnet balances and hand out a testnet receive QR, it has to say
+              so louder than the chip in the header does. */}
+          {isTestnet && (
+            <div className="mb-3 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3"
+              style={{ background: "#F59E0B10", border: "1px solid #F59E0B40" }}>
+              <div className="min-w-0">
+                <div className="font-mono text-[11px] font-bold" style={{ color: "#F59E0B" }}>
+                  ⚠ Testnet — {net.label}
+                </div>
+                <div className="font-mono text-[9px] text-slate-400 mt-0.5">
+                  Balances, QR codes and payment links on this page are test-only and hold no real value.
+                </div>
+              </div>
+              <button onClick={() => setNetwork("base")}
+                className="shrink-0 font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg transition-opacity hover:opacity-80"
+                style={{ background: "#F59E0B", color: "#050508" }}>
+                Switch to Base
+              </button>
+            </div>
+          )}
+
+          {/* Wallet-vs-app chain mismatch. Reads are pinned to `chainId` so the
+              numbers above stay correct, but every signature would be rejected —
+              better to say it here than at the wallet prompt. */}
+          {chainMismatch && (
+            <div className="mb-3 rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3"
+              style={{ background: "#4FC3F70d", border: "1px solid #4FC3F740" }}>
+              <div className="min-w-0">
+                <div className="font-mono text-[11px] font-bold" style={{ color: "#4FC3F7" }}>
+                  Wallet is on {walletChain?.name ?? `chain ${walletChainId}`}
+                </div>
+                <div className="font-mono text-[9px] text-slate-400 mt-0.5">
+                  Balances below are read from {net.label}. Send and swap need your wallet on the same network.
+                </div>
+              </div>
+              <button onClick={switchToAppChain} disabled={switchBusy}
+                className="shrink-0 font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg transition-opacity hover:opacity-80 disabled:opacity-50"
+                style={{ background: "#4FC3F7", color: "#050508" }}>
+                {switchBusy ? "…" : `Switch to ${net.short}`}
+              </button>
+            </div>
+          )}
+
           {/* ── Section 1: Balance | Actions | Health ─────────────────────── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 items-start">
 
             {/* Balance card */}
             <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
-              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">TOTAL BALANCE</div>
-              <div className="font-mono text-[28px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
+              {/* Was "TOTAL BALANCE" — over a stablecoins-only figure, with an
+                  "ETH (gas)" row listed underneath it that the total excludes.
+                  A heading is a claim about what was summed. Then "USDC + YIELD"
+                  while the wallet sold yield; the rows below still itemise a
+                  supplied position when there is one, so "USDC" covers it. */}
+              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">USDC</div>
+              {/* White — same reason as the sidebar figure above. */}
+              <div className="font-mono text-[28px] font-bold text-white">${usd(walletState.balance)}</div>
               <div className="flex flex-col gap-1.5 mt-3">
                 {(walletUsdc ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
@@ -570,23 +938,43 @@ export default function BankPage() {
                     <span className="text-slate-300">${usd(walletUsdc)}</span>
                   </div>
                 )}
+                {/* Both rows stay — they are the user's money, and a supplied
+                    position that stops being shown is a position the user
+                    cannot find. Already correctly gated on a POSITIVE balance,
+                    so a wallet that never touched Earn sees neither. */}
                 {(aavePos ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
                     <span className="text-slate-500">aUSDC (Aave)</span>
-                    <span className="text-[#34D399]">${usd(aavePos)}</span>
+                    <span className="text-slate-300">${usd(aavePos)}</span>
                   </div>
                 )}
                 {(morphoPos ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
                     <span className="text-slate-500">Morpho</span>
-                    <span className="text-[#A78BFA]">${usd(morphoPos)}</span>
+                    <span className="text-slate-300">${usd(morphoPos)}</span>
                   </div>
                 )}
-                {ethBal != null && ethBal > 0 && (
+                {/* `!= null`, not `> 0`. This row used to hide itself on a
+                    wallet holding zero ETH — the one wallet that most needs to
+                    be told, because zero ETH means it cannot sign anything at
+                    all. It stayed hidden because the low-gas warning lived on a
+                    SECOND card further down that rendered the same four rows
+                    again; that card is gone (see Section 2) and the warning
+                    lands here, on the only balance breakdown left.
+
+                    It reads `ethBal`, not `walletState.gasReserveEth`: the
+                    latter is `ethBal ?? 0`, so a read that never came back
+                    would be warned about as if it had returned zero. */}
+                {ethBal != null && (
                   <div className="flex justify-between font-mono text-[10px]">
                     <span className="text-slate-500">ETH (gas)</span>
-                    <span className="text-slate-400">{ethBal.toFixed(4)}</span>
+                    <span className={ethBal < 0.005 ? "text-amber-400" : "text-slate-400"}>
+                      {ethBal.toFixed(4)}
+                    </span>
                   </div>
+                )}
+                {ethBal != null && ethBal < 0.005 && (
+                  <div className="font-mono text-[9px] text-amber-400">⚠ Low — get ETH for gas</div>
                 )}
               </div>
             </div>
@@ -605,23 +993,23 @@ export default function BankPage() {
                   style={{ background: "#4FC3F7", color: "#050508" }}>
                   ➡ Send
                 </button>
-                <button onClick={addCash} disabled={onrampBusy || !isConnected}
+                <button onClick={addCash} disabled={onrampBusy || !isConnected || !isBaseMainnet}
+                  title={!isBaseMainnet ? "Base mainnet only" : undefined}
                   className="font-mono text-[11px] font-bold py-2.5 px-3 rounded-xl disabled:opacity-40 transition-opacity hover:opacity-80"
                   style={{ background: "#34D39910", color: "#34D399", border: "1px solid #34D39930" }}>
                   {onrampBusy ? "…" : "💵 Add"}
                 </button>
-                <button onClick={cashOut} disabled={cashOutBusy || !isConnected}
+                <button onClick={cashOut} disabled={cashOutBusy || !isConnected || !isBaseMainnet}
+                  title={!isBaseMainnet ? "Base mainnet only" : undefined}
                   className="font-mono text-[11px] py-2.5 px-3 rounded-xl text-slate-400 disabled:opacity-40 transition-opacity hover:text-slate-200"
                   style={{ border: "1px solid #1A1A2E" }}>
                   {cashOutBusy ? "…" : "🏦 Out"}
                 </button>
               </div>
+              {/* 🌾 Earn used to lead this row. Supplying into Aave/Morpho is
+                  deferred to phase 2, so the control that starts a deposit is
+                  gone; the withdraw path lives on the Positions panel. */}
               <div className="flex gap-1.5">
-                <button onClick={() => openAction("earn")}
-                  className="flex-1 font-mono text-[10px] py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
-                  style={{ border: "1px solid #1A1A2E" }}>
-                  🌾 Earn
-                </button>
                 <button onClick={() => openAction("convert")}
                   className="flex-1 font-mono text-[10px] py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
                   style={{ border: "1px solid #1A1A2E" }}>
@@ -640,84 +1028,105 @@ export default function BankPage() {
             <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
               <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">PORTFOLIO HEALTH</div>
               <div className="flex items-end gap-2 mb-3">
-                <div className="font-mono text-[32px] font-bold leading-none" style={{ color: scoreColor }}>{portfolioScore}</div>
-                <div className="font-mono text-[13px] text-slate-500 mb-1">/100 · {scoreGrade}</div>
+                <div className="font-mono text-[32px] font-bold leading-none" style={{ color: scoreColor }}>
+                  {portfolioScore ?? "—"}
+                </div>
+                <div className="font-mono text-[13px] text-slate-500 mb-1">
+                  {portfolioScore == null
+                    ? (balancesKnown ? "No data yet" : "Reading…")
+                    : `/100 · ${scoreGrade}`}
+                </div>
               </div>
+              {/* Every chip below is DERIVED. `identity` comes from the live
+                  connector + on-chain bytecode (lib/wallet/identity.ts); the
+                  Basename chip from the ENS/Basename lookup. The two that used
+                  to be `active={true}` — "Smart Wallet" and "Passkey" — were
+                  true only for Coinbase Smart Wallet users and were shown to
+                  everyone, so a MetaMask EOA was told it had a passkey. */}
               <div className="flex flex-wrap gap-1.5 mb-3">
-                <IdentityChip label="Smart Wallet" active={true} color="#4FC3F7" />
-                <IdentityChip label="Passkey" active={true} color="#34D399" />
-                <IdentityChip label={name ?? fname ?? "No Basename"} active={!!(name ?? fname)} color="#A78BFA" />
+                <IdentityChip label={identity.connectionLabel} active={identity.family !== "unknown"} color="#4FC3F7" />
+                <IdentityChip label={identity.accountLabel} active={identity.accountKind === "smart"} color="#4FC3F7" />
+                <IdentityChip label={identity.passkeyLabel} active={identity.passkey === "yes"} color="#34D399" />
+                {/* Was #A78BFA — the only violet in the file, one chip in a row
+                    of five, carrying no meaning the other four don't. The
+                    palette is one primary plus three semantic colours (green
+                    good / amber warn / red danger); a fifth hue used once is
+                    decoration pretending to be a category. */}
+                <IdentityChip label={name ?? fname ?? "No Basename"} active={!!(name ?? fname)} color="#4FC3F7" />
+                {/* The one honest constant here: non-custodial is a property of
+                    THIS APP (it never holds a key or a fund), not of whichever
+                    wallet connected — so unlike the chips above it cannot drift
+                    away from a per-user truth it was never reading. */}
                 <IdentityChip label="Non-custodial" active={true} color="#34D399" />
               </div>
-              <button
-                onClick={() => {
-                  const text = `My Base wallet health: ${portfolioScore}/100 @blueagent_`;
-                  navigator.clipboard?.writeText(text).catch(() => {});
-                }}
-                className="font-mono text-[9px] px-2.5 py-1 rounded-full transition-colors hover:opacity-80"
-                style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
-                Share
-              </button>
+              {/* Share is hidden, not disabled, while there is no score.
+                  Sharing a fabricated grade propagates the fabrication OUTSIDE
+                  the app, where no later fix can reach it — the same reason a
+                  testnet QR labelled "Base" was the dangerous part of PR 1. */}
+              {portfolioScore != null && (
+                <button
+                  onClick={() => {
+                    const text = `My ${net.short} wallet health: ${portfolioScore}/100 @blueagent_`;
+                    navigator.clipboard?.writeText(text).catch(() => {});
+                  }}
+                  className="font-mono text-[9px] px-2.5 py-1 rounded-full transition-colors hover:opacity-80"
+                  style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
+                  Share
+                </button>
+              )}
             </div>
 
           </div>
 
-          {/* ── Section 2: Wallet+Earn | AI+Portfolio ─────────────────────── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3 items-start">
+          {/* ── Section 1.5: a link where the AGENT SPEND panel used to be ──
+              The full <SpendConsole> lived here. It answers "what did I spend
+              on BlueAgent", which is the same question /app/usage exists to
+              answer with credits — two pages, one subject, and the numbers came
+              from the same ledger, so they could disagree without either being
+              wrong. The panel moved to /app/usage; this page keeps the money
+              you hold and move, that page keeps what you consumed.
 
-            {/* Left stack */}
-            <div className="flex flex-col gap-3">
-
-              {/* Wallet card */}
-              <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
-                <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-3">WALLET</div>
-                <AssetRow label="USDC" sub="in wallet" usd={walletUsdc} color="#4FC3F7" />
-                <AssetRow label="aUSDC" sub={`Aave · ${aaveApy != null ? `${aaveApy.toFixed(1)}%` : bestApy != null ? `${bestApy.toFixed(1)}%` : "—"} APY`} usd={aavePos} color="#34D399" />
-                {(morphoPos ?? 0) > 0 && (
-                  <AssetRow label="Morpho" sub={`Gauntlet · ${morphoApy != null ? `${morphoApy.toFixed(1)}%` : "—"} APY`} usd={morphoPos} color="#A78BFA" />
-                )}
-                <div className="mt-2 pt-2 border-t border-[#1A1A2E]">
-                  <div className="font-mono text-[9px] text-slate-500 mb-1">GAS RESERVE</div>
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-[11px] text-slate-400">ETH</span>
-                    <span className="font-mono text-[11px] text-slate-300">{walletState.gasReserveEth.toFixed(4)}</span>
-                  </div>
-                  {walletState.gasReserveEth < 0.005 && (
-                    <div className="font-mono text-[9px] text-amber-400 mt-1">⚠ Low — get ETH for gas</div>
-                  )}
-                </div>
+              A link, not a silent removal: the console is still the one thing
+              here no generic Base wallet can show, and dropping the entrance to
+              it would lose the feature rather than relocate it. */}
+          <Link
+            href="/app/usage"
+            className="flex items-center justify-between mb-3 rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] px-4 py-3 hover:border-[#4FC3F730] transition-colors"
+          >
+            <div className="min-w-0">
+              <div className="font-mono text-[9px] text-slate-500 tracking-widest">AGENT SPEND</div>
+              <div className="font-mono text-[10px] text-slate-600 mt-0.5">
+                What your payments bought, per tool — with your credit balance.
               </div>
-
-              {/* Earn card with APY bars */}
-              <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-mono text-[9px] text-slate-500 tracking-widest">YIELD RATES · BASE</div>
-                  <button onClick={() => openAction("earn")}
-                    className="font-mono text-[9px] px-2 py-1 rounded-lg"
-                    style={{ background: "#34D39910", color: "#34D399", border: "1px solid #34D39920" }}>
-                    Earn →
-                  </button>
-                </div>
-                {rates && rates.length ? rates.slice(0, 4).map((r, i) => (
-                  <div key={r.project} className="mb-2">
-                    <div className="flex justify-between font-mono text-[10px] mb-1">
-                      <span className={i === 0 ? "text-[#34D399]" : "text-slate-400"}>{i === 0 ? "★ " : ""}{r.label}</span>
-                      <span className={i === 0 ? "text-[#34D399] font-bold" : "text-slate-300"}>{r.apy.toFixed(2)}%</span>
-                    </div>
-                    <div className="h-1 rounded-full bg-[#1A1A2E] overflow-hidden">
-                      <div className="h-full rounded-full transition-all"
-                        style={{ width: `${Math.min(100, (r.apy / (rates[0].apy + 1)) * 100)}%`, background: i === 0 ? "#34D399" : "#4FC3F740" }} />
-                    </div>
-                  </div>
-                )) : (
-                  <div className="font-mono text-[10px] text-slate-600">loading rates…</div>
-                )}
-              </div>
-
             </div>
+            <span className="font-mono text-[10px] text-[#4FC3F7] flex-shrink-0 ml-3">Usage →</span>
+          </Link>
 
-            {/* Right stack */}
-            <div className="flex flex-col gap-3">
+          {/* ── Section 2: AI Mission Control | Portfolio Allocation ────────
+              A "WALLET" card led the left column here, listing USDC, aUSDC,
+              Morpho and a GAS RESERVE row. Those are the same four rows the
+              balance card in Section 1 already renders, from the same four
+              variables, one screen-height apart — the same number written twice
+              on one page, which is the defect the previous release fixed
+              BETWEEN two pages. Two copies of one derivation is how a surface
+              ends up disagreeing with itself; the wallet's own history has that
+              happening three separate times (see the allocation card below).
+
+              Its one non-duplicate pixel was the low-gas warning, which is why
+              this is a merge and not a delete: that moved up into the Section 1
+              ETH row, where it now also fires at exactly zero.
+
+              A "YIELD RATES · BASE" board sat under it — the top four DefiLlama
+              pools with comparison bars. The previous release gated it to
+              holders only, on the argument that for them it was "context on the
+              money they have in". It wasn't: it ranked FOUR pools, of which the
+              user's was at most one, and the only action it offered was to go
+              somewhere else. Context you can't act on is an advert with a
+              smaller audience.
+
+              With both gone the left column held nothing, so the two surviving
+              cards are direct grid children rather than one-item stacks. */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3 items-start">
 
               {/* AI Mission Control */}
               <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
@@ -765,7 +1174,15 @@ export default function BankPage() {
               {/* Portfolio Allocation with donut chart */}
               <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
                 <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-3">PORTFOLIO ALLOCATION</div>
-                {walletState.balance > 0 ? (
+                {/* ONE predicate for the whole card. It used to be two — the
+                    chart asked `balance > 0` (stables only) and the bar below
+                    asked whether a ratio existed (stables + priced ETH) — and
+                    on a wallet holding dust ETH and no stables the card said
+                    "No assets yet" and then drew "Stablecoin 0%" underneath.
+                    Everything empty-able now hangs off `holdsAssets`, and the
+                    bar is INSIDE this branch so it cannot escape again. */}
+                {holdsAssets ? (
+                  <>
                   <div className="flex items-center gap-4">
                     <div className="w-20 h-20 shrink-0">
                       <ResponsiveContainer width="100%" height="100%">
@@ -791,38 +1208,100 @@ export default function BankPage() {
                           <span className="font-mono text-[10px] text-slate-300">${usd(d.value)}</span>
                         </div>
                       ))}
+                      {/* Say so when the ETH leg is missing, rather than letting
+                          the chart imply the wallet holds no ETH. */}
+                      {ethUnpriced && (
+                        <div className="font-mono text-[9px] text-slate-500">
+                          {ethBal?.toFixed(4)} ETH — price unavailable, not charted
+                        </div>
+                      )}
                       <div className="font-mono text-[8px] text-slate-700 pt-1">ETH counted as gas reserve</div>
                       {walletState.gasSavedUsd != null && (
                         <div className="font-mono text-[9px] text-[#34D399]">~${walletState.gasSavedUsd} saved vs mainnet</div>
                       )}
                     </div>
                   </div>
+                  {/* Nested inside `holdsAssets`, not a sibling of it. As a
+                      sibling it rendered a percentage under "No assets yet" —
+                      twice, in two different releases. `stablecoin != null` is
+                      still required because a ratio can be unknown even when
+                      the wallet plainly holds something (unpriced ETH leg). */}
+                  {walletState.allocation.stablecoin != null ? (
+                    <>
+                      <div className="mt-3 flex items-center justify-between font-mono text-[10px]">
+                        <span className="text-slate-500">Stablecoin</span>
+                        <span className="text-[#4FC3F7] font-bold">{walletState.allocation.stablecoin}%</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-[#1A1A2E] overflow-hidden mt-1">
+                        <div className="h-full rounded-full bg-[#4FC3F7]"
+                          style={{ width: `${walletState.allocation.stablecoin}%` }} />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="mt-3 font-mono text-[9px] text-slate-600">
+                      Split unknown — ETH price unavailable
+                    </div>
+                  )}
+                  </>
                 ) : (
                   <div className="font-mono text-[10px] text-slate-600">No assets yet</div>
                 )}
-                <div className="mt-3 flex items-center justify-between font-mono text-[10px]">
-                  <span className="text-slate-500">Stablecoin</span>
-                  <span className="text-[#4FC3F7] font-bold">{walletState.allocation.stablecoin}%</span>
-                </div>
-                <div className="h-1.5 rounded-full bg-[#1A1A2E] overflow-hidden mt-1">
-                  <div className="h-full rounded-full bg-[#4FC3F7]"
-                    style={{ width: `${walletState.allocation.stablecoin}%` }} />
-                </div>
               </div>
 
-            </div>
           </div>
 
-          {/* ── Section 3: Transaction History ─────────────────────────────── */}
-          <TransactionHistory
-            transactions={txData?.transactions ?? []}
-            loading={txLoading}
-            error={txError}
-            needsKey={txData?.needsKey}
-            onRetry={() => setTxReload(k => k + 1)}
-            explorer={net.explorer}
-            address={acct}
-          />
+          {/* ── Section 3: the long tail, behind tabs ───────────────────────
+              Three full-width sections used to stack here — the token table,
+              the stock table, and the transaction list — each of which paginates
+              or scrolls internally. Below three cards and a link, that put the
+              transaction history somewhere between two and five screens down,
+              and nothing above it told you it was there.
+
+              Tabs, not an accordion or a "show more": these are three answers to
+              three different questions ("what do I hold", "what did I do"), only
+              one of which is being asked at a time, and a tab bar is the only
+              form that states the other options exist while showing one.
+
+              Stocks sit WITH tokens rather than in a tab of their own. They are
+              the same question — what this wallet holds — asked of a second
+              venue, and StockTable already reads both chains itself. */}
+          <div className="flex items-center gap-1 mb-3 border-b border-[#1A1A2E]">
+            {VIEWS.map(v => (
+              <button key={v.id} onClick={() => setView(v.id)}
+                className="font-mono text-[11px] px-3 py-2 -mb-px border-b-2 transition-colors"
+                style={view === v.id
+                  ? { color: "#4FC3F7", borderColor: "#4FC3F7" }
+                  : { color: "#64748b", borderColor: "transparent" }}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+
+          {view === "portfolio" && (
+            <>
+              <TokenTable address={acct} onQuickSell={quickSell} />
+              {/* Mainnet-only by construction: B20 stocks exist on Base 8453 and
+                  the RWA registry on RH 4663, and neither has a testnet twin. On
+                  a testnet dashboard this would show mainnet positions under a
+                  banner saying "no real value", so it is absent instead — the
+                  same refusal the Convert panel makes. */}
+              {!isTestnet && <StockTable address={acct} />}
+            </>
+          )}
+
+          {view === "activity" && (
+            <TransactionHistory
+              transactions={txData?.transactions ?? []}
+              loading={txLoading}
+              error={txError}
+              needsKey={txData?.needsKey}
+              onRetry={() => setTxReload(k => k + 1)}
+              explorer={net.explorer}
+              address={acct}
+            />
+          )}
+
+          {view === "orders" && <OrdersPanel />}
 
         </div>
 
@@ -847,31 +1326,65 @@ export default function BankPage() {
               <div className="overflow-y-auto p-4 min-h-0">
                 {panel === "positions" && (
                   <div>
-                    <PositionRow label="Aave v3" pos={aavePos} apy={aaveApy} onManage={() => setPanel("earn")} />
-                    <PositionRow label="Morpho · Gauntlet USDC Prime" pos={morphoPos} apy={morphoApy}
-                      disabled={!morphoVnet} disabledNote="mainnet only" onManage={() => setPanel("earn")} />
-                    <div className="mt-3 rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-3">
-                      <div className="font-mono text-[9px] text-slate-600 mb-1.5">BEST SAFE RATE · BASE</div>
-                      {rates && rates.length ? rates.slice(0, 3).map((r, i) => (
-                        <div key={r.project} className="flex items-center justify-between py-0.5 font-mono text-[10px]">
-                          <span className={i === 0 ? "text-[#34D399]" : "text-slate-400"}>{i === 0 ? "★ " : "  "}{r.label}</span>
-                          <span className={i === 0 ? "text-[#34D399]" : "text-slate-300"}>{r.apy.toFixed(2)}%</span>
-                        </div>
-                      )) : <div className="font-mono text-[10px] text-slate-600">loading…</div>}
-                    </div>
-                    <button onClick={() => setPanel("earn")}
-                      className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl mt-3"
-                      style={{ background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B40" }}>
-                      🌾 {inYield > 0 ? "Manage yield" : "Start earning"}
-                    </button>
-                    <p className="font-mono text-[9px] text-slate-600 mt-2 leading-relaxed px-0.5">
-                      Supply idle USDC into Aave or Morpho — non-custodial, you sign, withdraw anytime.
-                    </p>
+                    {/* A "BEST SAFE RATE · BASE" leaderboard used to follow these
+                        two rows, inside the panel a user opens to LEAVE. */}
+                    <PositionRow label="Aave v3" pos={aavePos} onManage={() => setPanel("withdraw")} />
+                    <PositionRow label="Morpho · Gauntlet USDC Prime" pos={morphoPos}
+                      disabled={!morphoVnet} disabledNote="mainnet only" onManage={() => setPanel("withdraw")} />
+                    {/* The button said "Start earning" to anyone with no
+                        position — the last remaining control that could open a
+                        new deposit. It is now the exit only, and it stays put
+                        unless the reads came back and said zero. */}
+                    {!noPositions ? (
+                      <>
+                        <button onClick={() => setPanel("withdraw")}
+                          className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl mt-3"
+                          style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
+                          ↩︎ Withdraw
+                        </button>
+                        <p className="font-mono text-[9px] text-slate-600 mt-2 leading-relaxed px-0.5">
+                          Pulls USDC back out of Aave or Morpho to your wallet — non-custodial, you sign every transaction.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="font-mono text-[9px] text-slate-600 mt-3 leading-relaxed px-0.5">
+                        New yield deposits are paused. Existing positions stay withdrawable at any time.
+                      </p>
+                    )}
                   </div>
                 )}
-                {panel === "earn" && <MoveToYieldCard result={{ network }} account={acct} />}
-                {panel === "convert" && <SwapCard account={acct} />}
-                {panel === "orders" && <OrdersPanel />}
+                {/* `withdrawOnly` is what actually closes the entrance. Hiding
+                    the buttons above is not enough on its own — the card ships
+                    a Supply/Withdraw toggle, so without this prop a user who
+                    reached the exit could flip straight back into a deposit. */}
+                {/* `earnKey`, not `network` — MoveToYieldCard takes `network` as a
+                    loose string and reads anything that isn't "base" as
+                    baseSepolia, so handing it a chain with no lending market
+                    would silently move the user onto a TESTNET withdraw form.
+                    Passing the narrowed key means the card can only ever be given
+                    a network it can actually represent. */}
+                {panel === "withdraw" && (earnKey
+                  ? <MoveToYieldCard result={{ network: earnKey, action: "withdraw" }} account={acct} withdrawOnly />
+                  : <p className="font-mono text-[11px] text-slate-500">Earn positions are on Base. Switch to Base to withdraw.</p>
+                )}
+                {/* Convert is a 0x-API flow that exists on Base mainnet only, and
+                    SwapCard force-switches the wallet to mainnet before signing.
+                    Rendering it while the dashboard is on testnet would move REAL
+                    funds under a page captioned "no real value" — exactly the
+                    class of mismatch this PR removes. Refuse instead. */}
+                {panel === "convert" && (!isBaseMainnet
+                  ? <div className="rounded-lg px-3.5 py-3" style={{ background: "#F59E0B10", border: "1px solid #F59E0B40" }}>
+                      <div className="font-mono text-[11px] font-bold" style={{ color: "#F59E0B" }}>Convert is Base mainnet only</div>
+                      <div className="font-mono text-[9px] text-slate-400 mt-1 leading-relaxed">
+                        Swaps route through the 0x API on Base mainnet and would spend real funds. You are on {net.short} — switch to Base to convert.
+                      </div>
+                      <button onClick={() => setNetwork("base")}
+                        className="font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg mt-2.5 transition-opacity hover:opacity-80"
+                        style={{ background: "#F59E0B", color: "#050508" }}>
+                        Switch to Base
+                      </button>
+                    </div>
+                  : <SwapCard account={acct} preset={sellPreset} />)}
                 {panel === "send" && (
                   <div>
                     <button onClick={() => setScanOpen(true)}
@@ -937,8 +1450,8 @@ export default function BankPage() {
                     <div className="rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-2.5 mt-4">
                       <p className="font-mono text-[9px] text-slate-500 leading-relaxed">
                         {parseFloat(reqAmount) > 0
-                          ? <>Payment-request QR — a payer scanning it (BlueBank <b className="text-slate-300">Scan to pay</b>, or any EIP-681 wallet) gets <b className="text-slate-300">{reqAmount} {reqAsset}</b> prefilled.</>
-                          : <>Scan the QR with any wallet, or set an amount above to make a payment request. <b className="text-slate-300">USDC / ETH on Base</b> ({net.short}) only.</>}
+                          ? <>Payment-request QR — a payer scanning it (Wallet <b className="text-slate-300">Scan to pay</b>, or any EIP-681 wallet) gets <b className="text-slate-300">{reqAmount} {reqAsset}</b> prefilled.</>
+                          : <>Scan the QR with any wallet, or set an amount above to make a payment request. <b className="text-slate-300">USDC / ETH on {net.label}</b> only.</>}
                       </p>
                     </div>
                   </div>
@@ -961,7 +1474,7 @@ export default function BankPage() {
             <div className="flex items-center gap-2">
               <img src="/logomark.svg" alt="BlueAgent" className="w-5 h-5" />
               <span className="font-mono text-[11px] text-[#4FC3F7] font-bold">BlueAgent</span>
-              <span className="font-mono text-[9px] text-slate-600">Banking mode</span>
+              <span className="font-mono text-[9px] text-slate-600">Wallet mode</span>
             </div>
             <button onClick={() => setChatOpen(false)}
               className="font-mono text-slate-500 hover:text-white text-sm w-6 h-6 flex items-center justify-center rounded">✕</button>
@@ -1063,20 +1576,15 @@ function AssetPill({ label, value, color }: { label: string; value: string; colo
   );
 }
 
-function AssetRow({ label, sub, usd: val, color }: { label: string; sub: string; usd: number | null; color: string }) {
-  return (
-    <div className="flex items-center justify-between py-2 border-b border-[#13131f] last:border-0">
-      <div className="flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-        <div>
-          <div className="font-mono text-[12px] text-slate-200">{label}</div>
-          <div className="font-mono text-[9px] text-slate-600">{sub}</div>
-        </div>
-      </div>
-      <div className="font-mono text-[12px] text-slate-300">{val != null ? `$${usd(val)}` : "—"}</div>
-    </div>
-  );
-}
+// `AssetRow` lived here. Its three call sites were the USDC / aUSDC / Morpho
+// rows of the Section 2 WALLET card, which this release deleted as a duplicate
+// of the Section 1 balance card. Deleted with them rather than left behind: the
+// component it duplicated renders those rows inline, so a second row primitive
+// is an invitation to grow the duplicate back.
+//
+// `AssetPill`, `AISuggestion` and `StatMini` below/above are ALSO unreferenced,
+// but they were already dead before this branch (0 call sites at its base
+// commit), so removing them belongs to its own change, not to a wallet rebuild.
 
 function AISuggestion({ icon, text, action, onAction, color }: {
   icon: string; text: string; action?: string; onAction?: () => void; color: string;
@@ -1122,25 +1630,16 @@ function IdentityChip({ label, active, color }: { label: string; active: boolean
 }
 
 // Dependency-free area sparkline for the sidebar
-function Spark({ points, color, height = 48, fill = false }: { points: number[]; color: string; height?: number; fill?: boolean }) {
-  if (!points || points.length < 2)
-    return <div className="font-mono text-[10px] text-slate-700" style={fill ? { width: "100%" } : { height }}>loading chart…</div>;
-  const w = 100, h = 48;
-  const min = Math.min(...points), max = Math.max(...points), range = max - min || 1;
-  const step = w / (points.length - 1);
-  const coords = points.map((p, i) => `${(i * step).toFixed(2)},${(h - ((p - min) / range) * h).toFixed(2)}`);
-  const line = "M" + coords.join(" L");
-  const area = `${line} L${w},${h} L0,${h} Z`;
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={fill ? { width: "100%", height: "100%" } : { width: "100%", height }}>
-      <path d={area} fill={color} fillOpacity="0.12" />
-      <path d={line} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
+// A local `Spark` SVG line-chart component lived here. Its ONE call site was
+// the Morpho APY sparkline in the sidebar, so it goes with it. (BaseTokensCard
+// has its own `Spark` — different file, different component, still in use.)
 
-function PositionRow({ label, pos, apy, onManage, disabled, disabledNote }: {
-  label: string; pos: number | null; apy: number | null; onManage: () => void; disabled?: boolean; disabledNote?: string;
+// `apy` was a prop here, appended to the balance as " · ~4.12%". Dropped with
+// the rest of the rate surface: it came from the Aave reserve read for one row
+// and from DefiLlama's top pool for the other, so two rows in the same list
+// quoted rates measured two different ways and only one of them was this user's.
+function PositionRow({ label, pos, onManage, disabled, disabledNote }: {
+  label: string; pos: number | null; onManage: () => void; disabled?: boolean; disabledNote?: string;
 }) {
   return (
     <div className="flex items-center justify-between py-2 border-b border-[#13131f] last:border-0">
@@ -1148,7 +1647,7 @@ function PositionRow({ label, pos, apy, onManage, disabled, disabledNote }: {
         <div className="font-mono text-[12px] text-slate-200">{label}</div>
         <div className="font-mono text-[10px] text-slate-600">
           {disabled ? <span className="text-slate-700">{disabledNote}</span>
-            : <>{pos != null ? `${pos.toFixed(2)} USDC` : "—"}{apy != null && <span className="text-[#34D399]"> · ~{apy.toFixed(2)}%</span>}</>}
+            : pos != null ? `${pos.toFixed(2)} USDC` : "—"}
         </div>
       </div>
       {!disabled && (
@@ -1161,27 +1660,58 @@ function PositionRow({ label, pos, apy, onManage, disabled, disabledNote }: {
 }
 
 // ── Landing hero (shown until the wallet connects) ───────────────────────────
-function BankLanding({ bestApy }: { bestApy: number | null }) {
-  const apyText = bestApy != null ? `~${bestApy.toFixed(1)}%` : "up to ~5%";
+function BankLanding() {
+  // The lead bullet MIRRORS the panel's primary control so the two can never
+  // disagree. With Privy on, the way in is "sign in, we make the wallet" — and
+  // the method name is read from the same config the button reads, not typed
+  // out here. With Privy off (local dev, no NEXT_PUBLIC_PRIVY_APP_ID) the only
+  // way in is your own wallet, so the copy says that instead of advertising an
+  // onboarding path the panel does not render.
+  //
+  // What used to sit here — "Sign in with Face ID … Coinbase Smart Wallet" —
+  // described the CTA removed from `ConnectButton` below; see the comment there
+  // for why that promise stopped being true.
+  const signIn = PRIVY_ENABLED
+    ? { icon: "✉️", title: `Sign in with ${describeLoginMethods()} — no seed phrase`, body: "No extension, no app, no 12-word phrase. Signing in creates a wallet that is yours — we never hold the keys." }
+    : { icon: "🔌", title: "Bring your own wallet", body: "MetaMask, Coinbase Wallet, Rabby, Phantom, or any WalletConnect wallet. Connect in one tap." };
+  // The second bullet used to promise "Earn ~X% APY on idle USDC". It is the
+  // first thing an unconnected visitor reads, and it sold the one feature this
+  // phase withdraws — so it advertised a door that is now closed. Replaced with
+  // the agent spend console, which is the thing about this product no other
+  // wallet can show.
+  //
+  // The console itself now lives on /app/usage, so the bullet says where. A
+  // landing bullet describing a panel that is no longer on the page it lands
+  // you on is the same defect as the APY promise it replaced: copy that outlived
+  // the thing it described.
   const features: { icon: string; title: string; body: string }[] = [
-    { icon: "🔑", title: "Sign in with Face ID — no seed phrase", body: "Coinbase Smart Wallet: a passkey-secured account you create in one tap. Recoverable, no 12-word phrase to lose." },
-    { icon: "📈", title: `Earn ${apyText} APY on idle USDC`, body: "Live rates across blue-chip lending (Aave · Morpho). Your USDC works while you sleep — no lockups." },
+    signIn,
+    { icon: "📊", title: "See every payment your agent made", body: "Each x402 tool call your agent paid for, itemised in USDC on your Usage page — the ledger a generic wallet cannot reconstruct." },
     { icon: "➡", title: "Send to any wallet or name.base", body: "Pay anyone on Base by address or Basename. Instant, 24/7, no cut-off times." },
-    { icon: "🔒", title: "Non-custodial — you hold the keys", body: "You sign every transaction from your own wallet. BlueBank never holds your keys or funds." },
+    { icon: "🔒", title: "Non-custodial — you hold the keys", body: "You sign every transaction from your own wallet. BlueAgent never holds your keys or funds." },
     { icon: "🌐", title: "On-chain, withdraw anytime", body: "Your money lives on Base, not in a silo. Pull it out whenever you want, in one click." },
   ];
   return (
     <div className="min-h-full bg-[#050508] flex items-center justify-center p-5 sm:p-8">
       <div className="w-full max-w-4xl grid md:grid-cols-2 gap-6 items-center">
         <div>
-          <div className="font-mono text-[13px] tracking-widest text-[#4FC3F7] font-bold mb-3">🔵 BLUEBANK</div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white leading-tight mb-3">
-            Banking that you<br />actually own.
-          </h1>
-          <p className="font-mono text-[12px] text-slate-400 leading-relaxed mb-5 max-w-md">
-            Hold USDC, earn real yield, and move money on Base — <span className="text-slate-200">non-custodial</span>.
-            You hold the keys; BlueBank only prepares the transaction, you sign it.
-          </p>
+          {/* A headline and a paragraph used to sit between this label and the
+              bullets: "A wallet you actually own." over "Hold USDC, move money,
+              and track every agent payment on Base — non-custodial. You hold the
+              keys; BlueAgent only prepares the transaction, you sign it."
+
+              Every clause of it is repeated verbatim below. "Hold USDC, move
+              money" is bullet 3, "track every agent payment" is bullet 2,
+              "non-custodial / you hold the keys" is bullet 4 — which states it
+              twice more in its own title and body. Five claims, three of them
+              said twice within 200px, and the paragraph was the copy a reader
+              hits first, so the bullets under it read as a restatement rather
+              than as the detail.
+
+              The label is the heading now rather than a decorative eyebrow over
+              one: dropping the <h1> without promoting something would leave the
+              page with no heading at all. */}
+          <h1 className="font-mono text-[13px] tracking-widest text-[#4FC3F7] font-bold mb-4">🔵 WALLET</h1>
           <div className="space-y-3">
             {features.map(f => (
               <div key={f.title} className="flex gap-3">
@@ -1196,43 +1726,77 @@ function BankLanding({ bestApy }: { bestApy: number | null }) {
         </div>
         <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-6">
           <div className="font-mono text-[14px] font-bold text-white mb-1">Open your account</div>
-          <p className="font-mono text-[11px] text-slate-500 mb-5">Sign in with Face ID — no signup, no KYC, no custody. Your keys are secured by a passkey, not a seed phrase.</p>
+          {/* Describes the control DIRECTLY BELOW IT, which is why it tracks
+              PRIVY_ENABLED: with Privy off there is no "we create your wallet"
+              path on this panel, only the wallet list. The old line promised
+              Face ID and a passkey — the CTA that delivered that is gone. */}
+          <p className="font-mono text-[11px] text-slate-500 mb-5">
+            {PRIVY_ENABLED
+              ? "Sign in and we create your wallet — no seed phrase, no app to install."
+              : "Connect a wallet you already own — no signup, no KYC, no custody."}
+          </p>
           <ConnectButton />
           <div className="flex items-center gap-2 my-4">
             <div className="h-px flex-1 bg-[#1A1A2E]" /><span className="font-mono text-[9px] text-slate-700">SECURED BY YOU</span><div className="h-px flex-1 bg-[#1A1A2E]" />
           </div>
           <div className="flex items-center justify-center gap-4 font-mono text-[9px] text-slate-600">
-            <span>🔒 Non-custodial</span><span>·</span><span>⛓ On Base</span><span>·</span><span>↩ Withdraw anytime</span>
+            <span>🔒 Non-custodial</span><span>·</span><span>⛓ On Base</span><span>·</span><span>🔑 You sign everything</span>
           </div>
-          <p className="font-mono text-[9px] text-slate-700 text-center mt-4">Powered by Base · Aave v3 · Morpho</p>
+          {/* Named Aave v3 and Morpho, which this surface no longer sends money
+              to — the only thing left pointing at them is the withdraw path,
+              and an unconnected visitor has no position to withdraw. Naming a
+              lender under the signup button reads as "your deposit goes here".
+              "Withdraw anytime" left the row above for the same reason: it
+              answers a question about a deposit you can no longer make. */}
+          <p className="font-mono text-[9px] text-slate-700 text-center mt-4">Powered by Base · USDC</p>
         </div>
       </div>
     </div>
   );
 }
 
-// Connect-wallet CTA.
+// Connect-wallet CTA — two controls, nothing else: sign in (we make the wallet)
+// vs bring your own. Same split Halo ships.
 //
-// The Coinbase-first funnel ("create a free wallet" → everything else behind a
-// toggle) is deliberate BlueBank onboarding and stays. What's gone is the local
-// copy of the connector plumbing — the de-dup, the icon map and the
-// clearUserDisconnected() call now come from useWallet, so this list can't
-// drift from the one every other surface shows.
+// ⚠️ THE "🔵 Create a free wallet" CTA THAT USED TO HEAD THIS PANEL IS GONE, and
+// it should not come back in that form. It called `coinbase.select()`, where
+// `coinbase` is just `wallets.find(name includes "coinbase")` — byte-for-byte
+// the same call as the "Coinbase Wallet" row inside the dropdown below. One
+// button, listed twice.
+//
+// It also stopped telling the truth. Before Privy, `coinbase` resolved to the
+// wagmi `coinbaseWallet({ preference: { options: "all" } })` connector, which
+// really does surface Smart Wallet creation — so "Face ID · no seed phrase" was
+// accurate. Routing external wallets through Privy changed what that entry
+// resolves to WITHOUT changing the copy, leaving a button that promised a
+// passkey and opened Coinbase's generic connect flow. The genuine passkey
+// product is `base_account`, which is its own row in the list and is labelled
+// as such there.
+//
+// The seedless pitch now lives on the Privy control, which actually delivers it
+// (sign in → embedded wallet, no seed phrase), and whose label is derived from
+// the configured login methods so it cannot drift the same way.
 function ConnectButton() {
-  const { wallets, coinbase, connectWith, isPending } = useWallet();
+  const { wallets, isPending } = useWallet();
   const [open, setOpen] = useState(false);
 
   return (
     <div className="relative">
-      {coinbase && (
+      {/* Sign in → embedded wallet. Guarded by PRIVY_ENABLED so PrivyLoginButton
+          never mounts outside its provider; with the var unset this panel falls
+          back to the wallet list alone (dev-only — prod has Privy on). */}
+      {PRIVY_ENABLED && (
         <>
-          <button onClick={() => connectWith(coinbase.connector)} disabled={isPending}
-            className="w-full font-mono text-[13px] font-bold py-3 rounded-xl transition-all disabled:opacity-60 flex items-center justify-center gap-2"
-            style={{ background: "#4FC3F7", color: "#050508" }}>
-            {isPending ? "Connecting…" : <>🔵 Create a free wallet</>}
-          </button>
-          <div className="flex items-center justify-center gap-2 mt-2 font-mono text-[9px] text-slate-500">
-            <span>Face ID</span><span>·</span><span>no seed phrase</span><span>·</span><span>no app to install</span>
+          <PrivyLoginButton variant="primary" />
+          {/* No sub-caption here on purpose: the panel line right above the
+              button already carries "no seed phrase, no app to install", and a
+              second copy of the same promise two rows apart reads as clutter.
+              One claim, one place — it also means there is only one string to
+              keep honest if the sign-in path changes again. */}
+          <div className="flex items-center gap-2 mt-3">
+            <div className="h-px flex-1 bg-[#1A1A2E]" />
+            <span className="font-mono text-[9px] text-slate-600 uppercase tracking-widest">or</span>
+            <div className="h-px flex-1 bg-[#1A1A2E]" />
           </div>
         </>
       )}
@@ -1245,7 +1809,7 @@ function ConnectButton() {
           <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-xl border border-[#1A1A2E] bg-[#0A0A12] shadow-2xl overflow-hidden">
             <p className="font-mono text-[10px] text-slate-600 px-3 pt-3 pb-2 tracking-widest">SELECT WALLET</p>
             {wallets.map(w => (
-              <button key={w.connector.uid} onClick={() => { connectWith(w.connector); setOpen(false); }}
+              <button key={w.key} onClick={() => { w.select(); setOpen(false); }}
                 className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-[#1A1A2E] transition-colors">
                 <span className="w-7 h-7 rounded-lg bg-[#1A1A2E] flex items-center justify-center text-base shrink-0">{w.icon}</span>
                 <span className="font-mono text-xs text-slate-200">{w.name}</span>

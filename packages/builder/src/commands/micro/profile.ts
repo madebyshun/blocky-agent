@@ -1,7 +1,9 @@
 /**
- * blue micro profile — Show human performance and microtask earnings.
+ * blue micro profile — Show human performance and approved microtask value.
  *
  * blue micro profile @yourhandle
+ *
+ * "Approved" is what this local ledger says is owed, not what has been paid.
  */
 
 import { printError } from "../../print";
@@ -70,7 +72,7 @@ export async function runMicroProfile(handle: string | undefined): Promise<void>
   process.stdout.write(`  Completed:    ${approvedCount}\n`);
   process.stdout.write(`  Rejected:     ${rejectedCount}\n`);
   process.stdout.write(`  Approval rate: ${rep.approved_rate}%\n`);
-  process.stdout.write(`  Total earned: $${rep.total_earned_usdc.toFixed(2)} USDC\n`);
+  process.stdout.write(`  Approved value: $${rep.total_earned_usdc.toFixed(2)} — owed per local ledger, not paid\n`);
   process.stdout.write(`  Avg turnaround: ${fmtMinutes(rep.avg_turnaround_minutes)}\n`);
   if (topPlatforms) {
     process.stdout.write(`  Top platforms: ${topPlatforms}\n`);

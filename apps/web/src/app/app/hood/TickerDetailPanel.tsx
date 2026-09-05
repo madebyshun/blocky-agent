@@ -3,17 +3,41 @@
 /**
  * Blue Hood — row-expand detail panel (T-B2).
  *
- * Fetches `/api/hood/ticker-detail?ticker=X` lazily on first mount for
- * that ticker (accordion pattern above collapses the previous panel, so
+ * Fetches `/api/hood/ticker-detail?ticker=X&chain=C` lazily on first mount for
+ * that row (accordion pattern above collapses the previous panel, so
  * we only ever have one instance mounted). Renders:
- *   • LIQUIDITY block — deepest pool, all pools, slippage strip
+ *   • LIQUIDITY block — deepest pool, all pools, slippage strip (M3-backed), OR
+ *     the narrower row-sourced block on a desk that measures its own depth
  *   • HOLDERS block — top 5, concentration + HHI, amber when top1 > 30%
- *   • ARROW BRIEF — inline if this ticker has an open arrow
- *   • LINKS strip — Blockscout token, deepest pool
+ *   • ARROW BRIEF — inline if this row has an open arrow
+ *   • LINKS strip — chain's own explorer, deepest pool
+ *
+ * ⚠️ `chain` IS REQUIRED AND IS NOT DECORATIVE. The two upstream tools take a
+ * BARE TICKER and read Robinhood Chain only, so before this prop existed every
+ * Base row rendered RH pools, RH TVL, RH holders and an RH slippage table under
+ * a BASE badge — NVDA showed $109.52M against $1.71M in its own row. What the
+ * panel may show per chain is decided in `blue-hood/detail-support.ts`, which is
+ * dependency-free precisely so a script can test it; this file is a `"use
+ * client"` tree nothing can import. Do not re-derive the decision here.
+ *
+ * ⚠️ THE OVERCORRECTION IS ALSO A BUG. The first fix for the above skipped BOTH
+ * blocks on every non-RH chain, so a Base row said "Liquidity is not wired for
+ * this desk" directly beneath its own TVL $1.90M / VOL 24H $10.43M. What is
+ * RH-only is the M3 TOOL, not the data — hence three sources, not a boolean:
+ * `"tool"` fetches, `"row"` reads the snapshot the board already has, `"none"`
+ * draws the note. A block that shows nothing must be a block with nothing to
+ * show, or every honest "skipped" note on this board gets cheaper.
  */
 
 import { useEffect, useState } from "react";
-import type { Arrow } from "@/lib/blue-hood/types";
+import type { Arrow, HoodChain } from "@/lib/blue-hood/types";
+import {
+  detailPanelPlan,
+  explorerAddressUrl,
+  explorerTokenUrl,
+  rowLiquidityView,
+  type RowLiquidity,
+} from "@/lib/blue-hood/detail-support";
 
 const BORDER = "#1A1A2E";
 const SURFACE = "#0B0D13";
@@ -62,26 +86,44 @@ interface Detail {
 
 export default function TickerDetailPanel({
   ticker,
+  chain,
   contract,
   openArrow,
+  rowLiquidity,
 }: {
   ticker: string;
+  chain: HoodChain;
   contract: string;
   openArrow: Arrow | null;
+  /**
+   * The row's OWN depth figures, for desks whose poll measures them (Base).
+   * Required, not optional: a call site that omits it would silently fall back
+   * to "no reading this cycle" on a token the desk measures every cycle, which
+   * is the understating twin of the bug this panel already carries a header
+   * about. Pass `null` only for a desk that genuinely has none.
+   */
+  rowLiquidity: RowLiquidity | null;
 }) {
+  const plan = detailPanelPlan(chain);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [cache, setCache] = useState<boolean>(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    // No source for this chain ⟹ do not call. Fetching and then hiding would
+    // still burn two 15s tool calls AND leave the provenance line below saying
+    // "fresh · updated 5s ago", which asserts a measurement on THIS desk that
+    // never happened. The absence has to go all the way down.
+    if (!detailPanelPlan(chain).fetch) return;
     let cancelled = false;
     setDetail(null);
     setErr(null);
     (async () => {
       try {
-        const r = await fetch(`/api/hood/ticker-detail?ticker=${encodeURIComponent(ticker)}`, {
-          cache: "no-store",
-        });
+        const r = await fetch(
+          `/api/hood/ticker-detail?ticker=${encodeURIComponent(ticker)}&chain=${encodeURIComponent(chain)}`,
+          { cache: "no-store" },
+        );
         const body = await r.json() as { ok: boolean; detail?: Detail; cache?: boolean; error?: string };
         if (cancelled) return;
         if (body.ok && body.detail) {
@@ -95,7 +137,50 @@ export default function TickerDetailPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [ticker]);
+  }, [ticker, chain]);
+
+  // NO TOOL FETCH ON THIS CHAIN — which is not the same as no data, and the
+  // difference is the whole point of `DetailSource`. On Base the desk's own poll
+  // has already measured depth, so `plan.liquidity === "row"` says to draw it
+  // from the snapshot row instead of from M3. The previous version of this
+  // branch rendered the note alone for every non-RH chain, which put "Liquidity
+  // is not wired for this desk" an inch below a row printing TVL $1.90M.
+  //
+  // The provenance line deliberately does NOT say "fresh · updated Ns ago" here:
+  // nothing was fetched by this panel. It names the desk, and the row block
+  // carries its own age implicitly by being this cycle's snapshot.
+  if (!plan.fetch) {
+    return (
+      <div className="flex flex-col gap-4 text-[12px]">
+        <div className="flex items-center gap-3 font-mono text-[10px]" style={{ color: MUTED }}>
+          <span>{chain} desk</span>
+          <a
+            href={explorerTokenUrl(chain, contract)}
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto hover:text-white"
+          >
+            contract ↗
+          </a>
+        </div>
+        <Section label="// LIQUIDITY">
+          {plan.liquidity === "row" ? (
+            <RowLiquidityBlock chain={chain} row={rowLiquidity} note={plan.liquidityNote} />
+          ) : (
+            <p className="font-mono text-[11px] leading-relaxed" style={{ color: MUTED }}>
+              {plan.liquidityNote}
+            </p>
+          )}
+        </Section>
+        <Section label="// HOLDERS">
+          <p className="font-mono text-[11px] leading-relaxed" style={{ color: MUTED }}>
+            {plan.holdersNote}
+          </p>
+        </Section>
+        <OpenArrowSection openArrow={openArrow} />
+      </div>
+    );
+  }
 
   if (err) {
     return (
@@ -118,7 +203,7 @@ export default function TickerDetailPanel({
         <span>·</span>
         <span>updated {relTime(detail.fetched_at)}</span>
         <a
-          href={liq?.explorer_url ?? `https://robinhoodchain.blockscout.com/token/${contract}`}
+          href={liq?.explorer_url ?? explorerTokenUrl(chain, contract)}
           target="_blank"
           rel="noreferrer"
           className="ml-auto hover:text-white"
@@ -219,7 +304,7 @@ export default function TickerDetailPanel({
                   <li key={h.address ?? i} className="font-mono text-[11px] flex items-center gap-3">
                     <span className="text-slate-500 tabular-nums">{i + 1}.</span>
                     <a
-                      href={h.address ? `https://robinhoodchain.blockscout.com/address/${h.address}` : "#"}
+                      href={h.address ? explorerAddressUrl(chain, h.address) : "#"}
                       target="_blank"
                       rel="noreferrer"
                       className="text-slate-300 hover:text-white truncate max-w-[240px]"
@@ -244,34 +329,108 @@ export default function TickerDetailPanel({
         )}
       </Section>
 
-      {/* Inline open arrow brief — sourced from parent to avoid a second fetch */}
-      {openArrow && (
-        <Section label={`// OPEN ARROW · ${openArrow.serial}`}>
-          {openArrow.brief ? (
-            <div className="flex flex-col gap-1.5">
-              <div className="font-mono text-white leading-relaxed">{openArrow.brief.verdict_note}</div>
-              {openArrow.brief.one_line_context && (
-                <div className="italic" style={{ color: "#cbd5e1" }}>&ldquo;{openArrow.brief.one_line_context}&rdquo;</div>
-              )}
-              <div className="font-mono text-[10px]" style={{ color: MUTED }}>
-                brief · {openArrow.brief.llm_provider ?? "no LLM"} · {relTime(openArrow.brief.fetched_at)}
-              </div>
-            </div>
-          ) : (
-            <div className="font-mono text-[11px]" style={{ color: MUTED }}>
-              open arrow · no brief attached (A4 unavailable at fire time)
-            </div>
-          )}
-          <div className="mt-1 font-mono text-[11px]" style={{ color: RH_GREEN }}>
-            {openArrow.type.toUpperCase()} {openArrow.expected_direction === "up" ? "↑" : openArrow.expected_direction === "down" ? "↓" : ""} · ref ${openArrow.reference_price.toFixed(2)} · grading window {openArrow.grading_window_h}h
-          </div>
-        </Section>
-      )}
+      <OpenArrowSection openArrow={openArrow} />
     </div>
   );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
+
+/**
+ * Inline open-arrow brief — sourced from the parent to avoid a second fetch.
+ *
+ * Extracted so the skipped-chain branch renders THE SAME component rather than
+ * a copy: this block is chain-correct already (the parent matches on `chainOf`,
+ * not on ticker), and it is the one thing a Base row has a real source for. A
+ * duplicated JSX version would be free to drift out from under that guarantee.
+ */
+function OpenArrowSection({ openArrow }: { openArrow: Arrow | null }) {
+  if (!openArrow) return null;
+  return (
+    <Section label={`// OPEN ARROW · ${openArrow.serial}`}>
+      {openArrow.brief ? (
+        <div className="flex flex-col gap-1.5">
+          <div className="font-mono text-white leading-relaxed">{openArrow.brief.verdict_note}</div>
+          {openArrow.brief.one_line_context && (
+            <div className="italic" style={{ color: "#cbd5e1" }}>&ldquo;{openArrow.brief.one_line_context}&rdquo;</div>
+          )}
+          <div className="font-mono text-[10px]" style={{ color: MUTED }}>
+            brief · {openArrow.brief.llm_provider ?? "no LLM"} · {relTime(openArrow.brief.fetched_at)}
+          </div>
+        </div>
+      ) : (
+        <div className="font-mono text-[11px]" style={{ color: MUTED }}>
+          open arrow · no brief attached (A4 unavailable at fire time)
+        </div>
+      )}
+      <div className="mt-1 font-mono text-[11px]" style={{ color: RH_GREEN }}>
+        {openArrow.type.toUpperCase()} {openArrow.expected_direction === "up" ? "↑" : openArrow.expected_direction === "down" ? "↓" : ""} · ref ${openArrow.reference_price.toFixed(2)} · grading window {openArrow.grading_window_h}h
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * LIQUIDITY drawn from the SNAPSHOT ROW, for a desk whose own poll measures depth.
+ *
+ * Deliberately narrower than the M3-backed block above: two figures and one pool
+ * link — no pool count, no slippage strip. Both omissions are properties of the
+ * source rather than oversights. `registry.ts` admits exactly one Aerodrome pool
+ * per Base token, so a count of "1" would be a tautology dressed as a
+ * measurement; and the poll records that pool's liquidity in USD but not its
+ * reserves, which is what the xy=k bound needs. The caveat printed under the
+ * numbers says which, so a reader comparing this against an RH panel is told why
+ * it is shorter instead of being left to guess that something failed.
+ *
+ * The pool link is labelled with the TRUNCATED ADDRESS, not the DEX's name. A
+ * hardcoded "Aerodrome" in a chain-generic component is a fact about today's
+ * Base registry sitting in a file that has no way to notice when it changes;
+ * the address is carried by the row and cannot go stale against it.
+ */
+function RowLiquidityBlock({
+  chain,
+  row,
+  note,
+}: {
+  chain: HoodChain;
+  row: RowLiquidity | null;
+  note: string | null;
+}) {
+  const view = rowLiquidityView(chain, row);
+  const poolLabel = row?.poolRef ? shortAddr(row.poolRef) : null;
+  return (
+    <>
+      {view.measured ? (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[12px]">
+          <div><span style={{ color: MUTED }}>pool tvl</span> {fmtUsd(view.tvlUsd)}</div>
+          <div><span style={{ color: MUTED }}>vol 24h</span> {fmtUsd(view.volume24hUsd)}</div>
+          <div className="col-span-2">
+            <span style={{ color: MUTED }}>pool</span>{" "}
+            {view.poolUrl && poolLabel ? (
+              <a href={view.poolUrl} target="_blank" rel="noreferrer" className="text-white hover:underline">
+                {poolLabel} ↗
+              </a>
+            ) : (
+              <span style={{ color: MUTED }}>—</span>
+            )}
+          </div>
+        </div>
+      ) : (
+        // Amber, not muted grey: an absent reading changes what the number below
+        // the row means, so it is a warning rather than a footnote.
+        <p className="font-mono text-[11px] leading-relaxed" style={{ color: AMBER }}>
+          ⚠ {view.emptyNote}
+        </p>
+      )}
+      {note && (
+        <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: MUTED }}>
+          {note}
+        </p>
+      )}
+    </>
+  );
+}
+
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -308,6 +467,11 @@ function fmtUsd(n: number | null | undefined): string {
   if (n >= 1) return `$${n.toFixed(2)}`;
   if (n > 0) return `$${n.toFixed(4)}`;
   return "$0";
+}
+/** `0x1234…abcd`. Left short enough to read, long enough to check against the
+ *  explorer page the link opens. */
+function shortAddr(a: string): string {
+  return a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
 }
 function fmtPct(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "—";

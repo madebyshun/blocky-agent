@@ -18,7 +18,9 @@ export async function runListTasks(filter?: { category?: string; status?: string
 
     if (open.length === 0) {
       process.stdout.write(`\n${line}\n  📋 Work Hub — No open tasks\n${line}\n`);
-      process.stdout.write(`\n  Post one: blue post-task @handle\n\n`);
+      process.stdout.write(`\n  This list is per-process and starts empty every run — there is\n`);
+      process.stdout.write(`  no shared Work Hub behind it. For tasks that persist, use\n`);
+      process.stdout.write(`  \`blue micro post\` and \`blue micro list\`.\n\n`);
       return;
     }
 
@@ -31,7 +33,7 @@ export async function runListTasks(filter?: { category?: string; status?: string
       const slotsLabel = slotsLeft === 0 ? "full" : `${slotsLeft} slot${slotsLeft !== 1 ? "s" : ""} open`;
 
       process.stdout.write(`\n  ${cat} [${t.id}] ${t.title}\n`);
-      process.stdout.write(`     Reward:   ${t.reward} USDC\n`);
+      process.stdout.write(`     Reward:   ${t.reward}\n`);
       process.stdout.write(`     Slots:    ${slots} (${slotsLabel})\n`);
       process.stdout.write(`     Posted by: @${t.poster}  Deadline: ${t.deadline}\n`);
       process.stdout.write(`     Proof:    ${t.proof_required}\n`);

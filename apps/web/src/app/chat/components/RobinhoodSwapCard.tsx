@@ -12,6 +12,7 @@ import { useAccount, useSwitchChain, useSendTransaction, useReadContract, useBal
 import { parseUnits, formatUnits } from "viem";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { ConnectButton } from "@/components/ConnectModal";
+import { TokenGlyph, ConfirmPreview, resolveQuantity, clampDecimals } from "./ConfirmCardParts";
 
 const RH_ROUTER = "0x3bb0e9E3dB75faDC5f1f8b7D7B9D761Ef15cd23D" as const;
 const RH_CHAIN_ID = 4663;
@@ -86,24 +87,21 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
   const initialAmt = result.amount != null ? String(result.amount) : "";
 
   // Token→token mode: activated when the caller passes a `token_in_address`.
+  // Confirm-only (#107) — the tokenIn comes from the LLM, never edited in-card.
   // When absent, the card behaves EXACTLY as before (ETH↔token via `direction`).
-  const [tokenInAddrInput, setTokenInAddrInput] = useState(
-    (result.token_in_address || "").trim(),
-  );
-  const tokenInAddr = (tokenInAddrInput || "").trim() as `0x${string}` | "";
+  const tokenInAddr = (result.token_in_address || "").trim() as `0x${string}` | "";
   const isT2T = /^0x[a-fA-F0-9]{40}$/.test(tokenInAddr);
   const tokenInSym = (result.token_in_symbol || "").replace(/^\$/, "") || "TOKEN_IN";
 
-  const [amount, setAmount] = useState(initialAmt);
-  const [slippagePct, setSlippagePct] = useState(3);
-  // Slippage BPS is only used in token→token mode. Persist per-user so a
-  // trader who prefers 100 bps doesn't have to reset it every message.
+  // Amount comes from the LLM marker and may be a quantity word ("all"/"max"/
+  // "half"/"N%") — resolved against the live balance below (once we've read it).
+  // Display-only either way: no in-card edit = no drift (Issue 1, #107).
+  //
+  // Slippage is shown as small text now, not an editable control. ETH↔token
+  // uses a 3% default; token→token honours the trader's persisted bps pref.
+  const [slippagePct] = useState(3);
   const [slippageBps, setSlippageBps] = useState<number>(50);
   useEffect(() => { setSlippageBps(loadSlippageBps()); }, []);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(SLIPPAGE_BPS_KEY, String(slippageBps));
-  }, [slippageBps]);
 
   const [quote, setQuote] = useState<Quote | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
@@ -138,8 +136,16 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
       ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
       : (tokenBal != null ? Number(formatUnits(tokenBal as bigint, 18)) : null);
 
-  const amt = parseFloat(amount);
-  const overBalance = balance != null && amt > balance;
+  // Resolve a symbolic amount against the balance we just read. On a BUY the
+  // input is native ETH → keep a gas reserve; on sell / token→token the input
+  // is the ERC-20 (gas is paid in ETH, separately), so no reserve.
+  const q = resolveQuantity(initialAmt, balance, { isNative: !isT2T && direction === "buy" });
+  // Non-symbolic → keep the LLM's exact string (avoids exponential re-format of
+  // tiny numbers like "0.0000001", which parseUnits/servers reject). Symbolic →
+  // the resolved balance-fraction as a plain decimal string.
+  const amount = q.symbolic ? (q.value != null ? String(q.value) : "") : initialAmt;
+  const amt = q.value ?? NaN;
+  const overBalance = balance != null && Number.isFinite(amt) && amt > balance;
 
   // Debounced quote fetch — /api/robinhood/swap/quote for ETH↔token,
   // GeckoTerminal-only for token→token (that endpoint doesn't handle it).
@@ -229,7 +235,10 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
         } catch { return 18; }
       }
       const [inDec, outDec] = await Promise.all([readDecimals(inTokenAddr as `0x${string}` | null), readDecimals(outTokenAddr as `0x${string}` | null)]);
-      const amountInWei = parseUnits(amount, inDec);
+      // Truncate to the token's own decimals — a resolved "half"/"N%" can carry
+      // more fractional digits than the token supports, and parseUnits throws on
+      // that. Floor (never round up) so we can't exceed the real balance.
+      const amountInWei = parseUnits(clampDecimals(amount, inDec), inDec);
       // Clamp minOut precision to token's decimals (parseUnits throws on more
       // decimals than the token supports, e.g. parseUnits("0.014925", 6) is
       // fine but parseUnits("0.0000000000000000149", 6) is not).
@@ -355,34 +364,39 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
     );
   }
 
+  // Display-only derived values for the confirm-only layout (#107).
+  const amtLabel = Number.isFinite(amt) && amt > 0 ? fmtNum(amt) : "0.0";
+  const previewOut = anyLoading ? "…" : (estimatedOut != null ? `≈ ${fmtNum(estimatedOut)}` : "0.0");
+  const slipLabel = isT2T ? `${(slippageBps / 100).toFixed(2)}%` : `${slippagePct}%`;
+  // USD notional for the Confirm button — only when we have a real price
+  // (never fabricate). buy = ETH in, sell = token in, T2T = tokenIn USD.
+  const inUsd = isT2T
+    ? (t2tQuote?.priceInUsd != null ? amt * t2tQuote.priceInUsd : null)
+    : direction === "buy"
+      ? (quote?.price?.ethUsd != null ? amt * quote.price.ethUsd : null)
+      : (quote?.price?.tokenUsd != null ? amt * quote.price.tokenUsd : null);
+  const usdLabel = inUsd != null && Number.isFinite(inUsd) && inUsd > 0
+    ? `$${inUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+    : "";
+
   return (
     <div className="rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 font-mono text-[11px] text-slate-300 max-w-md">
       <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-white text-[12px] font-bold">
-            {isT2T
-              ? `Swap ${tokenInSym} → ${tokenSym} on Robinhood Chain`
-              : `${direction === "buy" ? "Buy" : "Sell"} ${tokenSym} on Robinhood Chain`}
-          </div>
-          <div className="text-slate-600 text-[10px]">
-            via RobinhoodSwapRouter · you sign · non-custodial · chainId 4663
+        <div className="flex items-center gap-2 min-w-0">
+          <TokenGlyph symbol={inSym} />
+          <div className="min-w-0">
+            <div className="text-white text-[12px] font-bold truncate">
+              {isT2T
+                ? `Swap ${tokenInSym} → ${tokenSym}`
+                : `${direction === "buy" ? "Buy" : "Sell"} ${tokenSym}`} on Robinhood
+            </div>
+            <div className="text-slate-600 text-[10px]">
+              RobinhoodSwapRouter · you sign · non-custodial · 4663
+            </div>
           </div>
         </div>
         {!isConnected && <ConnectButton label="Connect" />}
       </div>
-
-      {/* TokenIn picker — only shown when the LLM sent a `token_in_address`,
-          OR when the user wants to switch modes. Kept collapsed by default so
-          the classic ETH↔token card looks IDENTICAL for existing call sites. */}
-      {isT2T && step !== "done" && (
-        <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-          <div className="text-[9px] text-slate-600 mb-1">TOKEN IN (address)</div>
-          <input type="text" value={tokenInAddrInput}
-            onChange={(e) => setTokenInAddrInput(e.target.value)}
-            placeholder="0x…"
-            className="w-full bg-transparent text-[11px] text-white outline-none placeholder:text-slate-700" />
-        </div>
-      )}
 
       {step === "done" ? (
         <div className="rounded-lg border p-3" style={{ borderColor: "#22C55E40", background: "#22C55E08" }}>
@@ -396,86 +410,44 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
         </div>
       ) : (
         <>
-          {/* Amount */}
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[9px] text-slate-600">YOU PAY</span>
-              {balance != null && (
-                <span className="text-[9px] text-slate-600">
-                  Bal {balance.toFixed(5)}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <input type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.0"
-                className="flex-1 bg-transparent text-[15px] text-white outline-none placeholder:text-slate-700 w-0" />
-              <span className="text-[10px] text-slate-200 px-2 py-1 border border-[#1A1A2E] rounded-lg">{inSym}</span>
-            </div>
-            {overBalance && <div className="text-[9px] text-red-500 mt-1">Exceeds your {inSym} balance</div>}
-          </div>
+          {/* Confirm-only preview: pay → receive (est). No editable field (#107). */}
+          <ConfirmPreview
+            left={{ glyph: <TokenGlyph symbol={inSym} />, top: amtLabel, bottom: inSym }}
+            right={{ glyph: <TokenGlyph symbol={outSym} />, top: previewOut, bottom: outSym }}
+          />
 
-          {/* Estimated out */}
-          <div className="rounded-lg border border-[#1A1A2E] bg-[#050508] p-2.5 mb-2">
-            <div className="text-[9px] text-slate-600 mb-1">YOU RECEIVE (est.)</div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 text-[15px] text-white w-0 truncate">
-                {anyLoading ? <span className="text-slate-600">…</span>
-                  : estimatedOut != null ? fmtNum(estimatedOut)
-                  : <span className="text-slate-700">0.0</span>}
+          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to. */}
+          {q.symbolic && (
+            <div className="text-[9px] text-[#4FC3F7] mb-2">
+              {q.value != null ? `${q.word} → ${fmtNum(q.value)} ${inSym}` : "Resolving your balance…"}
+            </div>
+          )}
+
+          {/* Small meta text: rate · route · slippage · min · balance. */}
+          <div className="text-[9px] text-slate-500 mb-2 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">
+                {rate != null ? <>1 {inSym} ≈ {fmtNum(rate)} {outSym}</> : "rate —"}
+                {prepRoute === "direct" && <span className="ml-1.5">· direct</span>}
+                {prepRoute === "multi-hop" && <span className="ml-1.5">· via WETH</span>}
+              </span>
+              <span className="shrink-0">Slippage {slipLabel}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">{minOut != null ? `min ${fmtNum(minOut)} ${outSym}` : ""}</span>
+              {balance != null && <span className="shrink-0">Bal {balance.toFixed(5)} {inSym}</span>}
+            </div>
+            {quote?.pool && (
+              <div className="truncate">
+                Pool <a href={`${RH_EXPLORER}/address/${quote.pool.address}`} target="_blank" rel="noopener noreferrer"
+                  className="text-slate-400 hover:text-slate-200 underline">{quote.pool.address.slice(0, 6)}…{quote.pool.address.slice(-4)}</a>
+                {" · "}fee {(quote.pool.fee / 10000).toFixed(2)}%
               </div>
-              <span className="text-[10px] text-slate-200 px-2 py-1 border border-[#1A1A2E] rounded-lg">{outSym}</span>
-            </div>
+            )}
           </div>
-
-          {/* Quote line — includes route hint when we know it (post-prepare). */}
-          {(rate != null || prepRoute) && (
-            <div className="text-[9px] text-slate-500 mb-1 flex items-center justify-between">
-              <span>
-                {rate != null && <>1 {inSym} ≈ {fmtNum(rate)} {outSym}</>}
-                {prepRoute === "direct" && <span className="ml-2 text-slate-500">route: direct</span>}
-                {prepRoute === "multi-hop" && <span className="ml-2 text-slate-500">route: via WETH</span>}
-              </span>
-              {minOut != null && <span className="text-slate-600">min {fmtNum(minOut)} {outSym}</span>}
-            </div>
-          )}
-
-          {/* Slippage: bps input for token→token, pct picker for ETH↔token. */}
-          {isT2T ? (
-            <div className="text-[9px] text-slate-600 mb-2 flex items-center justify-between">
-              <span>Slippage (bps)</span>
-              <input type="number" min={1} max={5000} value={slippageBps}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value, 10);
-                  if (Number.isFinite(n) && n > 0 && n <= 5000) setSlippageBps(n);
-                }}
-                className="w-16 text-right bg-transparent border border-[#1A1A2E] rounded px-1.5 py-0.5 text-slate-200 outline-none" />
-            </div>
-          ) : (
-            <div className="text-[9px] text-slate-600 mb-2 flex items-center justify-between">
-              <span>Slippage</span>
-              <span>
-                {[1, 3, 5].map((p) => (
-                  <button key={p} onClick={() => setSlippagePct(p)}
-                    className="ml-1 px-1.5 py-0.5 rounded border transition-colors"
-                    style={slippagePct === p
-                      ? { background: "#F59E0B20", color: "#F59E0B", borderColor: "#F59E0B40" }
-                      : { color: "#64748b", borderColor: "#1A1A2E" }}>
-                    {p}%
-                  </button>
-                ))}
-              </span>
-            </div>
-          )}
-
-          {quote?.pool && (
-            <div className="text-[9px] text-slate-600 mb-2">
-              Pool <a href={`${RH_EXPLORER}/address/${quote.pool.address}`} target="_blank" rel="noopener noreferrer"
-                className="text-slate-400 hover:text-slate-200 underline">{quote.pool.address.slice(0, 6)}…{quote.pool.address.slice(-4)}</a>
-              {" · "}fee {(quote.pool.fee / 10000).toFixed(2)}%
-            </div>
-          )}
 
           {anyLoading && <p className="text-[9px] text-slate-600 mb-2">Checking pools + prices…</p>}
+          {overBalance && <p className="text-[10px] text-red-500 mb-2">Exceeds your {inSym} balance</p>}
           {!isT2T && quote?.ok && quote.hasPool === false && (
             <p className="text-[10px] text-amber-400 mb-2">
               No Uniswap V3 pool for {tokenSym}/WETH on Robinhood Chain yet. The deployer needs to seed one.
@@ -507,11 +479,7 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
               : !isT2T && quote?.hasPool === false ? "No pool yet"
               : prepRoute === "none" ? "No route"
               : overBalance ? "Insufficient balance"
-              : isT2T
-                ? `Swap${amt > 0 ? ` ${fmtNum(amt)} ${tokenInSym}` : ""} → ${tokenSym}`
-                : direction === "buy"
-                  ? `Buy ${tokenSym}${amt > 0 ? ` with ${fmtNum(amt)} ETH` : ""}`
-                  : `Sell ${amt > 0 ? fmtNum(amt) : ""} ${tokenSym}`}
+              : `Confirm · ${usdLabel || `${amtLabel} ${inSym}`}`}
           </button>
         </>
       )}

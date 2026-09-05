@@ -11,7 +11,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Arrow } from "@/lib/blue-hood/types";
+import { usePolling } from "@/hooks/usePolling";
+import { chainOf, type Arrow } from "@/lib/blue-hood/types";
 import ArrowBriefBlock from "../ArrowBriefBlock";
 import HoodShellFrame from "../HoodShellFrame";
 import { useHoodShellData } from "../useHoodShellData";
@@ -20,6 +21,7 @@ const REFRESH_MS = 15_000;
 const PAGE_SIZE = 50;
 const RH_GREEN = "#34D399";
 const BLUE = "#4FC3F7";
+const BASE_BLUE = "#0052FF"; // Coinbase Base brand — the Base-desk chain badge
 const RED = "#ef4444";
 const GREEN = "#22c55e";
 const AMBER = "#f5b342";
@@ -62,7 +64,10 @@ export default function TrackRecordClient() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const r = await fetch("/api/hood/arrows?limit=200", { cache: "no-store", signal });
+      // Public + `s-maxage`; no `no-store` so the shared edge cache is used.
+      // This page was the single most expensive poller in the app — see the
+      // header comment on /api/hood/arrows.
+      const r = await fetch("/api/hood/arrows?limit=200", { signal });
       const body = (await r.json()) as ArrowsRes;
       if (body.ok) {
         setData(body);
@@ -75,12 +80,8 @@ export default function TrackRecordClient() {
     }
   }, []);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => { ctl.abort(); clearInterval(t); };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
 
   const filtered = useMemo<Arrow[]>(() => {
     if (!data) return [];
@@ -449,7 +450,18 @@ function TrackRow({ a }: { a: Arrow }) {
           <span style={{ color: MUTED, marginRight: 4 }}>{open ? "▾" : "▸"}</span>
           {a.serial}
         </td>
-        <td className="px-3 py-2 text-left text-white">{a.ticker}</td>
+        <td className="px-3 py-2 text-left text-white">
+          {a.ticker}
+          {chainOf(a) === "base" && (
+            <span
+              className="ml-1.5 rounded px-1 py-0.5 align-middle font-mono text-[9px] font-semibold tracking-wider"
+              style={{ color: BASE_BLUE, backgroundColor: `${BASE_BLUE}22` }}
+              title="Coinbase B20 tokenized stock on Base (chainId 8453)"
+            >
+              BASE
+            </span>
+          )}
+        </td>
         <td className="px-3 py-2 text-left" style={{ color: "#9aa1ac" }}>{signal}</td>
         <td className="px-3 py-2 text-left" style={{ color: MUTED }}>{formatEtTime(a.fired_at)}</td>
         <td className="px-3 py-2 text-left" style={{ color: MUTED }}>{a.graded_at ? formatEtTime(a.graded_at) : "—"}</td>
@@ -551,8 +563,8 @@ function Footer() {
   return (
     <footer className="mt-12 border-t pt-6 text-[11px]" style={{ borderColor: BORDER, color: MUTED }}>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
-        <span>Oracle: Chainlink AggregatorV3 on RH Chain</span>
-        <span>DEX: GeckoTerminal (Uniswap V3/V4)</span>
+        <span>Oracle: Chainlink AggregatorV3 (RH) + B20 share price (Base)</span>
+        <span>DEX: GeckoTerminal (Uniswap V3/V4 · Aerodrome)</span>
         <span>
           Powered by 30 <span style={{ color: BLUE }}>Blue Hub</span> skills · x402 · $0.05/call
         </span>

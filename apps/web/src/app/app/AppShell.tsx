@@ -2,31 +2,44 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { usePolling } from "@/hooks/usePolling";
 import { AppChromeProvider, useAppChrome } from "./AppChrome";
 import LanguageToggle from "@/components/LanguageToggle";
+import AccountMenu from "@/components/AccountMenu";
 import { useLang } from "@/lib/i18n/context";
 
 // T-D D1 — small self-contained client component. Polls
 // `/api/hood/inbox/unread-count` every 30s and shows a red dot with the count
 // on the Hood nav item. Only mounted for the Hood item so other nav items don't
 // trigger the fetch.
+//
+// ⚠ This badge lives in the nav, so it runs on EVERY /app page — not just Hood.
+// That made it the single most-amplified fetch in the app, and the largest
+// contributor to the Upstash suspensions (#123, #148) back when one GET cost
+// ~202 KV commands. #148 ② took the per-GET cost to 2; #148 ③ (below) stops
+// the loop entirely while the tab is hidden.
+const NAV_BADGE_POLL_MS = 30_000;
+
 function HoodNavBadge() {
   const [n, setN] = useState<number | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const r = await fetch("/api/hood/inbox/unread-count", { cache: "no-store" });
-        if (!r.ok) return;
-        const body = (await r.json()) as { unread?: number };
-        if (alive && typeof body.unread === "number") setN(body.unread);
-      } catch { /* offline is fine */ }
-    };
-    load();
-    const t = setInterval(load, 30_000);
-    return () => { alive = false; clearInterval(t); };
+
+  const load = useCallback(async (signal: AbortSignal) => {
+    try {
+      const r = await fetch("/api/hood/inbox/unread-count", { cache: "no-store", signal });
+      // 503 means "unread count UNKNOWN" (KV unreachable), not "zero unread".
+      // Returning early keeps the last known count on screen; letting it fall
+      // through to 0 would hide the badge and look exactly like "all caught
+      // up", which is the one reading that is definitely wrong.
+      if (!r.ok) return;
+      const body = (await r.json()) as { unread?: number };
+      if (typeof body.unread === "number") setN(body.unread);
+    } catch { /* offline or aborted — both fine, keep the last count */ }
   }, []);
+
+  // The `signal` replaces the old `alive` flag: it not only suppresses the
+  // post-unmount setState, it cancels the request that is still on the wire.
+  usePolling(load, NAV_BADGE_POLL_MS);
   if (!n) return null;
   const label = n > 99 ? "99+" : String(n);
   return (
@@ -49,6 +62,8 @@ const svg = (d: ReactNode) => (
 const IconChat = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M8.625 9.75a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 0 1 .778-.332 48.294 48.294 0 0 0 5.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />);
 const IconHub = svg(<path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />);
 const IconHood = svg(<><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m0 0-6-6m6 6-6 6" /><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.5v15" /></>);
+// Wallet — billfold body + fold flap + rounded coin pocket (distinct from the credit-card Plans icon).
+const IconWallet = svg(<><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 9.75A2.25 2.25 0 0 1 4.5 7.5h15a2.25 2.25 0 0 1 2.25 2.25v7.5A2.25 2.25 0 0 1 19.5 19.5h-15a2.25 2.25 0 0 1-2.25-2.25v-7.5Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5V6.75A2.25 2.25 0 0 0 15.75 4.5H5.25" /><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 12.75h-3a1.875 1.875 0 0 0 0 3.75h3" /></>);
 // Overview — chart-pie (distinct from Hub's grid).
 const IconOverview = svg(<><path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6a7.5 7.5 0 1 0 7.5 7.5h-7.5V6Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 10.5H21A7.5 7.5 0 0 0 13.5 3v7.5Z" /></>);
 // Skills — sparkles.
@@ -69,34 +84,51 @@ const IconHome = (
   </svg>
 );
 
+const IconModels = (
+  <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17 9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2Z" />
+  </svg>
+);
+
 // ── Nav model ───────────────────────────────────────────────────────────────────
-// Grouped sidebar (AgentOS Control). Every destination is backed by REAL data —
-// no fabricated Health / Sessions / Agents pages. The three groups mirror the
-// mental model: Workspace = where you work, Control = manage the agent, Account
-// = billing + help.
+// Grouped sidebar mirroring the "onchain Agent OS" framing — three product
+// pillars + an account band. Every destination is backed by REAL data (no
+// fabricated Health / Sessions / Agents pages):
+//   AGENT   — the agent you operate: Chat + Wallet, plus its control pages
+//             (Overview, Connectors, Scheduled, Usage — all promoted Blue Chat
+//             tabs; see src/app/app/{dashboard,connectors,cron,usage}).
+//   EXPLORE — Blue Hood's public signals + receipted track record.
+//   HUB     — the Blue Hub marketplace + your installed agent-skills catalog.
+//   ACCOUNT — billing + help (Plans, Docs) — unchanged.
+// This is a relabel/regroup only: every href below is identical to before, so
+// no route, redirect, or deep link changes — only how items are grouped/named.
 type NavItem = { id: string; href: string; icon: ReactNode; badge?: "hood" };
 type NavGroup = { id: string; items: NavItem[] };
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    id: "group_workspace",
+    id: "group_agent",
     items: [
       { id: "chat", href: "/chat", icon: IconChat },
-      { id: "hub", href: "/hub", icon: IconHub },
+      { id: "models", href: "/models", icon: IconModels },
+      { id: "wallet", href: "/wallet", icon: IconWallet },
+      { id: "dashboard", href: "/dashboard", icon: IconOverview },
+      { id: "connectors", href: "/connectors", icon: IconConnectors },
+      { id: "cron", href: "/cron", icon: IconCron },
+      { id: "usage", href: "/usage", icon: IconUsage },
+    ],
+  },
+  {
+    id: "group_explore",
+    items: [
       { id: "hood", href: "/hood", icon: IconHood, badge: "hood" },
     ],
   },
   {
-    id: "group_control",
-    // Overview (/dashboard hosts Overview + Stake + Alerts tabs) · Skills ·
-    // Connectors · Scheduled · Usage — the last four are the Blue Chat tabs
-    // promoted to first-class pages (see src/app/app/{skills,connectors,cron,usage}).
+    id: "group_hub",
     items: [
-      { id: "dashboard", href: "/dashboard", icon: IconOverview },
+      { id: "hub", href: "/hub", icon: IconHub },
       { id: "skills", href: "/skills", icon: IconSkills },
-      { id: "connectors", href: "/connectors", icon: IconConnectors },
-      { id: "cron", href: "/cron", icon: IconCron },
-      { id: "usage", href: "/usage", icon: IconUsage },
     ],
   },
   {
@@ -135,6 +167,7 @@ const COLLAPSE_KEY = "blue.sidebar.collapsed";
 function AppSideNav() {
   const pathname = usePathname();
   const { t } = useLang();
+  const { contextual } = useAppChrome();
   const clean = cleanPath(pathname);
   const isActive = (href: string) => clean === href || clean.startsWith(href + "/");
 
@@ -219,6 +252,35 @@ function AppSideNav() {
 
       {/* Grouped nav */}
       <nav className="flex-1 overflow-y-auto py-2">
+        {/* New chat sits ABOVE the product groups: it is the page's primary
+            action and must never require scrolling past 12 nav rows to reach.
+            Recents stay below the groups — they are the unbounded list, so
+            they get the scroll space rather than pushing the nav off-screen. */}
+        {contextual?.newChat && (
+          <div className="px-2 pb-1">
+            <button
+              onClick={() => contextual.newChat?.()}
+              title={collapsed ? "New chat" : undefined}
+              className={`group w-full flex items-center h-9 rounded-lg transition-colors ${
+                collapsed ? "justify-center" : "gap-3 px-3"
+              }`}
+              style={{ background: "#4FC3F712" }}
+              onMouseEnter={e => { e.currentTarget.style.background = "#4FC3F71f"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "#4FC3F712"; }}
+            >
+              <svg className="w-4 h-4 text-[#4FC3F7] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              {!collapsed && (
+                <>
+                  <span className="font-mono text-[12px] text-[#4FC3F7] flex-1 text-left tracking-wide">New chat</span>
+                  <span className="font-mono text-[9px] text-slate-600 group-hover:text-slate-400 transition-colors">⌘N</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
         {NAV_GROUPS.map((group, gi) => (
           <div key={group.id} className={gi > 0 ? "mt-1" : ""}>
             {collapsed
@@ -233,10 +295,93 @@ function AppSideNav() {
             </div>
           </div>
         ))}
+
+        {/* Page sub-nav — utilities + recents, registered by the page itself.
+            Collapsed hides it: a 64px rail cannot show conversation titles, and
+            the icons alone would be indistinguishable from one another. */}
+        {!collapsed && contextual && (
+          <div className="mt-1">
+            <div className="flex flex-col gap-0.5 px-2">
+              {contextual.items.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={item.onSelect}
+                  className="w-full flex items-center gap-3 px-3 h-9 rounded-lg hover:bg-[#ffffff06] transition-colors"
+                  style={item.active ? { background: "#4FC3F712" } : undefined}
+                >
+                  {item.icon && <span className="w-4 text-center shrink-0 text-sm leading-none">{item.icon}</span>}
+                  <span className="font-mono text-[12px] tracking-wide" style={{ color: item.active ? "#4FC3F7" : "#cbd5e1" }}>
+                    {item.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {contextual.recents && contextual.recents.length > 0 && (
+              <>
+                <p className="px-3 pt-4 pb-1 font-mono text-[9px] text-slate-600 tracking-widest uppercase">
+                  Recents
+                </p>
+                <div className="flex flex-col px-2">
+                  {contextual.recents.map((r) => (
+                    <div
+                      key={r.id}
+                      onClick={r.onSelect}
+                      className="group relative flex items-center gap-2 px-3 h-8 rounded-lg cursor-pointer transition-colors hover:bg-[#ffffff05]"
+                      style={r.active ? { background: "#4FC3F712" } : undefined}
+                    >
+                      <span
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ background: r.active ? "#4FC3F7" : "#334155" }}
+                      />
+                      <p
+                        className="font-mono text-[12px] flex-1 truncate leading-snug"
+                        style={{ color: r.active ? "#ffffff" : "#94a3b8" }}
+                      >
+                        {r.title}
+                      </p>
+                      {r.meta && (
+                        <span className={`font-mono text-[9px] text-slate-700 shrink-0 ${r.onDelete ? "group-hover:hidden" : ""}`}>
+                          {r.meta}
+                        </span>
+                      )}
+                      {r.onDelete && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); r.onDelete?.(); }}
+                          className="hidden group-hover:flex shrink-0 p-0.5 text-slate-700 hover:text-[#EF4444] transition-colors"
+                          title="Delete"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </nav>
 
-      {/* Footer — Home · language · collapse toggle */}
+      {/* Page-supplied footer (Blue Chat's credit chip) — above the shell's own. */}
+      {!collapsed && contextual?.footer && (
+        <div className="border-t border-[#1A1A2E] shrink-0 px-3 py-2.5">
+          {contextual.footer}
+        </div>
+      )}
+
+      {/* Footer — account · Home · language · collapse toggle */}
       <div className="border-t border-[#1A1A2E] shrink-0 flex flex-col gap-1 py-2 px-2">
+        {/* Who you are, first. The shell previously named a nav group "Account"
+            over Plans and Docs — a price list and a manual — with no route to
+            your own profile and no sign-out outside the wallet modal. This is
+            the actual account control; the group keeps its label for billing. */}
+        <AccountMenu collapsed={collapsed} />
+
+        <div className="h-px bg-[#1A1A2E] mx-1 my-1" />
+
         <a
           href="https://blueagent.dev"
           title={collapsed ? t("nav.home") : undefined}
@@ -462,6 +607,27 @@ function MobileDrawer() {
             </a>
           </div>
         </div>
+
+        {/* Account — same control as the desktop sidebar foot. It closes the
+            drawer via `onNavigate` rather than an enclosing onClick, because a
+            wrapper would fire on the click that OPENS the dropdown and the menu
+            could never be read at this breakpoint. */}
+        <div className="border-t border-[#1A1A2E] shrink-0 px-2 py-2">
+          <AccountMenu onNavigate={() => setDrawerOpen(false)} />
+        </div>
+
+        {/* Page-supplied footer (Blue Chat's credit chip). It doubles as the
+            Settings opener, which is why no Settings row is registered — the
+            chip is the single entry point at both breakpoints. Wrapping it
+            closes the drawer so the modal is not left stacked over it. */}
+        {contextual?.footer && (
+          <div
+            className="border-t border-[#1A1A2E] shrink-0 px-4 py-3"
+            onClick={() => setDrawerOpen(false)}
+          >
+            {contextual.footer}
+          </div>
+        )}
       </aside>
     </div>
   );

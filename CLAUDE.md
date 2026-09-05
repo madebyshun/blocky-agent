@@ -14,9 +14,12 @@ They take precedence over speed.
 - **x402 tool handlers:** `apps/web/src/app/api/x402/_handlers/*.ts`, registered in `_handlers/index.ts` (`HANDLERS` map).
 - **Tool catalog:** `apps/web/src/lib/agent-tools.ts` (`AGENT_TOOLS` — the single source of truth the hub renders).
   A tool is only live if it exists in **BOTH** `HANDLERS` and `AGENT_TOOLS` (catalog count == handler count, no orphans).
-- **x402 surface:** `apps/web` is the **single source of truth** — the `AGENT_TOOLS` catalog `/hub` renders, served at `/api/x402/[tool]` (**74 tools** at last audit), where all real tool compute + data sources live. `blueagent.dev` is the canonical self-hosted x402 endpoint (CDP facilitator, payTo `0xb058`). **`apps/api` (`@blue-agent/api`) is the Bankr x402 Cloud surface** — as of 2026-06 it was revived as a **pure proxy layer**: every `apps/api/x402/<id>/index.ts` is an identical thin proxy that forwards to `blueagent.dev/api/x402/<id>` using the **`X-Blue-Internal: INTERNAL_SERVICE_KEY`** bypass (so blueagent.dev runs the tool free while Bankr collects the USDC payment → `0xb058`). No business logic / no data-source secrets in `apps/api`; it mirrors `apps/web`'s 74 ids exactly (regenerate from `AGENT_TOOLS`, never hand-edit). **Deploy:** `cd apps/api && bankr x402 deploy`. **Critical:** the Bankr env `INTERNAL_SERVICE_KEY` (`bankr x402 env add`) MUST equal blueagent.dev **prod (Vercel `blueagent-web-new`)**'s value — the local `.env.local` value does NOT match prod (verified: a proxy call with it returns 402). All web docs / Hub / MCP counts still come from `apps/web` — never from `apps/api`.
-- **LLM gateways:** Two paths in `_lib/llm.ts`. `callBankrLLM` → Bankr at `https://llm.bankr.bot/v1/messages` (env `BANKR_API_KEY`) — the default; NOT Anthropic direct (that key is usually out of credit). `callVeniceLLM` → Venice at `https://api.venice.ai` with `venice_parameters.enable_web_search` (env `VENICE_INFERENCE_KEY`) — **the only path that can web-search**; it falls back to Bankr if Venice errors (local key is often stale/401, so web search only truly works in prod). Models: `claude-haiku-4-5` (cheap), `claude-sonnet-4-5` (synthesis).
+- **x402 surface:** `apps/web` is the **single source of truth and the only live surface** — the `AGENT_TOOLS` catalog `/hub` renders, served at `/api/x402/[tool]` (**112 tools** as of 2026-08-18; count it, don't trust this number), where all real tool compute + data sources live. `blueagent.dev` is **self-hosted x402**: `route.ts` builds its own 402 requirements and settles USDC on Base through the **Coinbase CDP facilitator** (`cdpVerify`/`cdpSettle`, payTo `0x0295…` — see the payTo bullet below). There is **no Bankr in the payment path** — see the header comment in `apps/web/src/app/api/x402/[tool]/route.ts`.
+- **`apps/api` and `apps/portal` are DELETED — do not recreate either.** `apps/api` was the Bankr x402 Cloud storefront (74 zero-compute ~20-line proxies forwarding to `blueagent.dev/api/x402/<id>` so Bankr could collect the USDC); `apps/portal` was a second Next app serving `api.blueagent.dev`. Both were abandoned before deletion: last commits **2026-06-18** and **2026-07-03**, no Vercel project for either, `api.blueagent.dev` 404s, and `apps/api` mirrored only **74 of 112** ids — missing all 30 `rh-*` tools. Its `_gen.mjs` generator, named in its own header as the source of truth, **never existed in any commit on any branch**, so "regenerate from `AGENT_TOOLS`" was never executable. Rebuilding either is pointless, not merely redundant: every `apps/api` handler proxied to `blueagent.dev`, so it would be blueagent.dev calling itself. If `api.blueagent.dev` is wanted as a public API surface (task #7), that is a **Vercel domain alias + rewrite onto this same Next app** — one codebase, two hostnames — not a second deployment. History has them if you need the old text: `git log --all -- apps/api apps/portal`.
+- **LLM gateway: Virtuals, and only Virtuals.** Policy set 2026-07-25 in `_lib/llm.ts` (read its header before touching any LLM call). `callLLM` → `https://compute.virtuals.io/v1` (env `VIRTUALS_API_KEY`, optional `VIRTUALS_MODEL`); on failure it throws a typed `LLM_UNAVAILABLE` the caller degrades around, rather than silently falling back and fabricating. Two shims exist purely so ~46 legacy importers keep compiling — **both delegate to `callVirtualsLLM`, neither makes the HTTP call its name implies**: `callBankrLLM` (Bankr 403-banned 2026-07-20) and `callVeniceLLM` (no request ever reaches `api.venice.ai`). New code calls `callLLM`. `BANKR_API_KEY` and `VENICE_INFERENCE_KEY` are dead env vars. Model ids are validated against the live Virtuals catalog (`getVirtualsCatalog`), so a de-listed model hides its preset instead of 400-ing.
 - **Real data sources already wired:** DexScreener/GeckoTerminal (`src/lib/market-data.ts`), DefiLlama (`src/lib/yield-rates.ts`), **Moralis + Etherscan v2 multichain** (`src/lib/moralis.ts` — on-chain transfers, native tx, verified-contract source; the Basescan→Moralis migration is **done**), GitHub (`src/lib/github.ts`), Aeon KV (`src/app/api/_lib/aeon-kv.ts`).
+- **payTo wallet — changed 2026-08-18.** Every off-chain payee is now `0x02950ad38ada1d599375bd447e080cd404809205`, the same wallet that receives Blue Chat credit top-ups. The old `0xb058a1e305d9c720aa5b1bf42b6f2f6294b03b5f` (Bankr Club wallet) is **retired** — do not reintroduce it. Server `PAY_TO` (`api/_lib/x402-cdp.ts`) and client `PAY_TO_WALLET` (`hub/HubView.tsx`) **must change in lockstep**: the browser signs `authorization.to` against the client value, so any divergence fails CDP verification on *every* Hub payment. `PAYMENT_WALLET` env is referenced by 3 routes as an override but is **not set in Vercel**, so the code constants are the live values.
+  ⚠️ **Two deployed contracts still pay the old wallet and cannot be redirected** — `B20HUBHook.TREASURY` (`0xe3B801B6721B0bB77AD43e5F9cAfC02780061200`) and `BlueBuyBack.payoutRecipient` (`0xBCF026857cbeF2429bf373Bc5fFFa5f8005175B4`), both Base 8453, both `immutable`; the buyback one has **no setter by deliberate design** so a hostile owner can't redirect staker yield. Only a redeploy changes them, and redeploying the V4 hook changes its address (permission bits) and would require a new pool. Editing the `.sol` source changes nothing — the deployed bytecode is what pays. Verified on-chain via `cast call`, 2026-08-18.
 
 ## NON-NEGOTIABLE: verify before claiming done
 
@@ -76,6 +79,40 @@ how good the prompt is. **Prompts do not prevent hallucination; data sources do.
   Do NOT fetch an Aeon `SKILL.md` from GitHub and ask the LLM to "synthesize from training knowledge" — that
   fabricates. Only the skills live in KV are real.
 
+## Retiring a surface (luật chống-bỏ-rơi)
+
+Five surfaces were built, quietly abandoned, and left live: `apps/api` (61 days between
+last maintenance and deletion), `apps/portal` (46), Blue Sentinel (~100), Blue Feed, and the
+microtask marketplace. **Not one was caught by a mechanism** — every one was caught by a
+human eventually noticing. While abandoned, Sentinel leaked `CRON_SECRET` from an
+unauthenticated route and a paid Hub tool was still selling it; the CLI still sold a
+microtask ledger backed by a `Map` that never persisted; Blue Feed's published links had to
+be 301'd after the fact.
+
+The damage is never "dead code exists" — that is normal. It is the gap between **stopping
+maintenance** and **stopping exposure**. Everything below exists to close that gap.
+
+- **"Last commit date" is NOT evidence a surface is alive.** MEASURED: `api/sentinel`'s last
+  feature commit was 2026-05-24, but two repo-wide mechanical sweeps (`maxDuration` across all
+  tool routes, 2026-05-28; the #150 kvGet family, 2026-08-28) refreshed its timestamp. On the
+  day it was deleted, git said "touched 4 days ago". **A staleness timer would have protected
+  it through the entire ~100-day window it was leaking a secret.** Sweeps camouflage
+  abandonment; never argue "it's still maintained" from `git log` alone.
+- **Retiring is ONE commit, not a cleanup backlog.** The same commit removes the route, its
+  `AGENT_TOOLS`/`HANDLERS` entry and price, every link that advertises it, and its `vercel.json`
+  cron — and names the env vars that just became dead. Whatever is left behind is the part
+  that bites.
+- **A payment path must never outlive the product it sells.** If a surface is retired, the
+  endpoint that charges for it goes in the same commit. If it cannot (it moves real USDC, or
+  it holds user funds), STOP and ask ShunTr — do not retire around it and do not quietly leave
+  it collecting.
+- **User/KV state is evidence, not clutter.** Deleting routes does not entitle you to delete
+  the data behind them. Keep it and flag it; wiping a user's subscriptions is ShunTr's call.
+- **Every published URL must resolve.** Enforced by `apps/web/scripts/link-liveness-check.ts`,
+  which runs in CI: every absolute `blueagent.dev` link in `src/` is resolved against the app's
+  real routes, `public/`, `next.config` redirects and the middleware rewrite. It exists because
+  `blueagent.dev/market` 404'd in production while two live senders kept mailing it.
+
 ## Git discipline
 
 - Always **`git branch --show-current` before committing.** Work and commit on `dev`, never on `main`.
@@ -127,7 +164,7 @@ Blue Agent is the flagship AI agent of the Base ecosystem. It is not just a chat
 
 ## This repo — Founder Console
 
-The `blue-agent` repo is the **AI-native founder console for Base builders**. It is a workflow-first product for thinking, building, auditing, shipping, and raising on Base — powered by Bankr LLM and monetized via x402 micropayments.
+The `blue-agent` repo is the **AI-native founder console for Base builders**. It is a workflow-first product for thinking, building, auditing, shipping, and raising on Base — powered by Virtuals inference and monetized via self-hosted x402 micropayments.
 
 ---
 
@@ -135,12 +172,12 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 
 | Layer | What it is |
 |---|---|
-| `apps/web` | Next.js 15 frontend — founder console UI |
-| `apps/api` | **Bankr x402 Cloud surface** — a pure **proxy layer** mirroring `apps/web`'s 74 tool ids. Each `x402/<id>/index.ts` forwards to `blueagent.dev/api/x402/<id>` via the `X-Blue-Internal` bypass; Bankr collects USDC, `blueagent.dev` does the compute. Regenerate from `AGENT_TOOLS`, deploy with `bankr x402 deploy`. Still don't conflate counts — `apps/web` is the source of truth. |
-| `packages/bankr` | Bankr LLM client — wraps `https://llm.bankr.bot/v1/messages` |
+| `apps/web` | Next.js 15 frontend + **the entire live x402 surface** — founder console UI, `AGENT_TOOLS` catalog, all tool compute, self-hosted x402 via CDP |
+| ~~`apps/api`~~ ~~`apps/portal`~~ | 🗑️ **DELETED 2026-08-18.** The Bankr x402 storefront and the `api.blueagent.dev` portal. Both dead before removal — no Vercel project, no importers, `api.blueagent.dev` 404s. Do not recreate; see the rule above. |
+| `packages/bankr` | ☠️ **Legacy** — Bankr LLM client. Bankr 403-banned 2026-07-20; inference is Virtuals via `apps/web/src/app/api/_lib/llm.ts`. |
 | `packages/core` | Shared schemas, command pricing, and tool input definitions |
 | `packages/payments` | x402 payment helpers |
-| Base chain | All on-chain actions are Base only (chain ID 8453) |
+| Chains | **Base (8453)** — primary tokenized-stock venue (Coinbase B20) + every non-RH tool. **Robinhood Chain (4663)** — second live venue; the ~30 `rh-*` tools and the RWA registry are RH-specific. Never assume which; state it. |
 
 ---
 
@@ -149,12 +186,11 @@ The `blue-agent` repo is the **AI-native founder console for Base builders**. It
 ```
 blue-agent/
 ├── apps/
-│   ├── web/              # Next.js app — /code, /chat, /launch, /market, /rewards
-│   └── api/              # x402 paid endpoints (TypeScript)
-│       └── x402/         # Individual paid tool handlers
+│   ├── web/              # Next.js app + ALL live x402 tool handlers + compute
+│   └── docs/             # Mintlify docs source (no package.json — not an npm workspace)
 ├── packages/
 │   ├── core/             # Shared types, schemas, pricing, tool-input specs
-│   ├── bankr/            # Bankr LLM client (callBankrLLM, extractJsonObject)
+│   ├── bankr/            # LEGACY — Bankr LLM client (Bankr 403-banned 2026-07-20)
 │   └── payments/         # x402 payment flow helpers
 ├── agents/
 │   └── blue-agent/       # Agent runtime config (agent.json, tasks.json)
@@ -179,17 +215,18 @@ Five Aeon skills are bundled in `skills/` and available to any command or agent 
 | `aeon-deep-research` | `skills/aeon-deep-research.md` | "DD on X", "build me a memo", "contrarian take" |
 | `aeon-distribute-tokens` | `skills/aeon-distribute-tokens.md` | Weekly $BLUEAGENT rewards payout to leaderboard |
 
-When a user request matches a trigger phrase, load the skill file and follow its output rules. All Aeon skills are **read-to-apply** — no extra setup required except `aeon-distribute-tokens` which needs `BANKR_API_KEY` with Wallet write scope.
+When a user request matches a trigger phrase, load the skill file and follow its output rules. All Aeon skills are **read-to-apply** — no extra setup required except `aeon-distribute-tokens` which needs `BANKR_API_KEY` with Wallet write scope — ⚠️ **assume dead until tested**: that is Bankr's *Wallet* API, a different endpoint from the 403-banned `llm.bankr.bot`, but it authenticates against the same Bankr account, and no code in this repo reads `BANKR_API_KEY` any more. Verify before relying on a payout run.
 
 ---
 
 ## Hard rules
 
-1. **Base chain only.** Never suggest Ethereum mainnet. All contract addresses, RPC calls, and on-chain actions target Base (chain ID 8453). Mention Base explicitly in every on-chain context.
+1. **Two live stock venues — Base (8453) leads, Robinhood Chain (4663) is also covered. Never assume either; state which one, every time.** Base is the primary tokenized-stock venue (Coinbase B20 — the `*c` share tokens Blue Hood polls) and all product copy is Base-first. RH Chain is a real second venue, not a fallback or a legacy shim: the ~30 `rh-*` tools and the RWA registry are RH-specific and stay that way. **A ticker can exist on BOTH chains** (NVDA / META / GOOGL currently do), so a ticker string alone never identifies a token — chain + address does. Never suggest Ethereum mainnet. An address, RPC call, or explorer link is meaningless without its chain, and RH and Base share neither.
+   *(Corrected 2026-08-24: this rule previously called Base "legacy — older non-RH tools", which was true before the Base desk went live and is now wrong in the direction that matters.)*
 
-2. **All contract addresses must be verified on Basescan.** Never invent or guess a contract address. If an address is needed and not already in the codebase, flag it for the user to supply. Format: `0x…` — always full checksum address.
+2. **All contract addresses must be verified on the explorer for their own chain** — Basescan for Base (8453), `robinhoodchain.blockscout.com` for RH Chain (4663). The two chains share no state: an RH contract does not exist on Basescan and a Base B20 does not exist on RH's explorer, so an explorer check only counts on the token's own chain. **Never resolve a stock token by ticker string** — for a Base B20, cross-check the address against the official `base.org/stocks` table and assert it on-chain (`isB20`, `decimals == 8`, `symbol == "<TICKER>c"`); name-matching a ticker is exactly how an impostor gets in (real bug, #280). Never invent or guess a contract address. If an address is needed and not already in the codebase, flag it for the user to supply. Format: `0x…` — always full checksum address.
 
-3. **Use Bankr LLM for all AI calls.** Import from `packages/bankr` and call `callBankrLLM()`. Do NOT call OpenAI, Anthropic, or any other LLM API directly. The endpoint is `https://llm.bankr.bot/v1/messages`. API key is `process.env.BANKR_API_KEY`.
+3. **Use Virtuals for all AI calls.** Import `callLLM` from `apps/web/src/app/api/_lib/llm.ts`. Do NOT call OpenAI, Anthropic, Bankr, or Venice directly. The endpoint is `https://compute.virtuals.io/v1`, key `process.env.VIRTUALS_API_KEY`. **Do not write new `callBankrLLM` / `callVeniceLLM` calls** — those are compatibility shims that delegate to Virtuals, kept only so ~46 legacy importers compile; their names describe providers this repo no longer uses (Bankr 403-banned 2026-07-20, Venice removed from the fallback chain 2026-07-25). `packages/bankr` is legacy for the same reason.
 
 4. **No hallucinated addresses, ever.** If you don't have a verified address, say so. Do not fill in placeholders that look like real addresses.
 

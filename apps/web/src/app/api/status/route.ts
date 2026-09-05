@@ -2,9 +2,23 @@
  * Blue Agent — Service Status Check
  * GET /api/status
  *
- * Checks: Bankr LLM, Venice AI, Hub tool reachability
+ * Checks: Virtuals LLM gateway, Hub reachability.
+ *
+ * PUBLIC endpoint — same storefront caveat as /api/health. Until 2026-08-18
+ * this pinged Bankr and Venice, so prod published `status: "degraded"` with
+ * `Bankr LLM ok=false HTTP 403` on every call. Both were misleading in
+ * opposite directions: Bankr has been 403-banned since 2026-07-20 (a red
+ * light for something we don't call), and Venice answered OK while receiving
+ * zero traffic from us — `callVeniceLLM` has delegated to Virtuals since
+ * 2026-07-25, so that green light measured nothing. Meanwhile the one gateway
+ * that can actually take the product down, Virtuals, wasn't checked at all.
+ *
+ * Rule: only probe what we actually depend on. `status` here gates the public
+ * operational/degraded signal, so a stale probe doesn't just look bad — it
+ * makes the signal meaningless.
  */
 import { NextResponse } from "next/server";
+import { probeVirtuals } from "@/app/api/_lib/llm";
 
 export const runtime = "nodejs";
 // Vercel kills serverless functions at 60s by default — explicit budget so
@@ -33,23 +47,11 @@ async function ping(url: string, opts: RequestInit, label: string): Promise<Serv
 }
 
 export async function GET() {
-  const bankrKey  = process.env.BANKR_API_KEY;
-  const veniceKey = process.env.VENICE_INFERENCE_KEY ?? process.env.VENICE_API_KEY;
-
-  const checks = await Promise.all([
-    // Bankr — model list endpoint (lightweight, no token usage)
-    bankrKey
-      ? ping("https://llm.bankr.bot/v1/models", {
-          headers: { "x-api-key": bankrKey, "anthropic-version": "2023-06-01" },
-        }, "Bankr LLM")
-      : Promise.resolve<ServiceStatus>({ name: "Bankr LLM", ok: false, latency: null, detail: "BANKR_API_KEY not set" }),
-
-    // Venice — model list (free endpoint, verifies key)
-    veniceKey
-      ? ping("https://api.venice.ai/api/v1/models", {
-          headers: { Authorization: `Bearer ${veniceKey}` },
-        }, "Venice AI")
-      : Promise.resolve<ServiceStatus>({ name: "Venice AI", ok: false, latency: null, detail: "VENICE_API_KEY not set" }),
+  const [llm, hub] = await Promise.all([
+    // Virtuals — the only inference gateway. Model list: verifies reachability
+    // + key validity without spending credits (see probeVirtuals for why a
+    // real completion would be wrong on a public route).
+    probeVirtuals(8_000),
 
     // Hub — internal health check
     ping(
@@ -58,6 +60,16 @@ export async function GET() {
       "Blue Hub"
     ),
   ]);
+
+  const checks: ServiceStatus[] = [
+    {
+      name:    "Virtuals LLM",
+      ok:      llm.ok,
+      latency: llm.latencyMs,
+      detail:  llm.ok ? "OK" : llm.status,
+    },
+    hub,
+  ];
 
   const allOk = checks.every((c) => c.ok);
 

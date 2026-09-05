@@ -11,8 +11,8 @@ export const DOC_NAV: DocGroup[] = [
     { title: "Workflow",   href: "/docs/workflow" },
   ]},
   { group: "Products", items: [
-    // BlueAgent Relaunch order — Blue Hood first (flagship copilot for
-    // Robinhood Chain). Blue Bank removed (archived, /docs/bluebank
+    // BlueAgent Relaunch order — Blue Hood first (flagship: oracle-vs-DEX
+    // drift on Base + RH). Blue Bank removed (archived, /docs/bluebank
     // parked; middleware redirects /bank + /pay to /chat).
     { title: "Blue Hood", href: "/docs/blue-hood" },
     { title: "Blue Chat", href: "/docs/blue-chat" },

@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAccount } from "wagmi";
+import { usePolling } from "@/hooks/usePolling";
 import type { Arrow } from "@/lib/blue-hood/types";
 import ArrowBriefBlock from "../ArrowBriefBlock";
 import EnableAlertsButton from "./EnableAlertsButton";
@@ -79,7 +80,10 @@ export default function InboxClient() {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [a, lr] = await Promise.all([
-        fetch("/api/hood/arrows?limit=200", { cache: "no-store", signal }).then((r) => r.json() as Promise<ArrowsRes>),
+        // Public + `s-maxage` → no `no-store`, so the edge cache is used. The
+        // `?limit=200` variant is its own cache key, which is fine.
+        fetch("/api/hood/arrows?limit=200", { signal }).then((r) => r.json() as Promise<ArrowsRes>),
+        // Per-user (keyed on X-Blue-User) — MUST stay uncached and `no-store`.
         fetch("/api/hood/inbox/last-read", { cache: "no-store", signal }).then((r) => r.json() as Promise<LastReadRes>),
       ]);
       if (a.ok) setArrows(a.arrows);
@@ -90,12 +94,8 @@ export default function InboxClient() {
     }
   }, []);
 
-  useEffect(() => {
-    const ctl = new AbortController();
-    load(ctl.signal);
-    const t = setInterval(() => load(ctl.signal), REFRESH_MS);
-    return () => { ctl.abort(); clearInterval(t); };
-  }, [load]);
+  // #148 ③ — same loop as before, but paused while the tab is hidden.
+  usePolling(load, REFRESH_MS);
 
   const cutoff = useMemo(() => (lastRead ? new Date(lastRead).getTime() : 0), [lastRead]);
   const unread = useMemo(
@@ -394,8 +394,8 @@ function Footer() {
   return (
     <footer className="mt-12 border-t pt-6 text-[11px]" style={{ borderColor: BORDER, color: MUTED }}>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
-        <span>Oracle: Chainlink AggregatorV3 on RH Chain</span>
-        <span>DEX: GeckoTerminal (Uniswap V3/V4)</span>
+        <span>Oracle: Chainlink AggregatorV3 (RH) + B20 share price (Base)</span>
+        <span>DEX: GeckoTerminal (Uniswap V3/V4 · Aerodrome)</span>
         <span>
           Powered by 30 <span style={{ color: BLUE }}>Blue Hub</span> skills · x402 · $0.05/call
         </span>

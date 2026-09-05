@@ -12,9 +12,13 @@
  * without it is rejected 401 — that's the only thing standing between this route
  * and the open internet.
  *
- * COLLISION: the legacy Sentinel bot at /api/webhook/telegram binds the SAME
- * bot token. Only one webhook URL is active per token, so this route goes live
- * only once the operator repoints setWebhook here (scripts/tg-set-webhook.ts).
+ * SOLE OWNER of the bot token since 2026-08-31. A second route used to bind the
+ * SAME `TELEGRAM_BOT_TOKEN` — the legacy Sentinel bot at /api/webhook/telegram —
+ * and because Telegram allows exactly ONE webhook URL per token, whichever one
+ * `setWebhook` last pointed at silently took the other offline. That route is
+ * deleted and Sentinel is retired, so this is now the only claimant. Confirmed
+ * against the live Telegram API before the deletion (`npm run tg:set-webhook --
+ * --info` → this URL), so retiring Sentinel took nothing off the air here.
  *
  * Commands (all read-only, no sign/trade):
  *   /start        — intro + hard safety declaration + Open-Blue-Hood link
@@ -115,7 +119,7 @@ async function handleStart(rest: string, from?: TgUser): Promise<string> {
   const hood = absoluteUrl("/hood");
   return [
     `🎯 <b>Blue Hood</b>`,
-    `Drift & arbitrage signals for tokenized stocks on Robinhood Chain — every signal graded in public, misses included.`,
+    `Drift & arbitrage signals for tokenized stocks on Base and Robinhood Chain — every signal graded in public, misses included.`,
     ``,
     `🔔 You'll now get <b>every tradable signal</b> as it fires. Want only <i>your</i> tickers? Link your wallet in the app — one tap, no code to type.`,
     ``,

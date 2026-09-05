@@ -1,7 +1,13 @@
 // GET /.well-known/farcaster.json
 // Base App / Farcaster Mini App manifest. accountAssociation is signed later
 // (Warpcast/Base App "Manifest" tool) — leave the three fields blank until then.
-// A static copy lives at public/.well-known/farcaster.json as a fallback.
+//
+// A second copy lives at public/.well-known/farcaster.json. It is NOT a fallback:
+// the two paths collide, so one shadows the other and only one is ever served.
+// Keeping both is how the tool count drifted to a stale 69 in the first place —
+// this copy derives it, and docs-truth-check.ts pins the static copy to match.
+
+import { TOOL_COUNT } from "@/lib/agent-tools";
 
 export const dynamic = "force-static";
 
@@ -25,7 +31,7 @@ export function GET() {
       primaryCategory: "finance",
       tags: ["base", "ai", "defi", "agents", "tools"],
       subtitle: "AI agent tools on Base",
-      description: "69 AI tools. Pay per call via x402 USDC on Base. No signup, no API key.",
+      description: `${TOOL_COUNT} AI tools. Pay per call via x402 USDC on Base. No signup, no API key.`,
     },
   });
 }

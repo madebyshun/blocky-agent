@@ -5,7 +5,7 @@ import { TOOL_COUNT } from "@/lib/agent-tools";
 export const metadata = {
   title: "Blue Hood — Blue Agent Docs",
   description:
-    "24/7 non-custodial copilot for Robinhood Chain: oracle-vs-DEX drift monitoring, arrow signals, review-and-sign trading.",
+    "Oracle-vs-DEX drift signals for tokenized stocks on Base (Coinbase B20) and Robinhood Chain: every call graded in public, arrow signals, review-and-sign trading.",
 };
 
 const PILLARS = [
@@ -13,7 +13,7 @@ const PILLARS = [
     name: "See",
     accent: "#4FC3F7",
     items: [
-      { k: "Hood", d: "Live drift board — 24 tokens, Chainlink oracle vs DEX pool spot, verdict every 5 min." },
+      { k: "Hood", d: "Live drift board — tokenized stocks on Base + RH, Chainlink oracle vs DEX pool spot, verdict every 5 min." },
       { k: "Radar", d: "Discovery — movers, flow, new-on-chain, whale watch. Coming in Stage 1." },
       { k: "Wallet", d: "Read-only position dashboard with per-token drift column. Coming in Stage 1." },
     ],
@@ -82,14 +82,15 @@ export default function BlueHoodDoc() {
       <DocHeader
         eyebrow="Products"
         title="Blue Hood"
-        lead="24/7 non-custodial copilot for Robinhood Chain — the intelligence layer nobody else on chain is building. Oracle vs DEX drift monitoring, arrow signals with a public track record, and a review-and-sign trade panel that keeps every private key with the user."
+        lead="Oracle-vs-DEX drift signals for tokenized stocks on Base (Coinbase B20) and Robinhood Chain — the intelligence layer nobody else on chain is building. Drift monitoring, arrow signals with a public track record where every call is graded, and a review-and-sign trade panel that keeps every private key with the user."
       />
 
       <Callout>
-        <strong>Positioning.</strong> Uniswap has ~95% of RH Chain DEX
-        volume; Arcus / Lighter / Rialto / Native own execution. Nobody
-        owns oracle-vs-DEX drift monitoring, cross-pool discrepancy
-        detection, or a public signal track record. Blue Hood is
+        <strong>Positioning.</strong> Tokenized stocks trade 24/7 onchain
+        across Base (Coinbase B20) and Robinhood Chain, but their Chainlink
+        oracles only tick 24/5. Plenty of venues own execution; nobody owns
+        that oracle-vs-DEX drift, cross-pool discrepancy detection, or a
+        public signal track record that grades every call. Blue Hood is
         BlueAgent&apos;s wedge in that gap.
       </Callout>
 

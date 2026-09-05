@@ -40,7 +40,7 @@ import path from "path";
  */
 
 import { nyseMarketStatus } from "../src/lib/robinhood/rwa-market";
-import { detectCandidate, runRuleEngine } from "../src/lib/blue-hood/rule-engine";
+import { detectArrow, detectCandidate, runRuleEngine } from "../src/lib/blue-hood/rule-engine";
 import { HOOD_REGISTRY_STATS } from "../src/lib/blue-hood/registry";
 import type { HoodSnapshot, TickerSnapshot } from "../src/lib/blue-hood/types";
 import { detectBriefNumberDrift } from "../src/lib/blue-hood/brief";
@@ -110,10 +110,15 @@ async function main() {
   console.log("\n── registry denominator ──");
   must(HOOD_REGISTRY_STATS.rwa_candidates > 0, "rwa_candidates > 0");
   must(HOOD_REGISTRY_STATS.watched > 0, "watched > 0");
+  // RWA_CANDIDATES partitions into: watched (feed + enrolled) + no_chainlink_feed
+  // (no feed) + not_enabled (feed, outside the poll budget). The `not_enabled`
+  // bucket was added 2026-08-18 (commit 0bfa63d); before that this identity was
+  // watched + no_feed alone, which now under-counts. `utility` (stable/wrapped)
+  // is a disjoint set — not an RWA candidate — so it is correctly NOT in the sum.
   must(
-    HOOD_REGISTRY_STATS.watched + HOOD_REGISTRY_STATS.no_chainlink_feed === HOOD_REGISTRY_STATS.rwa_candidates,
-    "watched + no_feed = rwa_candidates",
-    `${HOOD_REGISTRY_STATS.watched} + ${HOOD_REGISTRY_STATS.no_chainlink_feed} vs ${HOOD_REGISTRY_STATS.rwa_candidates}`,
+    HOOD_REGISTRY_STATS.watched + HOOD_REGISTRY_STATS.no_chainlink_feed + HOOD_REGISTRY_STATS.not_enabled === HOOD_REGISTRY_STATS.rwa_candidates,
+    "watched + no_feed + not_enabled = rwa_candidates",
+    `${HOOD_REGISTRY_STATS.watched} + ${HOOD_REGISTRY_STATS.no_chainlink_feed} + ${HOOD_REGISTRY_STATS.not_enabled} vs ${HOOD_REGISTRY_STATS.rwa_candidates}`,
   );
   must(HOOD_REGISTRY_STATS.no_chainlink_feed >= 1, "at least one row is drop-with-reason (surface honesty)");
 }
@@ -127,6 +132,8 @@ async function main() {
   //   NVDA — market open, LONG_DEX 1.5%, TVL $2k → skipped_dust
   //   AAPL — market closed, drift +3%, TVL $10k → fires drift
   //   MSFT — market open, ALIGNED, drift 0.1% → below_threshold
+  //   BABA — market closed, drift +4%, TVL $10k, vol24h $0 → skipped_dead_pool
+  //   COIN — market closed, drift +4%, TVL $10k, vol24h null → fires (fail-open)
   const mk = (
     ticker: string,
     verdict: TickerSnapshot["verdict"],
@@ -134,6 +141,9 @@ async function main() {
     driftPct: number,
     tvl: number,
     warnings: string[] = [],
+    /** P1 liveness gate. `1_000` = live pool (default), `0` = dead pool,
+     *  `null` = poller carried no reading and the gate must fail open. */
+    volume24h: number | null = 1_000,
   ): TickerSnapshot => ({
     ticker,
     name: ticker,
@@ -148,7 +158,7 @@ async function main() {
     // rule-engine gate logic.
     tvl_usd: tvl,
     total_tvl_usd: tvl,
-    volume_24h_usd: 1_000,
+    volume_24h_usd: volume24h,
     drift_pct: driftPct,
     pool_ref: "0xpool",
     is_v4_pool_id: false,
@@ -174,13 +184,20 @@ async function main() {
       mk("NVDA", "LONG_DEX",       true,  1.5,  2_000),
       mk("AAPL", "AFTERHOURS_DRIFT", false, 3,  10_000),
       mk("MSFT", "ALIGNED",        true,  0.1, 10_000),
+      // P1 liveness gate. BABA is the real-world case: deep pool, big
+      // drift, but zero 24h volume — the print cannot move, so the "drift"
+      // is the oracle walking away from a stale quote. COIN is the
+      // fail-open case: no volume reading at all, so the gate must NOT
+      // block it (CLAUDE.md — never infer a negative from absent data).
+      mk("BABA", "AFTERHOURS_DRIFT", false, 4, 10_000, [], 0),
+      mk("COIN", "AFTERHOURS_DRIFT", false, 4, 10_000, [], null),
     ],
     metrics: {
       registry_total: 26,
-      tokens_watched: 4,
+      tokens_watched: 6,
       tokens_no_feed: 0,
       tokens_errored: 0,
-      tvl_scanned_usd: 32_000,
+      tvl_scanned_usd: 52_000,
       market_is_open: true,
       market_session: "regular",
     },
@@ -199,25 +216,43 @@ async function main() {
   must(detectCandidate(snap.tickers[2])?.type === "drift", "AAPL row → drift candidate");
   must(detectCandidate(snap.tickers[3]) === null, "MSFT row → no candidate (below threshold)");
 
+  // P1 — dead-pool liveness gate, drift only
+  must(detectArrow(snap.tickers[4]) === null,
+       "BABA row (vol_24h = 0) → dead pool, no arrow");
+  must(detectCandidate(snap.tickers[4])?.type === "drift",
+       "BABA row is still a drift CANDIDATE (gate is a skip, not a non-detect)");
+  must(detectArrow(snap.tickers[5])?.type === "drift",
+       "COIN row (vol_24h = null) → gate fails OPEN, arrow allowed");
+
   // Engine report shape
-  must(rep.candidates_over_threshold === 3, "candidates_over_threshold = 3",
+  must(rep.candidates_over_threshold === 5, "candidates_over_threshold = 5",
        `got ${rep.candidates_over_threshold}`);
   must(rep.skipped_dust === 1, "skipped_dust = 1 (NVDA)", `got ${rep.skipped_dust}`);
+  must(rep.skipped_dead_pool === 1, "skipped_dead_pool = 1 (BABA)",
+       `got ${rep.skipped_dead_pool}`);
+  must(rep.dead_pool_vol_unknown === 1, "dead_pool_vol_unknown = 1 (COIN, failed open)",
+       `got ${rep.dead_pool_vol_unknown}`);
   must(rep.below_threshold === 1, "below_threshold = 1 (MSFT)", `got ${rep.below_threshold}`);
-  must(rep.fired === 2, "fired = 2 (TSLA arb + AAPL drift)", `got ${rep.fired}`);
+  must(rep.fired === 3, "fired = 3 (TSLA arb + AAPL drift + COIN fail-open drift)",
+       `got ${rep.fired}`);
   must(rep.deduped === 0, "deduped = 0 on cold run", `got ${rep.deduped}`);
 
-  // Sanity conservation
-  const sum = rep.skipped_dust + rep.skipped_feed_stale + rep.deduped + rep.fired;
+  // Sanity conservation — MUST list every gate. When you add one, add it
+  // here and to the identity comment in rule-engine.ts, or the two
+  // silently disagree. `dead_pool_vol_unknown` is deliberately NOT in this
+  // sum: it is an observability tally on rows that went on to fire.
+  const sum = rep.skipped_dust + rep.skipped_no_executable_pool
+            + rep.skipped_dead_pool + rep.skipped_feed_stale
+            + rep.deduped + rep.fired;
   must(sum === rep.candidates_over_threshold,
-       "candidates_over_threshold = dust + stale + deduped + fired",
+       "candidates = dust + no_pool + dead_pool + stale + deduped + fired",
        `${rep.candidates_over_threshold} vs ${sum}`);
   must(rep.candidates_over_threshold + rep.below_threshold === snap.tickers.length,
        "candidates + below = tokens_watched (excl. errored)");
 
   // Second run — dedup should trigger
   const rep2 = await runRuleEngine(snap);
-  must(rep2.deduped === 2, "second run deduped = 2 (both open)", `got ${rep2.deduped}`);
+  must(rep2.deduped === 3, "second run deduped = 3 (all open)", `got ${rep2.deduped}`);
   must(rep2.fired === 0, "second run fired = 0");
 }
 

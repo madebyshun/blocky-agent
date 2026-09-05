@@ -11,7 +11,7 @@
  * Signal schema follows collab/shared-schemas.yml
  */
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet } from "@/lib/kv";
+import { kvGet, kvSet, kvMutate } from "@/lib/kv";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -125,9 +125,18 @@ export async function POST(req: NextRequest) {
   await kvSet(`${KV_KEY_SIGNALS}:${source}`, processed, KV_TTL);
 
   // Append to signal log
-  const log = await kvGet<ProcessedSignal[]>(KV_KEY_SIGNAL_LOG) ?? [];
-  const updatedLog = [processed, ...log].slice(0, 100);
-  await kvSet(KV_KEY_SIGNAL_LOG, updatedLog, KV_TTL_LOG);
+  // #150 A-part2 — the read and the write hit the SAME key, so a throttled read
+  // fell back to `[]` and the "append" overwrote the whole 100-entry log with a
+  // single signal. This is the collab log other agents POST into; losing it is
+  // invisible from the 200 the sender gets back.
+  const logRes = await kvMutate<ProcessedSignal[]>(
+    KV_KEY_SIGNAL_LOG,
+    [],
+    (log) => [processed, ...log].slice(0, 100),
+    KV_TTL_LOG,
+  );
+  const logged = logRes === "ok";
+  if (!logged) console.error(`[Signal] log NOT appended (${logRes}) — signal ${id} from ${source} is not in the log`);
 
   console.log(`[Signal] source=${source} type=${type} confidence=${confidence} score=${score} action=${action}`);
 
@@ -138,6 +147,9 @@ export async function POST(req: NextRequest) {
     actionable:   processed.actionable,
     action:       action,
     timestamp:    processed.received_at,
+    // The per-source snapshot above always lands; the shared log may not. Say so
+    // rather than letting the sender infer "logged" from `ok: true`.
+    logged,
   });
 }
 
