@@ -11,6 +11,7 @@ import { PrivyProvider } from "@privy-io/react-auth";
 import { createConfig as privyCreateConfig, WagmiProvider as PrivyWagmiProvider } from "@privy-io/wagmi";
 import { PRIVY_APP_ID, PRIVY_ENABLED, privyClientConfig } from "@/lib/privy/config";
 import { PrivyConnectBridge } from "@/lib/privy/connect-bridge";
+import { PrivyIdentityBridge } from "@/lib/privy/identity-bridge";
 import MiniAppReady from "@/components/MiniAppReady";
 import BaseAppAutoConnect from "@/components/BaseAppAutoConnect";
 import { LanguageProvider } from "@/lib/i18n/context";
@@ -200,7 +201,13 @@ export default function Providers({ children }: { children: React.ReactNode }) {
             {/* Publishes Privy's connectWallet() to useWallet(). Without it the
                 pickers have no route to an external wallet on this tree. */}
             <PrivyConnectBridge>
-              <Shell>{children}</Shell>
+              {/* Publishes WHO is signed in (name / photo / logout) to the
+                  account menu. Same context trick, separate question — see the
+                  header of identity-bridge.tsx. On the default tree below,
+                  neither bridge is mounted and both hooks read `null`. */}
+              <PrivyIdentityBridge>
+                <Shell>{children}</Shell>
+              </PrivyIdentityBridge>
             </PrivyConnectBridge>
           </PrivyWagmiProvider>
         </QueryClientProvider>
