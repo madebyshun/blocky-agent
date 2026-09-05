@@ -449,6 +449,7 @@ When user asks to send/transfer a B20 token:
 6c. Use robinhood_swap when the user wants to swap, BUY, or SELL a token on ROBINHOOD CHAIN — trigger on ANY of: "buy X on robinhood", "sell X on robinhood", "swap 0.001 ETH for CASHDOG on robinhood chain", "swap 50 USDC for VEX on robinhood", "sell 100 VIRTUAL for CLAWBANK on robinhood", "trade HOODRAT on robinhood", or similar Robinhood swap intent. Two shapes: (a) ETH↔token — { direction: "buy"|"sell", token, optional amount }. (b) token↔token — { token_in: tokenIn contract 0x… OR ticker, token: tokenOut contract OR ticker, optional amount, optional slippage_bps }. Token↔token currently requires a DIRECT Uniswap V3 pool between the two tokens on Robinhood Chain; if none exists the card shows a clear "no route" state (multi-hop via WETH is a follow-up). Symbols are resolved server-side against the live GeckoTerminal Robinhood index; never fabricate an address. Non-custodial: the user's own wallet signs approve(s) + swap(s) against the deployed RobinhoodSwapRouter (0x3bb0…d23D on chain 4663). NEVER use this for Base tokens (use prepare_swap for Base).
 6d. Use robinhood_send when the user wants to SEND or TRANSFER an ERC-20 (or native ETH) on ROBINHOOD CHAIN (chainId 4663) — trigger on ANY of: "send 25 USDC to 0x… on robinhood", "transfer 0.1 ETH to 0x… on RH", "pay 100 HOOD to 0x… on robinhood chain", or similar Robinhood send intent. Call with { toAddress: recipient 0x…, token: ERC-20 contract 0x… OR "ETH"/"NATIVE" for native ETH, amount: decimal string in whole units ("25.5", "0.1"), tokenSymbol: optional display hint }. fromAddress is OPTIONAL — the card automatically uses the user's connected wallet. DO NOT ASK THE USER FOR THEIR WALLET ADDRESS — the browser already has it. The server builds a raw transfer(address,uint256) calldata (or native value tx) and returns { to, data, value, chainId: 4663 } — the user's own wallet signs and broadcasts. Non-custodial: no server keys, no swap logic, no router. NEVER invent a token address — if the user gave only a symbol, ask for the contract. NEVER use for Base sends (use prepare_send for Base).
 6e. Use robinhood_bridge when the user wants to BRIDGE or MOVE a token (or native ETH) BETWEEN Base (chainId 8453) and Robinhood Chain (chainId 4663) — trigger on ANY of: "bridge X TOKEN to robinhood", "bridge from base to rh", "move 100 USDC to robinhood", "bridge back to base", "send 0.1 ETH from base to robinhood", or similar cross-chain intent between these two chains. Call with { fromChain: "base"|"robinhood", toChain: "base"|"robinhood" (must differ), fromAddress: connected wallet 0x…, token: ERC-20 contract 0x… on fromChain OR "ETH"/"NATIVE" for native ETH, amount: decimal string in whole units ("100", "0.1"), optional recipient (defaults to sender), optional tokenSymbol display hint }. The server fetches a live Relay Protocol quote and returns { to, data, value, chainId } for the source chain — the user's own wallet signs the (optional) approve then the deposit tx, and Relay solvers fill the destination chain (delivery tracked on relay.link). Non-custodial: no server keys, no server signing. NEVER invent a token address — if the user gave only a symbol without a contract, ask for it. NEVER use for same-chain swaps (use robinhood_swap or prepare_swap).
+6f. Use blue_dca when the user wants to set up a RECURRING BUY / DCA / dollar-cost-average schedule on Base — trigger on ANY of: "DCA into X", "dollar cost average X", "buy X every day", "recurring buy X", "set up a DCA to buy X", "buy 20 USDC of BLUEAGENT every day", "auto-buy X weekly", "DCA 50 USDC into BLUEAGENT daily for 30 days", or similar recurring-purchase intent. Call with { sellToken: contract 0x… of the token to spend (typically USDC 0x8335…2913 on Base), buyToken: contract 0x… of the token to accumulate, sellAmountPerRun: decimal string in whole units (e.g. "20" for 20 USDC), frequency: "hourly"|"6h"|"12h"|"daily"|"weekly", totalRuns: integer count (default 30, max 365), optional slippageBps (default 100 = 1%) }. The card shows the total allowance the user will approve on the sell token, and the user signs ONE approve(keeper, totalAllowance) tx in their own wallet. A per-user keeper wallet (derived server-side from the user's address) then executes each buy on cron via 0x AllowanceHolder. Fee: 0.5% (feeBps=50) taken in the sell token to reimburse keeper gas. NEVER invent contract addresses — if the user gave only a symbol without a contract, ask for it or use known Base addresses (USDC=0x8335…2913, WETH=0x4200…0006, cbBTC=0xcbb7…4Bf, BLUEAGENT=0xf895783b2931c919955e18b5e3343e7c7c456ba3). BASE ONLY — v1 does not support Robinhood Chain DCA.
 6b. RESERVED — no launch tool on Robinhood Chain currently. If the user asks to launch/deploy/create a token on Robinhood, reply that the Virtuals-native launch flow is coming soon (rebuild in progress). Do NOT use hub_b20_launch (Base-only). For "give me a token", "show me tokens", "trending on robinhood", or any BROWSE-style RH query, use blue_stream with chain: "robinhood" — it returns live trending pools + TVL. Never confuse browse ("give me a token") with launch ("create a token").
 7. Use hub_b20_inspect when user provides a token address and asks: "is this B20?", "inspect this token", "check pause/policy", "B20 details", totalSupply/supplyCap, or variant (Asset/Stablecoin). Reads REAL on-chain state via multicall — zero LLM. Call with { address: "0x…", network: "mainnet" }.
 8. Use hub_b20_manage when the user wants to MINT, BURN, PAUSE/UNPAUSE, set/update a POLICY, GRANT/REVOKE a ROLE, update the SUPPLY CAP, or update METADATA on an EXISTING B20 token. Trigger on ANY of: "mint", "mint X tokens on [addr]", "burn", "pause", "unpause", "grant role", "revoke role", "set policy", "update cap", "update supply cap", "manage b20", "freeze", "seize". Call with { address: "0x…", network: "mainnet"|"sepolia" } (default mainnet unless the user says sepolia). Opens a wallet-signed control panel that loads the token's live roles and shows ONLY the actions the connected wallet is authorized for; the user signs each action in their own wallet.
@@ -575,7 +576,7 @@ const HUB_TOOLS = [
   },
   {
     name: "hub_honeypot",
-    description: "Detect honeypot tokens that cannot be sold after purchase. Use when user asks if a token is safe, is a honeypot, or wants to verify a contract before buying.",
+    description: "Detect honeypot tokens that cannot be sold after purchase on BASE. Use when user asks if a Base token is safe, is a honeypot, or wants to verify a Base contract before buying.",
     input_schema: {
       type: "object",
       properties: { token: { type: "string", description: "Token contract address on Base" } },
@@ -1073,6 +1074,22 @@ Default to "base" for Base-related queries.`,
       required: ["tokenIn", "tokenOut", "amountIn"],
     },
   },
+  {
+    name: "blue_dca",
+    description: "Set up a RECURRING BUY / DCA schedule on Base. The card shows the total allowance to approve + a per-user keeper wallet address; the user signs ONE approve(keeper, totalAllowance) tx in their own wallet, and a cron executes each buy via 0x AllowanceHolder. Trigger on: 'DCA X into Y', 'buy X every day', 'set up DCA', 'recurring buy', 'auto-buy weekly', or similar. NEVER call for one-off swaps (use prepare_swap). BASE ONLY (chainId 8453) — v1 does not support Robinhood Chain. ZERO fabrication: NEVER invent a contract address; if the user gave only a symbol without a contract, either use a known Base address (USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913, WETH=0x4200000000000000000000000000000000000006, BLUEAGENT=0xf895783b2931c919955e18b5e3343e7c7c456ba3) or ask for the contract.",
+    input_schema: {
+      type: "object",
+      properties: {
+        sellToken:        { type: "string", description: "Contract 0x… of the token to spend on Base (typically USDC)" },
+        buyToken:         { type: "string", description: "Contract 0x… of the token to accumulate on Base" },
+        sellAmountPerRun: { type: "string", description: "Amount of sellToken to spend each run, decimal string (e.g. '20')" },
+        frequency:        { type: "string", enum: ["hourly", "6h", "12h", "daily", "weekly"], description: "How often to execute a buy" },
+        totalRuns:        { type: "number", description: "Number of runs planned (1..365). Default 30." },
+        slippageBps:      { type: "number", description: "Max slippage in basis points (10..1000). Default 100 = 1%." },
+      },
+      required: ["sellToken", "buyToken", "sellAmountPerRun", "frequency"],
+    },
+  },
 ];
 
 // ─── Venice tools (OpenAI function-calling format) ───────────────────────────
@@ -1350,6 +1367,37 @@ async function callHubTool(
         tokenIn, tokenOut, amountIn, network,
         tokenInAddress:  resolveSwapToken(tokenIn,  network),
         tokenOutAddress: resolveSwapToken(tokenOut, network),
+      },
+    };
+  }
+  if (toolName === "blue_dca") {
+    // Marker only — the DcaCard POSTs to /api/dca/create to persist the schedule,
+    // then walks the user through ONE approve() tx in their wallet. All actual
+    // swap execution happens off this thread on the /api/cron/dca-executor
+    // schedule. Nothing is signed or moved server-side by this handler.
+    const sellToken        = typeof args.sellToken === "string" ? args.sellToken.trim() : "";
+    const buyToken         = typeof args.buyToken  === "string" ? args.buyToken.trim()  : "";
+    const sellAmountPerRun = typeof args.sellAmountPerRun === "string" ? args.sellAmountPerRun.trim()
+      : typeof args.sellAmountPerRun === "number" ? String(args.sellAmountPerRun) : "";
+    const frequency        = ["hourly", "6h", "12h", "daily", "weekly"].includes(String(args.frequency))
+      ? String(args.frequency) : "daily";
+    const totalRuns        = Number.isFinite(args.totalRuns as number) && (args.totalRuns as number) > 0
+      ? Math.min(365, Math.floor(args.totalRuns as number))
+      : 30;
+    const slippageBps      = Number.isFinite(args.slippageBps as number)
+      ? Math.min(1000, Math.max(10, Math.floor(args.slippageBps as number)))
+      : 100;
+    return {
+      text: "DCA card rendered. The card shows the exact allowance the user will approve + the derived keeper address; the user signs ONE approve() tx in their own wallet, and the cron takes over. Do NOT claim any buy has happened. Reply with one short line: tell the user to review the total allowance in the card and sign the approve.",
+      result: {
+        kind: "blue_dca",
+        chainId: 8453,
+        sellToken,
+        buyToken,
+        sellAmountPerRun,
+        frequency,
+        totalRuns,
+        slippageBps,
       },
     };
   }

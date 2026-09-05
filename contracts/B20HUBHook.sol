@@ -110,8 +110,12 @@ interface IERC20 {
 }
 
 interface IPositionManagerLite {
+    /// Real V4 PositionManager returns VOID here; declaring
+    /// `returns (bytes memory)` makes Solidity try to decode the empty
+    /// return and revert with an unattributed EvmError — same trap that
+    /// blocked v3 launcher's modifyLiquidities call.
     function modifyLiquidities(bytes calldata unlockData, uint256 deadline)
-        external payable returns (bytes memory);
+        external payable;
 }
 
 interface IERC721Receiver {
@@ -241,19 +245,26 @@ contract B20HUBHook is IHooks, IERC721Receiver {
     }
 
     /**
-     * Called by PoolManager before ANY liquidity is removed from a pool with
-     * this hook. We revert unconditionally — the LP is permanently locked.
-     * The claimFees path uses PositionManager's fee-collection actions
-     * (delta=0 on liquidity), which do NOT trigger this callback because they
-     * don't change position liquidity.
+     * Called by PoolManager before ANY modifyLiquidity call — INCLUDING the
+     * `delta = 0` variant that the periphery uses for fee collection
+     * (an earlier version of this comment claimed delta=0 skips the hook;
+     * that's wrong, and it locked v3 hook out of its own claimFees path —
+     * revert selector 0x7fe0258e wrapped inside V4's 0x90bfb865).
+     *
+     * We only want to block ACTUAL liquidity removal (delta < 0). A
+     * delta == 0 call is the standard V4-periphery pattern for skimming
+     * accumulated fees without touching the position's principal — we
+     * must let those through, otherwise creators can never claim their
+     * 80% share and the hook becomes a permanent black hole.
      */
     function beforeRemoveLiquidity(
         address /*sender*/,
         PoolKey calldata /*key*/,
-        ModifyLiquidityParams calldata /*params*/,
+        ModifyLiquidityParams calldata params,
         bytes calldata /*hookData*/
     ) external view onlyPoolManager returns (bytes4) {
-        revert LpRemovalForbidden();
+        if (params.liquidityDelta != 0) revert LpRemovalForbidden();
+        return IHooks.beforeRemoveLiquidity.selector;
     }
 
     // ─── LP NFT custody ───────────────────────────────────────────────────────

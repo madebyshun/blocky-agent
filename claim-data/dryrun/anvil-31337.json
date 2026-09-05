@@ -1,0 +1,49 @@
+{
+  "label": "anvil",
+  "chainId": 31337,
+  "chainName": "Anvil (local)",
+  "rpc": "http://127.0.0.1:8545",
+  "explorer": "",
+  "startedAt": "2026-08-11T04:57:04.609Z",
+  "finishedAt": "2026-08-11T04:57:04.683Z",
+  "csvSha256": "d3f54516f699f5fedd6d9656ecbe9808b80d36a9f12d14d02a167551f7c9026e",
+  "merkleRoot": "0x21c91829a215a6d27e81891ecda7d8aa056330b5aeacb0a6912f282cc912890a",
+  "totalWei": "13541576837700000000000000",
+  "wallets": 10,
+  "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "token": "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+  "distributor": "0x610178da211fef7d417bc0e6fed39f05609ad788",
+  "txs": {
+    "deployToken": "0x3b134e259d41805904cc580624be880f73f8c298ef00a45c7e374ca3a1fa4511",
+    "deployDistributor": "0x23c99bb7cdbb8cbaf260d16ff8466b8938311c75b25d048673087c7d6b5acc42",
+    "mint": "0xae2ed37b61b4b01928894a1e310bc7ef6a60ae5f9868255a30307dd4070d3347",
+    "fund": "0xbc5c36956df3547f44adb384c5da51c774ac2bdb003130fd8550967126cc774e"
+  },
+  "claims": [
+    {
+      "label": "self-signed, largest allocation",
+      "account": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "index": 5,
+      "amountWei": "12500000000000000000000000",
+      "by": "the holder",
+      "tx": "0x47c84ccb2f5817faca718ec11f04a5dd0c53e38bbbe17cb3f878934f66ee0b6c"
+    },
+    {
+      "label": "relayed, 1-wei allocation",
+      "account": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "index": 3,
+      "amountWei": "1",
+      "by": "the deployer, on the holder's behalf",
+      "tx": "0x03cebfa9401a0f2b0a1cf1883b2ea714b9ce2add920662e963110c3761be12b2"
+    }
+  ],
+  "reverts": {
+    "doubleClaim": "AlreadyClaimed",
+    "foreignProof": "InvalidProof",
+    "inflatedAmount": "InvalidProof",
+    "sweepBeforeDeadline": "SweepBeforeDeadline",
+    "sweepByNonOwner": "OwnableUnauthorizedAccount"
+  },
+  "passed": 18,
+  "failed": 0
+}

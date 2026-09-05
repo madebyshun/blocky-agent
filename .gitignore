@@ -24,16 +24,35 @@ coverage/
 apps/web/blue-render/
 broadcast/
 
-# Merkle claim artifacts — generated, NEVER committed.
-#
+# ─── Merkle claim artifacts — generated, NEVER committed ─────────────────────
 # `apps/web/public/` is served statically, so a committed proofs.json would be
 # published at /claim-data/proofs.json and read as the AUTHORITATIVE claim
-# table. Everything generated there so far is dry-run/fixture data, and
-# shipping a fixture as the real allocation is the exact failure this rule
-# exists to prevent. The root-level dir holds the same run's tree/root/summary
-# — same reasoning, it just isn't web-served.
+# table. Shipping a fixture or dry-run build as the real allocation is the exact
+# failure this rule exists to prevent. Publishing the real table must be a
+# conscious `git add -f`, never a side effect of `git add -A` — see
+# claim-data/RUNBOOK.md step 1.
 #
-# Publishing the real table must be a conscious `git add -f`, never a side
-# effect of `git add -A`.
-/claim-data/
+# The two halves are deliberately asymmetric, because the two directories are:
+#
+#   - `apps/web/public/claim-data/` is blanket-ignored. Nothing under it is ever
+#     meant to be tracked, and it is web-served, so a wildcard is the safer
+#     shape: it also catches any NEW file a future generator writes there.
+#
+#   - the root `claim-data/` is enumerated instead, because it holds three files
+#     that ARE deliberately tracked — RUNBOOK.md, DRYRUN.md and the dry-run
+#     receipts under dryrun/. A blanket `/claim-data/` would ignore a directory
+#     this repo tracks files in, and would silently hide later runbook edits.
+#     The list below is exact, not a guess: `scripts/build-merkle.ts` writes
+#     tree.json, root.txt, summary.txt (lines 338-340) and public/proofs.json
+#     (line 355) — those four paths and nothing else.
+claim-data/tree.json
+claim-data/root.txt
+claim-data/summary.txt
 apps/web/public/claim-data/
+
+# The throwaway deployer key for the testnet dry run. Already covered by the
+# `.env.*` rule above, and repeated here on purpose: that rule matches this
+# file by coincidence of naming, and a private key should not be protected by
+# a coincidence. The dry-run RECEIPTS (claim-data/dryrun/*.json) are NOT
+# ignored — they are the evidence the dry run happened and are meant to ship.
+claim-data/dryrun/.env.deployer

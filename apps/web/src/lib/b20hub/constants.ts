@@ -148,43 +148,56 @@ export const PERMIT2_SEPOLIA = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as c
 
 // ── B20HUB deployed contracts on Base mainnet ─────────────────────────────────
 //
-// v3 deployment 2026-07-10 at block 48443163. Fresh set — buyback + hook +
-// launcher redeployed together because the launcher fix required a new
-// constructor signature. Full trace validated via mocked-B20 fork test AND
-// cast-call simulation against real Base mainnet.
+// v6 deployment 2026-07-11 at block 48496774. Fresh BuyBack v5 + Hook v5 +
+// Launcher v6 in one script run. Same functional stack as v5 — the only
+// change is the launcher's OPENING_SQRT_PRICE_X96 constant (~$2.4K → ~$6K
+// opening mcap at ETH=$1800). BuyBack + Hook re-deployed for a fresh
+// per-launch fee accumulator + clean hook state.
 
 /**
- * BlueBuyBack v3 — receives 15% of every B20HUB swap as WETH, then anyone can
- * call distribute() to swap it into $BLUE and burn (or send to treasury).
- * Keeper reward: 0.1% of the swap output to the caller.
- * https://basescan.org/address/0xBCF026857cbeF2429bf373Bc5fFFa5f8005175B4
+ * BlueBuyBack v5 — receives 15% of every B20HUB swap as WETH, then anyone can
+ * call distribute() to swap it into $BLUE and forward to treasury. Keeper
+ * reward: 0.1% of BLUE bought to the caller.
+ * https://basescan.org/address/0xe389AcfABe2a4F17187ebA2354555a096BC2A1c9
  */
-export const B20HUB_BUYBACK = "0xBCF026857cbeF2429bf373Bc5fFFa5f8005175B4" as const;
+export const B20HUB_BUYBACK = "0xe389AcfABe2a4F17187ebA2354555a096BC2A1c9" as const;
 
 /**
- * B20HUBHook v3 — the Uniswap V4 hook that intercepts every swap on B20HUB
- * pools and splits fees 80% creator / 15% BlueBuyBack / 5% treasury. Also
- * enforces LP-permanent-lock via beforeRemoveLiquidity revert.
+ * B20HUBHook v5 — the Uniswap V4 hook. Splits swap fees 80/15/5 via
+ * claimFees. beforeRemoveLiquidity gates on `params.liquidityDelta != 0`
+ * so delta=0 fee collection flows through.
  * Address low 14 bits = 0x1200 (AFTER_INITIALIZE + BEFORE_REMOVE_LIQUIDITY).
- * https://basescan.org/address/0xe3B801B6721B0bB77AD43e5F9cAfC02780061200
+ * https://basescan.org/address/0xACbBD7846596162cE6436D65fA8E4f02Eb1Cd200
  */
-export const B20HUB_HOOK = "0xe3B801B6721B0bB77AD43e5F9cAfC02780061200" as const;
+export const B20HUB_HOOK = "0xACbBD7846596162cE6436D65fA8E4f02Eb1Cd200" as const;
 
 /**
- * B20HUBLauncher v3 — the entry point every user calls to launch a B20 with
- * an auto-pool + LP lock. `/api/b20hub/prepare` builds calldata for this
- * contract's launch() function. Simulation confirmed to return the expected
- * (token, poolId, lpTokenIdA, lpTokenIdB) tuple.
- * https://basescan.org/address/0xc6e402C0b544Ef4f69cF61AE4eCA114532Fbf466
+ * B20HUBLauncher v6 — pump.fun-style, uniform launch. User picks name +
+ * symbol + fee tier; everything else is baked into contract bytecode:
+ *   • 100B supply
+ *   • OPENING_SQRT_PRICE_X96 = 13722720286502977928233463417143296
+ *     → 3.333 ETH per 100B tokens
+ *     → ~$6K mcap at ETH=$1800, ~$10K at $3K, ~$13.3K at $4K
+ *   • 80/15/5 fee split, permanent LP lock, admin renounce
+ * `/api/b20hub/prepare` builds calldata for the 8-field LaunchParams tuple.
+ * https://basescan.org/address/0xb9AA8bCa1eaEb702498DF251380AfD94b8dD8658
  */
-export const B20HUB_LAUNCHER = "0xc6e402C0b544Ef4f69cF61AE4eCA114532Fbf466" as const;
+export const B20HUB_LAUNCHER = "0xb9AA8bCa1eaEb702498DF251380AfD94b8dD8658" as const;
 
 /**
- * Prior broken launchers — kept for reference only. Immutable, cannot be
- * reused.
- *   v1 0x8eEe…Ba4b — createB20 argument order swapped
- *   v2 0xb681…4A8B — tick range straddled currentTick, missing Permit2
- *                    dual-approve, wrong modifyLiquidities return type
+ * Prior deployments — reference only. Immutable, cannot be reused.
+ *   v1 0x8eEe…Ba4b (launcher)  — createB20 argument order swapped
+ *   v2 0xb681…4A8B (launcher)  — tick range straddled currentTick, Permit2,
+ *                                modifyLiquidities return-type mismatch
+ *   v3 0xc6e4…f466 (launcher)  — hook v3 claimFees never worked
+ *   v3 hook 0xe3B8…1200        — beforeRemoveLiquidity self-locked
+ *   v5 0xdde2…7714 (launcher)  — functional but opens at only ~$2.4K
+ *                                (1.333 ETH per 100B); v6 bumps to 3.333
  */
 export const B20HUB_LAUNCHER_V1_BROKEN = "0x8eEe57660b086c31D0ECc98F48A122f829dDBa4b" as const;
 export const B20HUB_LAUNCHER_V2_BROKEN = "0xb68120DC451CbcB391D4A651c0c1d3dE95744A8B" as const;
+export const B20HUB_LAUNCHER_V3_BROKEN = "0xc6e402C0b544Ef4f69cF61AE4eCA114532Fbf466" as const;
+export const B20HUB_LAUNCHER_V5_LOWCAP = "0xdde24849f47B34151132b8C05db3aE505EB17714" as const;
+export const B20HUB_HOOK_V3_BROKEN     = "0xe3B801B6721B0bB77AD43e5F9cAfC02780061200" as const;
+export const B20HUB_HOOK_V4_LEGACY     = "0xC3E89575CDd9e2C78462AF59a760fdc1B5Bc9200" as const;
+export const B20HUB_BUYBACK_V4_LEGACY  = "0x7186EAfBa8009D92DFe051Bc71eaed924b2345Ef" as const;

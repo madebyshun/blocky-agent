@@ -800,7 +800,9 @@ function LaunchTab({ onScanToken, network, setNetwork }: { onScanToken: (addr: s
   // instead of silently 500'ing.
   const [autoPool,     setAutoPool]     = useState(false);
   const [hubFeeTier,   setHubFeeTier]   = useState<"MEDIUM" | "HIGH" | "3PCT">("MEDIUM");
-  const [hubMarketCap, setHubMarketCap] = useState<string>("1000");
+  // hubMarketCap removed — opening price is now a protocol-level constant
+  // in the launcher contract (OPENING_SQRT_PRICE_X96). Every launch opens
+  // at the same tick, matching the pump.fun / o1.exchange pattern.
 
   // ActivationRegistry gate — read on-chain isActivated for this network so we can
   // block Deploy BEFORE the wallet hits a confusing "Unable to estimate fee"
@@ -867,22 +869,13 @@ function LaunchTab({ onScanToken, network, setNetwork }: { onScanToken: (addr: s
           throw new Error("Auto-pool flywheel is mainnet-only for now (Sepolia lacks BLUE/WETH pool)");
         }
 
-        // Auto-pool + $BLUE flywheel is fixed-supply by design (task #78
-        // lock-in — matches Bankr/CC0 100B norms). Ignore Cap / Initial Supply
-        // fields when the checkbox is on: the launcher mints exactly 100B
-        // tokens straight into the V4 pool, no per-user knob. A tiny custom
-        // supply (e.g. 420) starves the pool of liquidity so Uniswap's
-        // frontend fails to route quotes.
+        // Auto-pool + $BLUE flywheel is fixed-supply AND fixed-opening-price
+        // by design (task #78 lock-in). Every launch = 100B tokens, same
+        // OPENING_SQRT_PRICE_X96 constant baked into the launcher contract.
+        // At $3000 ETH that's ~$4K opening market cap; the USD figure floats
+        // with ETH price. No user-picked opening market cap → matches
+        // pump.fun / o1.exchange pattern.
         const AUTO_POOL_SUPPLY_WHOLE = "100000000000"; // 100B
-        const { sqrtPriceX96FromMarketCap } = await import("@/lib/b20hub/price");
-        const supplyWhole = BigInt(AUTO_POOL_SUPPLY_WHOLE);
-        const marketCapUsd = Number(hubMarketCap) || 1000;
-        const sqrtPriceX96 = sqrtPriceX96FromMarketCap({
-          targetMarketCapUsd: marketCapUsd,
-          totalSupplyWhole:   supplyWhole,
-          decimals,
-          ethPriceUsd:        3000, // TODO: fetch live ETH price
-        });
         const feeTierMap = { MEDIUM: 3000, HIGH: 10000, "3PCT": 30000 } as const;
 
         const hubRes = await fetch("/api/b20hub/prepare", {
@@ -891,7 +884,6 @@ function LaunchTab({ onScanToken, network, setNetwork }: { onScanToken: (addr: s
           body: JSON.stringify({
             name: n, symbol: s, variant, decimals,
             totalSupply: AUTO_POOL_SUPPLY_WHOLE,
-            initialSqrtPriceX96: sqrtPriceX96.toString(),
             feeTier: feeTierMap[hubFeeTier],
             ...(variant === "stablecoin" ? { currencyCode: cur } : {}),
             creator: address,
@@ -1168,13 +1160,15 @@ function LaunchTab({ onScanToken, network, setNetwork }: { onScanToken: (addr: s
                 </div>
                 <div>
                   <label className="font-mono text-[9px] text-slate-600 tracking-widest uppercase block mb-1.5">
-                    Opening Market Cap <span className="text-slate-700 font-normal normal-case">(USD)</span>
+                    Opening Market Cap
                   </label>
-                  <input value={hubMarketCap} onChange={e => setHubMarketCap(e.target.value)}
-                    placeholder="1000" spellCheck={false} inputMode="decimal"
-                    className={INPUT_CLS} />
+                  <div className="rounded-xl border border-[#1A1A2E] bg-[#0a0a12] px-3 py-2.5 flex items-center justify-between">
+                    <span className="font-mono text-sm text-slate-200">~$4K</span>
+                    <span className="font-mono text-[9px] text-slate-600">protocol-level constant</span>
+                  </div>
                   <p className="font-mono text-[9px] text-slate-600 mt-1">
-                    Sets the initial sqrtPrice. Lower cap = cheaper first buys.
+                    Every B20HUB launch opens at the same tick (pump.fun style).
+                    USD figure floats with ETH price.
                   </p>
                 </div>
               </div>

@@ -134,12 +134,67 @@ contract B20HUBLauncherTraceTest is Test {
         // Same launch() calldata as Metamask on mainnet:
         //   BLUE20/BLUE20/asset/18d/420 supply / sqrtPrice for ~$1000 mcap
         //   / 0.3% fee / creator 0xd5c1dfc… / salt.
-        bytes memory data = hex"e1ca781900000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000012000000000000000000000000000000000000000000000016c4abbebea01000000000000000000000000000000000000843c147ea99029f2de6d6af82c181ca200000000000000000000000000000000000000000000000000000000000000bb8000000000000000000000000d5c1dfc036f9911348ea8065f73c8123f4013fab0322a9eba5f0fac9383900501eade3eb0d90a5012b04a74063859ee4c178d8dd0000000000000000000000000000000000000000000000000000000000000006424c5545323000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006424c554532300000000000000000000000000000000000000000000000000000";
+        // Build params via struct (launcher v5 removed initialSqrtPriceX96
+        // from LaunchParams — opening price is now a contract constant).
+        B20HUBLauncher.LaunchParams memory params = B20HUBLauncher.LaunchParams({
+            name:        "BLUE20",
+            symbol:      "BLUE20",
+            variant:     0,
+            decimals:    18,
+            totalSupply: 420 * 1e18,
+            feeTier:     3000,
+            creator:     CALLER,
+            salt:        bytes32(uint256(1))
+        });
+        bytes memory data = abi.encodeCall(B20HUBLauncher.launch, (params));
 
         vm.prank(CALLER);
         (bool ok, bytes memory ret) = address(LAUNCHER).call(data);
         console.log("call ok:", ok);
         console.log("return len:", ret.length);
         console.logBytes(ret);
+    }
+
+    /**
+     * After launching + faking a swap, claimFees should now succeed under the
+     * hook v4 fix (delta == 0 no longer trips beforeRemoveLiquidity). If this
+     * reverts with 0x7fe0258e (LpRemovalForbidden) inside 0x90bfb865
+     * (Wrap__SubcontextReverted) the fix isn't wired.
+     */
+    function test_claimFees_afterLaunch() public {
+        // Launch first (reuses the traced calldata).
+        B20HUBLauncher.LaunchParams memory params = B20HUBLauncher.LaunchParams({
+            name:        "BLUE20",
+            symbol:      "BLUE20",
+            variant:     0,
+            decimals:    18,
+            totalSupply: 420 * 1e18,
+            feeTier:     3000,
+            creator:     CALLER,
+            salt:        bytes32(uint256(2))
+        });
+        bytes memory launchData = abi.encodeCall(B20HUBLauncher.launch, (params));
+        vm.prank(CALLER);
+        (bool launched, bytes memory launchRet) = address(LAUNCHER).call(launchData);
+        require(launched, "launch failed");
+        (address token, bytes32 poolId, /*uint256 tokenIdA*/, /*uint256 tokenIdB*/) =
+            abi.decode(launchRet, (address, bytes32, uint256, uint256));
+
+        // Rebuild the PoolKey the exact way launcher did (WETH is currency0).
+        PoolKey memory key = PoolKey({
+            currency0:  Currency.wrap(WETH9),
+            currency1:  Currency.wrap(token),
+            fee:        3000,
+            tickSpacing: 60,
+            hooks:      address(uint160(0x1200))
+        });
+
+        // Call claimFees directly (permissionless). Expect success (no revert).
+        (bool ok, bytes memory ret) = address(uint160(0x1200)).call(
+            abi.encodeWithSignature("claimFees(bytes32,(address,address,uint24,int24,address))", poolId, key)
+        );
+        console.log("claimFees ok:", ok);
+        console.log("claimFees return len:", ret.length);
+        if (!ok) console.logBytes(ret);
     }
 }

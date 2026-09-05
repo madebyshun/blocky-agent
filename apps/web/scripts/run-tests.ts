@@ -13,17 +13,42 @@
  * rh-rwa-semantic-smoke.yml, which runs on a schedule against the live site.
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 
 // Not `import.meta.dirname`: tsx loads this file as CJS, where it is undefined.
 const SCRIPTS_DIR = path.dirname(path.resolve(process.argv[1]));
+const WEB = path.resolve(SCRIPTS_DIR, "..");
 
 /** Suites excluded from `npm test`, each with the reason it cannot run hermetically. */
 const NEEDS_NETWORK: Record<string, string> = {
   "pledge-ledger-test.ts": "reads real pledges over RPC + indexer; run via `npm run test:pledge`",
   "workspace-sync-test.ts": "drives the HTTP surface end-to-end; needs `npm run dev` on :3000, run via `npm run test:workspace-sync`",
 };
+
+/*
+ * Suites that inspect BUILD ARTIFACTS rather than source.
+ *
+ * These are perfectly hermetic — no network, no KV — but they read the output of
+ * `next build`, and CI deliberately does not produce one (see ci.yml: the Vercel
+ * preview already builds every PR, so CI does not pay ~4min for a second copy of
+ * the same answer). A build-reading suite therefore exits 1 in CI for a reason
+ * that says nothing about the code.
+ *
+ * So the skip is CONDITIONAL, not permanent: with a build present the suite runs
+ * normally, without one it is skipped by name. A permanent entry in
+ * NEEDS_NETWORK would have been the easy fix and the wrong one — it would mean
+ * `npm test` never exercises it again on any machine, which is precisely how a
+ * guard stops guarding while still appearing in the directory listing.
+ *
+ * Found 2026-09-05: `claim-bundle-test.ts` was written on a branch that had no
+ * CI workflow, so this combination had never once been executed.
+ */
+const NEEDS_BUILD: Record<string, string> = {
+  "claim-bundle-test.ts": "reads `next build` output; run `npm run verify:build` first, then `npm test`",
+};
+
+const HAS_BUILD = [".next-verify", ".next"].some((d) => existsSync(path.join(WEB, d, "app-build-manifest.json")));
 
 /** A hung suite must name itself rather than blow the whole job's timeout. */
 const PER_SUITE_TIMEOUT_MS = 120_000;
@@ -32,8 +57,15 @@ const suites = readdirSync(SCRIPTS_DIR)
   .filter((f) => /-(test|check)\.ts$/.test(f))
   .sort();
 
-const skipped = suites.filter((f) => f in NEEDS_NETWORK);
-const toRun = suites.filter((f) => !(f in NEEDS_NETWORK));
+/** Why a suite is being skipped, or null if it should run. */
+function skipReason(f: string): string | null {
+  if (f in NEEDS_NETWORK) return NEEDS_NETWORK[f];
+  if (f in NEEDS_BUILD && !HAS_BUILD) return NEEDS_BUILD[f];
+  return null;
+}
+
+const skipped = suites.filter((f) => skipReason(f) !== null);
+const toRun = suites.filter((f) => skipReason(f) === null);
 
 console.log(`Running ${toRun.length} hermetic suites (${skipped.length} skipped)\n`);
 
@@ -61,7 +93,7 @@ for (const suite of toRun) {
   }
 }
 
-for (const suite of skipped) console.log(`  SKIP  ${suite}  — ${NEEDS_NETWORK[suite]}`);
+for (const suite of skipped) console.log(`  SKIP  ${suite}  — ${skipReason(suite)}`);
 
 if (failed.length > 0) {
   console.log(`\n${failed.length}/${toRun.length} suites FAILED: ${failed.join(", ")}`);

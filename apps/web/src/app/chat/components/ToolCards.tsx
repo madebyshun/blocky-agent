@@ -21,6 +21,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { RobinhoodSwapCard, type RobinhoodSwapResult } from "./RobinhoodSwapCard";
 import { RobinhoodSendCard, type RobinhoodSendResult } from "./RobinhoodSendCard";
 import { RobinhoodBridgeCard, type RobinhoodBridgeResult } from "./RobinhoodBridgeCard";
+import DcaCard, { type DcaResult } from "./DcaCard";
 import { HoodArrowCard, type HoodArrowResult } from "./HoodArrowCard";
 
 function truncAddr(addr: string, len = 6) {
@@ -3290,6 +3291,7 @@ export function ToolResultCard({ tool, result }: { tool: string; result: Record<
     case "robinhood_swap":       return <RobinhoodSwapCard result={r as unknown as RobinhoodSwapResult} />;
     case "robinhood_send":       return <RobinhoodSendCard result={r as unknown as RobinhoodSendResult} />;
     case "robinhood_bridge":     return <RobinhoodBridgeCard result={r as unknown as RobinhoodBridgeResult} />;
+    case "blue_dca":             return <DcaCard          data={r as unknown as DcaResult} />;
     case "hub_b20_manage":       return <B20ManageCard   result={r as B20ManageResult} />;
     case "check_memo":           return <MemoResultCard  result={r as MemoResultData} />;
     case "check_authorization":  return <AuthorizationResultCard result={r as AuthorizationResultData} />;

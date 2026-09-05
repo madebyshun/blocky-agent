@@ -33,19 +33,28 @@ import { V4_FEE_TIERS } from "@/lib/b20hub/constants";
 // Until then this route reports a clear "not deployed yet" error so the UI
 // can show a friendly banner rather than silently 500-ing.
 const LAUNCHER_ADDRESSES: Record<number, `0x${string}` | null> = {
-  // v3 launcher deployed 2026-07-10 at block 48443163. Cast-call simulation
-  // against Base mainnet confirmed launch() returns the expected 128-byte
-  // (token, poolId, lpTokenIdA, lpTokenIdB) tuple with the token address
-  // starting with the B20 asset-variant 0xb200 prefix — end-to-end works.
+  // Launcher v6 (2026-07-11, block 48496774) — bumped opening mcap from
+  // ~$2.4K → ~$6K at ETH=$1800 (3.333 ETH per 100B tokens, vs 1.333 in v5).
+  // Simulated successfully: launch() returns (token=0xb200…, poolId,
+  // lpTokenIdA, lpTokenIdB). Verified onchain: OPENING_SQRT_PRICE_X96
+  // matches 13722720286502977928233463417143296.
   //
-  // Prior broken launchers (do not use):
+  // Prior launchers (do not use):
   //   v1 0x8eEe57660b086c31D0ECc98F48A122f829dDBa4b — createB20 sig swap
   //   v2 0xb68120DC451CbcB391D4A651c0c1d3dE95744A8B — tick range, Permit2,
   //      modifyLiquidities return-type mismatch
-  8453:  "0xc6e402C0b544Ef4f69cF61AE4eCA114532Fbf466",
+  //   v3 0xc6e402C0b544Ef4f69cF61AE4eCA114532Fbf466 — hook v3 claimFees
+  //      permanently broken
+  //   v5 0xdde24849f47B34151132b8C05db3aE505EB17714 — opened at only ~$2.4K
+  //      (1.333 ETH per 100B); still functional but discouraged
+  8453:  "0xb9AA8bCa1eaEb702498DF251380AfD94b8dD8658",
   84532: null,
 };
 
+// launcher v5+ signature — initialSqrtPriceX96 moved to a protocol-level
+// constant (OPENING_SQRT_PRICE_X96), so every launch opens at the same
+// price on the same tick. Match the pump.fun / o1.exchange pattern: users
+// don't pick an opening market cap, they just pick name + symbol + fee.
 const LAUNCH_ABI = [
   {
     type: "function",
@@ -56,15 +65,14 @@ const LAUNCH_ABI = [
         name: "p",
         type: "tuple",
         components: [
-          { name: "name",                type: "string"  },
-          { name: "symbol",              type: "string"  },
-          { name: "variant",             type: "uint8"   },
-          { name: "decimals",            type: "uint8"   },
-          { name: "totalSupply",         type: "uint256" },
-          { name: "initialSqrtPriceX96", type: "uint160" },
-          { name: "feeTier",             type: "uint24"  },
-          { name: "creator",             type: "address" },
-          { name: "salt",                type: "bytes32" },
+          { name: "name",        type: "string"  },
+          { name: "symbol",      type: "string"  },
+          { name: "variant",     type: "uint8"   },
+          { name: "decimals",    type: "uint8"   },
+          { name: "totalSupply", type: "uint256" },
+          { name: "feeTier",     type: "uint24"  },
+          { name: "creator",     type: "address" },
+          { name: "salt",        type: "bytes32" },
         ],
       },
     ],
@@ -176,32 +184,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // initialSqrtPriceX96: user-supplied opening price in V4's sqrt(P) × 2^96
-    // format. UI should compute this from a human-friendly "opening market
-    // cap" input; here we just accept any positive uint160.
-    if (!body.initialSqrtPriceX96) {
-      return NextResponse.json(
-        { error: "initialSqrtPriceX96 required — compute from opening price" },
-        { status: 400 },
-      );
-    }
-    let initialSqrtPriceX96: bigint;
-    try {
-      initialSqrtPriceX96 = BigInt(body.initialSqrtPriceX96);
-    } catch {
-      return NextResponse.json(
-        { error: "initialSqrtPriceX96 must be a numeric string" },
-        { status: 400 },
-      );
-    }
-    if (
-      initialSqrtPriceX96 <= 0n ||
-      initialSqrtPriceX96 >= BigInt(2) ** BigInt(160)
-    ) {
-      return NextResponse.json(
-        { error: "initialSqrtPriceX96 out of uint160 range" },
-        { status: 400 },
-      );
+    // NOTE: initialSqrtPriceX96 removed from LaunchParams in launcher v5+.
+    // The launcher now uses OPENING_SQRT_PRICE_X96 as a protocol-level
+    // constant (~$4K market cap @ $3000 ETH for 100B supply). Client-side
+    // request body may still pass it — we silently ignore it for backward
+    // compat, log to help debugging in case anyone's still sending it.
+    if (body.initialSqrtPriceX96) {
+      // No-op — launcher ignores it now, but don't break clients that
+      // haven't updated yet.
     }
 
     // CREATE2 salt: user-supplied or deterministic-from-(creator, name, symbol).
@@ -222,7 +212,6 @@ export async function POST(req: NextRequest) {
           variant,
           decimals,
           totalSupply,
-          initialSqrtPriceX96,
           feeTier,
           creator: creator as `0x${string}`,
           salt,
