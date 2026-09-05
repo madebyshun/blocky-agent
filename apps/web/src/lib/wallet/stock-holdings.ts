@@ -217,7 +217,12 @@ async function readBaseLeg(wallet: Address): Promise<StockLeg> {
 
 async function readRobinhoodLeg(wallet: Address): Promise<StockLeg> {
   // Only equities. USDG and WETH are in the same registry but they are cash and
-  // gas, and they already appear as ordinary tokens elsewhere.
+  // gas, and they belong in the ordinary token table — which for RH is
+  // `lib/wallet/rh-holdings.ts`. That module excludes exactly the rows this
+  // filter KEEPS, so the two partition the registry instead of both claiming a
+  // holding and counting it twice. (This comment used to say they "already
+  // appear as ordinary tokens elsewhere"; until the RH token table existed they
+  // appeared nowhere at all.)
   const equities = RWA_TOKENS.filter(t => t.kind === "stock" || t.kind === "etf");
   const leg: StockLeg = {
     venue: "robinhood", chainId: RH_CHAIN.chainId, label: RH_CHAIN.name,

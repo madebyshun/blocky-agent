@@ -24,6 +24,7 @@
 // through. See CLAUDE.md: missing data is "unknown", never an inferred negative.
 
 import { YIELD_NETWORKS, VENUES } from "@/lib/yield-execution";
+import { RWA_TOKENS } from "@/lib/robinhood/rwa-registry";
 
 export type TokenTrust =
   /** Address matches a token this repo already pins, or the chain confirmed it. */
@@ -77,12 +78,34 @@ export const BASE_MAJORS: MajorToken[] = [
   { sym: "cbBTC", addr: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", decimals: 8 },
 ];
 
+/**
+ * The chains this module can classify on.
+ *
+ * Kept explicit rather than widened to `string`: every network here needs a
+ * pinned address book, and a chain with no address book cannot produce
+ * "verified" or "impostor" at all — only "unverified" for everything, which is
+ * a classifier that does nothing while looking like it works.
+ */
+export type TrustNetwork = "base" | "baseSepolia" | "robinhood";
+
 /** address(lowercased) → canonical symbol, per network. */
-function verifiedMap(network: "base" | "baseSepolia"): Map<string, string> {
+function verifiedMap(network: TrustNetwork): Map<string, string> {
   const m = new Map<string, string>();
   const put = (addr: string, sym: string) => m.set(addr.toLowerCase(), sym);
 
   put(NATIVE_SENTINEL, "ETH");
+
+  // Robinhood Chain has its own address book and shares no state with Base, so
+  // it is built from the RH registry alone — never from the Base venue config.
+  // Every RWA_TOKENS row was crawled out of the RHJ factory's own Deployed
+  // events (see rwa-registry.ts), which makes "this address issued this ticker"
+  // a provenance fact rather than a name match. The two utility rows (WETH,
+  // USDG) are pinned by the same registry with different issuers, and both are
+  // worth protecting: USDG is what this chain calls cash.
+  if (network === "robinhood") {
+    for (const t of RWA_TOKENS) put(t.contract, normalizeSymbol(t.ticker));
+    return m;
+  }
 
   const y = YIELD_NETWORKS[network];
   put(y.usdc,  "USDC");
@@ -96,9 +119,10 @@ function verifiedMap(network: "base" | "baseSepolia"): Map<string, string> {
   return m;
 }
 
-const VERIFIED: Record<"base" | "baseSepolia", Map<string, string>> = {
+const VERIFIED: Record<TrustNetwork, Map<string, string>> = {
   base:        verifiedMap("base"),
   baseSepolia: verifiedMap("baseSepolia"),
+  robinhood:   verifiedMap("robinhood"),
 };
 
 /**
@@ -109,9 +133,14 @@ const VERIFIED: Record<"base" | "baseSepolia", Map<string, string>> = {
  * USDT is not accused here — we pin no USDT on Base, so we genuinely do not
  * know, and "unverified" is the honest verdict.
  */
-const PROTECTED: Record<"base" | "baseSepolia", Set<string>> = {
+const PROTECTED: Record<TrustNetwork, Set<string>> = {
   base:        new Set(VERIFIED.base.values()),
   baseSepolia: new Set(VERIFIED.baseSepolia.values()),
+  // ~205 tickers on RH. Wide on purpose: the counterfeits this chain actually
+  // has copy an RHJ equity exactly — the fake GME carries the byte-for-byte
+  // name "GameStop • Robinhood Token". A token wearing a pinned RH ticker from
+  // an address the factory never deployed is the case this set exists for.
+  robinhood:   new Set(VERIFIED.robinhood.values()),
 };
 
 /**
@@ -128,7 +157,7 @@ export function normalizeSymbol(s: string): string {
  * itself. Hence the order below: address match wins, and a symbol collision is
  * only ever evidence AGAINST a token, never for it.
  */
-export function classifyToken(t: TrustInput, network: "base" | "baseSepolia"): TokenTrust {
+export function classifyToken(t: TrustInput, network: TrustNetwork): TokenTrust {
   const verified = VERIFIED[network];
   const addr = (t.address || "").toLowerCase();
 

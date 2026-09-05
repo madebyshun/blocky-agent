@@ -236,28 +236,95 @@ export async function getRobinhoodTokenBalances(
 }
 
 /**
- * Live token holdings for an address on Robinhood Chain via Blockscout v2.
- * Two calls in parallel: `/addresses/{addr}` (native ETH + rate) and
- * `/addresses/{addr}/tokens?type=ERC-20` (all ERC-20). Fail-soft: any missing
- * source returns an empty leg — the caller degrades to what it has.
+ * The same read as `getRobinhoodAddressBalances`, but with the outage VISIBLE.
+ *
+ * Prefer this anywhere the result is rendered as a PORTFOLIO. The fail-soft
+ * wrapper below collapses "the explorer did not answer" into "you hold nothing",
+ * and a user looking at their own wallet cannot tell those apart — they conclude
+ * the position is gone. Same three-way, same reason, as `getRobinhoodTokenBalances`
+ * above; this one just carries the token metadata too.
+ *
+ * `unavailable` is decided by the ERC-20 list call alone, because that is the one
+ * that defines the portfolio. The native-ETH call failing on its own leaves the
+ * token list perfectly real and the leg short by exactly one row, which is
+ * `nativeUnread` — reported, not silently dropped and not counted as zero ETH.
+ *
+ * `balances` is populated on BOTH arms, and on the `unavailable` arm it holds
+ * whatever did come back (at most the native row). That is not an invitation to
+ * render it as a portfolio — it exists so the fail-soft wrapper below can return
+ * exactly what it always returned. A caller that shows this to a user must branch
+ * on `status` first.
+ *
+ * `retries` and `maxPages` are parameters rather than constants so the existing
+ * chat card keeps its exact behaviour (0 and 1) while the wallet can opt into
+ * more — see `bsFetch` on why a rare spurious banner is the expensive failure
+ * for a portfolio.
+ *
+ * PAGINATION — `truncated`. Blockscout serves this endpoint 50 rows at a time
+ * and hands back a `next_page_params` cursor. This function ignored it, so a
+ * wallet holding more than 50 tokens was read as if it held exactly 50.
+ * MEASURED 2026-09-06 on `0x1A18…A4E7`: page 1 was full, page 2 was also full,
+ * and the reader was reporting 2 crypto rows (the other 48 being equities that
+ * route to the stock table). Whatever sits past the cursor is invisible AND
+ * unaccounted for in any total computed from this list.
+ *
+ * `maxPages` bounds the walk — this is a wallet page, not a crawler, and a
+ * spam-airdropped address can hold hundreds of rows. When the cursor is still
+ * live at the cap we stop and set `truncated`, which is the same contract as
+ * `nativeUnread`: the list is short, by an amount we do not know, and the
+ * caller has to SAY so rather than present it as the whole portfolio.
  */
-export async function getRobinhoodAddressBalances(
+export type RhAddressBalanceRead =
+  | { status: "ok";          balances: RhBalance[]; nativeUnread: boolean; truncated: boolean }
+  | { status: "unavailable"; balances: RhBalance[]; nativeUnread: boolean; truncated: boolean };
+
+type RhTokenPage = {
+  items?: Array<{
+    token: {
+      address_hash: string;
+      name?: string | null;
+      symbol?: string | null;
+      decimals?: string | null;
+      exchange_rate?: string | null;
+    };
+    value: string;
+  }>;
+  next_page_params?: Record<string, string | number | null> | null;
+};
+
+export async function readRobinhoodAddressBalances(
   address: string,
   network: RobinhoodNetwork = "mainnet",
-): Promise<RhBalance[]> {
-  const [addrInfo, tokenList] = await Promise.all([
-    bsFetch<{ coin_balance?: string; exchange_rate?: string | null }>(network, `/api/v2/addresses/${address}`),
-    bsFetch<{ items?: Array<{
-      token: {
-        address_hash: string;
-        name?: string | null;
-        symbol?: string | null;
-        decimals?: string | null;
-        exchange_rate?: string | null;
-      };
-      value: string;
-    }> }>(network, `/api/v2/addresses/${address}/tokens?type=ERC-20`),
+  retries = 0,
+  maxPages = 1,
+): Promise<RhAddressBalanceRead> {
+  const tokenPath = `/api/v2/addresses/${address}/tokens?type=ERC-20`;
+
+  // Page 1 runs alongside the native-balance call; later pages are cursor-based
+  // and therefore strictly sequential.
+  const [addrInfo, firstPage] = await Promise.all([
+    bsFetch<{ coin_balance?: string; exchange_rate?: string | null }>(
+      network, `/api/v2/addresses/${address}`, undefined, retries),
+    bsFetch<RhTokenPage>(network, tokenPath, undefined, retries),
   ]);
+
+  const pages: RhTokenPage[] = firstPage ? [firstPage] : [];
+  let cursor = firstPage?.next_page_params ?? null;
+  let truncated = false;
+
+  while (cursor && Object.keys(cursor).length > 0) {
+    if (pages.length >= maxPages) { truncated = true; break; }
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(cursor)) if (v != null) qs.set(k, String(v));
+    const next = await bsFetch<RhTokenPage>(network, `${tokenPath}&${qs}`, undefined, retries);
+    // A mid-walk failure is a short list, not an empty one — the pages already
+    // read are real, so keep them and mark the remainder unknown.
+    if (!next) { truncated = true; break; }
+    pages.push(next);
+    cursor = next.next_page_params ?? null;
+  }
+
+  const tokenList = firstPage ? { items: pages.flatMap(p => p.items ?? []) } : null;
 
   const out: RhBalance[] = [];
 
@@ -309,5 +376,26 @@ export async function getRobinhoodAddressBalances(
     return (b.usdValue ?? 0) - (a.usdValue ?? 0);
   });
 
-  return out;
+  return tokenList
+    ? { status: "ok",          balances: out, nativeUnread: !addrInfo, truncated }
+    : { status: "unavailable", balances: out, nativeUnread: !addrInfo, truncated };
+}
+
+/**
+ * Live token holdings for an address on Robinhood Chain via Blockscout v2.
+ * Two calls in parallel: `/addresses/{addr}` (native ETH + rate) and
+ * `/addresses/{addr}/tokens?type=ERC-20` (all ERC-20). Fail-soft: any missing
+ * source returns an empty leg — the caller degrades to what it has.
+ *
+ * ⚠️ Fail-soft is right for a card that says "here is what I could find" and
+ * WRONG for a portfolio — see `readRobinhoodAddressBalances` above, which is
+ * this same read with the outage kept distinguishable. Use that one for new
+ * callers; this wrapper exists for the chat `check_wallet` card, whose whole
+ * contract is to degrade quietly.
+ */
+export async function getRobinhoodAddressBalances(
+  address: string,
+  network: RobinhoodNetwork = "mainnet",
+): Promise<RhBalance[]> {
+  return (await readRobinhoodAddressBalances(address, network)).balances;
 }

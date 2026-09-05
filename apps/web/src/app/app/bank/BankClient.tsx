@@ -41,6 +41,7 @@ import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payme
 import OrdersPanel from "./OrdersPanel";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
 import TokenTable from "./TokenTable";
+import RhTokenTable from "./RhTokenTable";
 import StockTable from "./StockTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
 import { useWalletIdentity } from "@/lib/wallet/identity";
@@ -760,6 +761,11 @@ export default function BankPage() {
               /api/wallet/holdings      same shape                → Base tokens
               TokenTable                84532 ? sepolia : base    → labelled Base
 
+            (RH holdings themselves are no longer among them: /api/wallet/rh-holdings
+            reads chain 4663 through Blockscout and mounts unconditionally on
+            mainnet. That closed the read gap; the five below are about MOVING
+            money, and they are why this is still a row and not a button.)
+
             …and two would still MOVE REAL MONEY on Base: addCash/cashOut pin
             `defaultNetwork=base` in the Coinbase Onramp URL, and SwapCard
             force-switches the wallet to mainnet before signing. A picker that
@@ -796,9 +802,9 @@ export default function BankPage() {
               </div>
             </div>
           )}
-          {/* Gated on the SAME predicate as StockTable's mount, so this row can
-              never claim a leg the page is not reading. On testnet the stock
-              table is absent (no B20 or RWA testnet twin), so this is too. */}
+          {/* Gated on the SAME predicate as the RH tables' mount, so this row can
+              never claim a leg the page is not reading. On testnet both are
+              absent (no B20 or RWA testnet twin), so this is too. */}
           {!isTestnet && (
             <a href={`${WALLET_CHAINS.robinhood.explorer}/address/${acct}`}
               target="_blank" rel="noopener noreferrer"
@@ -808,7 +814,7 @@ export default function BankPage() {
                 {WALLET_CHAINS.robinhood.label}
               </div>
               <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
-                tokenized stocks · read-only ↗
+                tokens · tokenized stocks · read-only ↗
               </div>
             </a>
           )}
@@ -1284,7 +1290,14 @@ export default function BankPage() {
                   the RWA registry on RH 4663, and neither has a testnet twin. On
                   a testnet dashboard this would show mainnet positions under a
                   banner saying "no real value", so it is absent instead — the
-                  same refusal the Convert panel makes. */}
+                  same refusal the Convert panel makes.
+
+                  RH crypto sits between the two tables deliberately: it is the
+                  same KIND of thing as the Base tokens above it (spot balances),
+                  while the stock table below spans both chains at once. Reading
+                  top to bottom you get Base tokens → RH tokens → equities, and
+                  every one of the three names its own chain. */}
+              {!isTestnet && <RhTokenTable address={acct} />}
               {!isTestnet && <StockTable address={acct} />}
             </>
           )}
