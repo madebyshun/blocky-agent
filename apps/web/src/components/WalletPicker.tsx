@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useWallet } from "@/hooks/useWallet";
 import PrivyLoginButton from "./PrivyLoginButton";
 import { PRIVY_ENABLED } from "@/lib/privy/config";
@@ -88,6 +89,20 @@ export function WalletPickerModal({
         ))}
 
         <div className="px-4 pb-4 pt-1">
+          {/* The modal is the FAST path — it signs you in without leaving the
+              page, which matters when you are mid-conversation and a navigation
+              would drop the draft. /signup is the FULL path: one row per
+              configured provider, an email field, and the copy saying what an
+              account actually changes. This link is what makes that page
+              reachable from inside the app; without it, it would be a route
+              only an outside link could ever reach. */}
+          <Link
+            href="/signup"
+            onClick={onClose}
+            className="block text-center font-mono text-[10px] text-slate-600 hover:text-slate-400 py-2 transition-colors"
+          >
+            See all sign-in options →
+          </Link>
           <button
             onClick={onClose}
             className="w-full font-mono text-[10px] text-slate-600 hover:text-slate-400 py-2 transition-colors"

@@ -18,7 +18,7 @@ import { robinhoodMainnet } from "@/lib/robinhood/chains";
 export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
 export const PRIVY_ENABLED = !!PRIVY_APP_ID;
 
-type LoginMethod = NonNullable<PrivyClientConfig["loginMethods"]>[number];
+export type LoginMethod = NonNullable<PrivyClientConfig["loginMethods"]>[number];
 
 /**
  * Which Privy login methods to offer, as a comma-separated env var:
@@ -132,6 +132,22 @@ export function describeLoginMethods(
   if (names.length === 1) return names[0];
   if (names.length === 2) return `${names[0]} or ${names[1]}`;
   return `${names.slice(0, -1).join(", ")}, or ${names[names.length - 1]}`;
+}
+
+/**
+ * One method's display name, for a per-provider button ("Continue with GitHub").
+ *
+ * Reads the SAME table `describeLoginMethods()` uses, so the sentence on one
+ * surface and the button on another can never name a provider differently.
+ * Every label is written to survive being dropped after "with", which is why
+ * `passkey` is "a passkey" rather than "Passkey".
+ *
+ * Falls back to the raw method id instead of throwing: a value can only reach
+ * here if it survived `KNOWN_LOGIN_METHODS`, and a missing label is a cosmetic
+ * gap, not a reason to blank a working sign-in button.
+ */
+export function loginMethodLabel(method: LoginMethod): string {
+  return LOGIN_METHOD_LABELS[method] ?? method;
 }
 
 /**

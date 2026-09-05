@@ -74,6 +74,14 @@ const APP_SEGMENTS = new Set([
   // on/off-ramp) and has a nav entry in AppShell's AGENT group — it is a real
   // page now, NOT a "coming soon" placeholder.
   "wallet",
+  // `signup` is the front door, and it has to be an APP SEGMENT rather than a
+  // root route. On the app host every first segment that is NOT in this set 301s
+  // to the marketing host (see the bottom of the isAppHost branch). A root
+  // /signup would therefore throw a user from app.blueagent.dev to
+  // blueagent.dev in the middle of signing in — and the Privy session is
+  // per-origin, so that hop strands the session the page exists to create.
+  // Its main-host twin 301s the other way, near /hub and /hood below.
+  "signup",
   //
   // Reserved product URLs (0.1) — clean paths that resolve today to an
   // in-shell "coming soon" panel (src/app/app/<seg>/page.tsx, noindex) so the
@@ -220,7 +228,14 @@ function bankGate(
 // get gated together behind one signature check — see the header of
 // lib/wallet/spend-log.ts — not by leaving the page walled and calling it
 // privacy.
-const WAITLIST_EXEMPT = new Set(["chat", "hood", "hub", "wallet"]);
+//
+// `signup` is exempt for a narrower reason: walling it would not stop a single
+// sign-in. The account control in the sidebar opens the same Privy modal from
+// /chat, /hood, /hub and /wallet, all of which are already public here — so
+// gating the page would only break the one honest, linkable URL for the thing
+// while leaving the button beside it working. A gate that blocks the door but
+// not the window is not a gate; it is a bug report waiting to happen.
+const WAITLIST_EXEMPT = new Set(["chat", "hood", "hub", "wallet", "signup"]);
 
 /**
  * BlueAgent Agent-OS waitlist gate. OFF by default — arms only when
@@ -450,6 +465,18 @@ export function middleware(request: NextRequest) {
   if (pathname === "/hood" || pathname.startsWith("/hood/")) {
     return NextResponse.redirect(
       `https://${APP_HOST}${pathname}${request.nextUrl.search}`,
+      { status: 301 },
+    );
+  }
+
+  // /signup → the app host, where APP_SEGMENTS rewrites it into /app/signup.
+  // Same shape as /hub and /hood above, and it is not optional: /signup is a URL
+  // people TYPE and paste, and without this branch blueagent.dev/signup falls
+  // through to `NextResponse.next()` and 404s, because the page only exists in
+  // the /app tree. Exact match only — the sign-up page has no sub-paths.
+  if (pathname === "/signup") {
+    return NextResponse.redirect(
+      `https://${APP_HOST}/signup`,
       { status: 301 },
     );
   }
