@@ -11,6 +11,11 @@
  *        config. Revenue split is 90/10 (creator/Hub); the invoke route accrues
  *        the creator's 90% in KV for a batched payout.
  *
+ * ⚠ BREAKING, 2026-09-05 (#172). `nonce` must now come from
+ * `GET /api/auth/nonce`. It used to be whatever the client invented, which made
+ * every signed registration replayable forever — nothing recorded the nonce as
+ * spent, so a captured body verified on every retry.
+ *
  * ── SECURITY ─────────────────────────────────────────────────────────────────
  * The request body carries SECRETS (ai_tool.systemPrompt, api_wrapper.authValue).
  * We persist them in `config` but the RESPONSE returns only toPublicHostedTool(),
@@ -21,6 +26,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyMessage } from "viem";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
+import { spendNonce, NONCE_SOURCE_HINT } from "@/lib/session";
 import { assertSafeMcpUrl } from "@/lib/mcp-client";
 import { getRegisteredTool, isValidSlug, sanitizeLogoUrl } from "@/lib/hub-registry";
 import { AGENT_TOOLS } from "@/lib/agent-tools";
@@ -151,7 +157,17 @@ export async function POST(req: NextRequest) {
     };
   }
 
-  // ── 3. Cross-namespace uniqueness (hosted ∪ external ∪ native) ───────────────
+  // ── 3. Spend the nonce ──────────────────────────────────────────────────────
+  // After every pure-validation step above (all of them are string/URL parsing —
+  // assertSafeMcpUrl does no DNS or network work — so a malformed submit fails
+  // without costing a signature) and before the first side effect. Same ordering
+  // as api/hub/tools and api/auth/session.
+  const spend = await spendNonce(body.nonce);
+  if (!spend.ok) {
+    return NextResponse.json({ error: `${spend.reason} ${NONCE_SOURCE_HINT}` }, { status: spend.status });
+  }
+
+  // ── 4. Cross-namespace uniqueness (hosted ∪ external ∪ native) ───────────────
   if (NATIVE_IDS.has(body.slug)) {
     return NextResponse.json({ error: `"${body.slug}" collides with a native Hub tool.` }, { status: 409 });
   }
@@ -163,7 +179,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Slug "${body.slug}" is already taken.` }, { status: 409 });
   }
 
-  // ── 4. SIWE signature (identity manifest — no secrets in the signed text) ────
+  // ── 5. SIWE signature (identity manifest — no secrets in the signed text) ────
   const message = hostedSiweMessage(
     {
       slug:           body.slug,
@@ -184,7 +200,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid signature — does not match builderAddress." }, { status: 401 });
   }
 
-  // ── 5. Persist ──────────────────────────────────────────────────────────────
+  // ── 6. Persist ──────────────────────────────────────────────────────────────
   const tool: HostedTool = {
     slug:           body.slug,
     name:           body.name.trim().slice(0, 80),

@@ -36,6 +36,7 @@ import Link from "next/link";
 import { useAccount, useSignMessage } from "wagmi";
 import { ConnectButton } from "@/components/ConnectModal";
 import { useToolDetailHref } from "@/lib/hub-links";
+import { fetchServerNonce } from "@/lib/siwe-nonce";
 
 type Template = "external" | "ai_tool" | "api_wrapper";
 
@@ -235,7 +236,19 @@ export default function SubmitTool({ variant = "page", onClose, onBack, onSubmit
     setError(null);
     setStep("signing");
 
-    const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    // The nonce is minted by the SERVER, not here. A locally generated one is no
+    // longer accepted (#172): the server never recorded issuing it, so it could
+    // never notice the signed body being replayed. Fetch it before prompting the
+    // wallet so an outage costs zero signature prompts.
+    let nonce: string;
+    try {
+      nonce = await fetchServerNonce();
+    } catch (e) {
+      setError((e as Error).message);
+      setStep("error");
+      return;
+    }
+
     const message = hosted
       ? buildHostedSiwe({ slug: id, name, template, priceUSDC, builderAddress: address }, nonce)
       : buildExternalSiwe({ id, name, endpoint, priceUSDC, builderAddress: address }, nonce);

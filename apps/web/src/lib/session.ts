@@ -3,11 +3,19 @@
  *
  * The first session/cookie code in this repo. Before this, every "prove you own
  * this wallet" flow was per-action: the client built a message, signed it, and
- * posted `{ address, signature, nonce }` — with the NONCE INVENTED BY THE CLIENT
- * (`api/hub/tools/route.ts` still does this). That is replayable: capture one
- * signed body and it verifies forever, because nothing on our side ever recorded
- * that the nonce was spent. This module fixes that for its own flow by making
- * the server the only issuer of nonces, and by spending each one exactly once.
+ * posted `{ address, signature, nonce }` — with the NONCE INVENTED BY THE CLIENT.
+ * That is replayable: capture one signed body and it verifies forever, because
+ * nothing on our side ever recorded that the nonce was spent. This module fixes
+ * that by making the server the only issuer of nonces, and by spending each one
+ * exactly once.
+ *
+ * As of 2026-09-05 this is the ONLY nonce mechanism for wallet proofs. The four
+ * Hub routes that used to mint their own — submit external, submit hosted,
+ * remove external, remove hosted — were retrofitted onto `issueNonce` /
+ * `spendNonce` (#172). The one remaining client-supplied nonce is
+ * `api/profile/[address]`, which is deliberately left alone: it burns the nonce
+ * itself with `kvSetNX` and binds a ±5-minute `issuedAt` into the signed text,
+ * so it is single-use by a different but sound route.
  *
  * What a session is here:
  *   • an opaque 256-bit random token, stored ONLY in an httpOnly cookie
@@ -90,6 +98,19 @@ export async function issueNonce(): Promise<string | null> {
 export type NonceSpend =
   | { ok: true }
   | { ok: false; status: 401 | 503; reason: string };
+
+/**
+ * Appended to the spend-failure text on routes an EXTERNAL agent may call.
+ *
+ * The Hub submit/remove endpoints are a documented public API, and #172 changed
+ * their contract: a self-minted nonce used to be accepted and now 401s. A
+ * third-party builder whose script breaks has no way to discover the new step
+ * from "Nonce unknown or expired" alone, so the error names the endpoint that
+ * issues them. Defined once because it must stay identical across four routes
+ * and the /docs/list-a-tool page.
+ */
+export const NONCE_SOURCE_HINT =
+  "Nonces are issued by GET /api/auth/nonce and are single-use — a self-generated nonce is no longer accepted.";
 
 /**
  * Spend a nonce. Fails CLOSED on every ambiguity — this is the one place where

@@ -36,6 +36,7 @@ import Link from "next/link";
 import { useAccount, useSignMessage } from "wagmi";
 import { ConnectButton } from "@/components/ConnectModal";
 import { useToolDetailHref } from "@/lib/hub-links";
+import { fetchServerNonce } from "@/lib/siwe-nonce";
 
 type Source = "external" | "hosted";
 
@@ -324,7 +325,10 @@ function ToolRow({ t, owner, onRemoved }: { t: DashboardItem; owner: string; onR
     setRowErr(null);
     setRemoving(true);
     try {
-      const nonce   = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+      // Server-issued (#172). The old fallback here was `String(Date.now())` —
+      // a nonce an attacker can not only replay but predict. Both paths are gone:
+      // the server mints it, records it, and burns it once.
+      const nonce   = await fetchServerNonce();
       const message = buildRemoveSiwe(t.source, t.id, owner, nonce);
       const signature = await signMessageAsync({ message });
       const endpoint  = t.source === "hosted" ? `/api/hub/hosted/${t.id}` : `/api/hub/tools/${t.id}`;

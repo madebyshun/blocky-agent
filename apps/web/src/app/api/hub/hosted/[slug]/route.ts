@@ -2,17 +2,23 @@
  * /api/hub/hosted/[slug]
  *   GET    — single hosted tool, PUBLIC projection (secrets stripped).
  *   DELETE — remove the hosted tool. Requires a SIWE signature over the canonical
- *            remove manifest, proving the requester owns tool.builderAddress.
+ *            remove manifest AND a server-issued nonce, proving the requester
+ *            owns tool.builderAddress and that this exact request is fresh.
  *            Non-custodial: no funds move; the pooled builder:earned:<wallet>
  *            counter is preserved so a batched payout still settles it.
  *
  * SECURITY: the DELETE path reads the tool only to check its builderAddress and
  * never echoes the secret config. The GET path uses getPublicHostedTool(), which
  * runs toPublicHostedTool() — systemPrompt / authValue never reach the client.
+ *
+ * ⚠ BREAKING, 2026-09-05 (#172). `nonce` must come from `GET /api/auth/nonce`;
+ * a client-invented one is refused. See the sibling route
+ * api/hub/tools/[id] for why a replayable DELETE is worse than a replayable POST.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyMessage } from "viem";
 import { rateLimit, getIdentifier } from "@/lib/rate-limit";
+import { spendNonce, NONCE_SOURCE_HINT } from "@/lib/session";
 import { getPublicHostedTool, removeHostedTool } from "@/lib/hub-hosted";
 import { removeToolSiweMessage } from "@/lib/hub-registry";
 
@@ -55,6 +61,13 @@ export async function DELETE(
   }
   if (!/^0x[a-fA-F0-9]{40}$/.test(owner)) {
     return NextResponse.json({ error: "Invalid owner address" }, { status: 400 });
+  }
+
+  // Freshness gate, before any side effect — same ordering as the external
+  // remove route.
+  const spend = await spendNonce(nonce);
+  if (!spend.ok) {
+    return NextResponse.json({ error: `${spend.reason} ${NONCE_SOURCE_HINT}` }, { status: spend.status });
   }
 
   const tool = await getPublicHostedTool(slug);
