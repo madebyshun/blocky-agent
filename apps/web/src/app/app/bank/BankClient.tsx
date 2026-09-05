@@ -34,8 +34,11 @@ import { useBasename, shortAddr } from "@/lib/useBasename";
 import QrScanner from "./QrScanner";
 import SwapCard, { type SellPreset } from "./SwapCard";
 import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payment-qr";
+// `B20_ENABLED` was imported alongside this, purely to hide the Orders tab.
+// OrdersPanel reads the same flag itself and renders its own degraded-mode
+// banner from it, so gating the entrance here only ever meant the user could
+// not reach the explanation. See the VIEWS list below.
 import OrdersPanel from "./OrdersPanel";
-import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
 import TokenTable from "./TokenTable";
 import StockTable from "./StockTable";
@@ -55,7 +58,18 @@ const usd = (n: number | null | undefined) =>
 // "withdraw" was "earn" until yield was deferred to phase 2. The panel still
 // renders MoveToYieldCard, but withdraw-only: no new supply can be started from
 // this surface, while anyone already deposited keeps a way out.
-type Panel = "positions" | "withdraw" | "send" | "receive" | "convert" | "orders";
+//
+// `orders` left this union for the page-level `View` below. It was the one tab
+// here that is not a transaction you start and finish in a modal — payment
+// requests are a list you keep, come back to, and reconcile against — and it
+// was gated on B20_ENABLED, which is off, so the panel had NO entrance at all
+// while its own copy said "payment links work now". A feature with no door.
+type Panel = "positions" | "withdraw" | "send" | "receive" | "convert";
+
+// The page's own long-tail sections, one at a time. Distinct from `Panel`:
+// a Panel is a thing you DO (and it lives in a modal you dismiss), a View is a
+// record you READ. Conflating them is what put Orders in a modal.
+type View = "portfolio" | "activity" | "orders";
 
 // Sticky testnet unlock. Deliberately NOT the same key family as `bluebank:*`
 // user settings — this is a developer escape hatch, not a preference.
@@ -119,6 +133,15 @@ export default function BankPage() {
   const net         = WALLET_CHAINS[network];
   const chainId     = net.chainId;
   const isTestnet   = net.testnet;
+  // Not the same question as `!isTestnet`, even though they return the same
+  // answer today. Onramp, offramp and swap are pinned to Base MAINNET by their
+  // own URLs and routers — they need "am I on 8453", and they were asking "is
+  // this play money". Those coincide only because WALLET_CHAIN_ORDER happens to
+  // hold exactly base + baseSepolia; the moment a third mainnet is listed, an
+  // `isTestnet` guard waves real funds through to the wrong chain. Asking the
+  // question the code actually depends on costs one line and removes a trap
+  // that would otherwise be armed by an edit in a different file.
+  const isBaseMainnet = network === "base";
 
   // ⚠️ EARN-ONLY — the wallet's last dependency on the yield module, deliberately
   // narrowed to these three lines so removing Earn is a delete, not a hunt.
@@ -143,6 +166,7 @@ export default function BankPage() {
   }
 
   const [panel, setPanel]     = useState<Panel>("positions");
+  const [view, setView]       = useState<View>("portfolio");
   const [actionOpen, setActionOpen] = useState(false);
   const [copied, setCopied]   = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -196,7 +220,7 @@ export default function BankPage() {
   const [onrampMsg, setOnrampMsg]   = useState("");
   async function addCash() {
     if (!acct) return;
-    if (isTestnet) { setOnrampMsg("Deposit is Base mainnet only — switch off testnet first."); return; }
+    if (!isBaseMainnet) { setOnrampMsg(`Deposit is Base mainnet only — you are on ${net.short}.`); return; }
     setOnrampBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -212,7 +236,7 @@ export default function BankPage() {
   const [cashOutBusy, setCashOutBusy] = useState(false);
   async function cashOut() {
     if (!acct) return;
-    if (isTestnet) { setOnrampMsg("Cash out is Base mainnet only — switch off testnet first."); return; }
+    if (!isBaseMainnet) { setOnrampMsg(`Cash out is Base mainnet only — you are on ${net.short}.`); return; }
     setCashOutBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -474,7 +498,19 @@ export default function BankPage() {
     { id: "send",      label: "Send",      icon: "➡",  desc: "Pay anyone" },
     { id: "receive",   label: "Receive",   icon: "⬇",  desc: "Get paid" },
     { id: "convert",   label: "Convert",   icon: "⇅",  desc: "Swap tokens" },
-    ...(B20_ENABLED ? [{ id: "orders" as Panel, label: "Orders", icon: "🧾", desc: "Get paid in B20" }] : []),
+  ];
+
+  // Orders is NOT gated on B20_ENABLED, unlike the modal tab it replaces.
+  // That gate hid the whole panel while the panel's own banner read "Payment
+  // links work now. B20 USDC auto-settlement … go live at B20 mainnet" — so the
+  // flag that only turns off AUTO-SETTLEMENT was turning off the feature. With
+  // it off today, the AI mission below still offered a "Try" button that opened
+  // the modal onto a tab that did not exist: an empty box. OrdersPanel already
+  // states its own degraded mode; the tab lets a user reach it to read that.
+  const VIEWS: { id: View; label: string }[] = [
+    { id: "portfolio", label: "Portfolio" },
+    { id: "activity",  label: "Activity" },
+    { id: "orders",    label: "Payment requests" },
   ];
 
   // ── Portfolio allocation (for pie chart) ─────────────────────────────────
@@ -579,8 +615,12 @@ export default function BankPage() {
       allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} supplied — withdrawable any time`, action: "Withdraw", onAction: () => openAction("withdraw"), color: "#34D399" });
     if (ethBal != null && ethBal < 0.005)
       allMissions.push({ priority: "warn", icon: "⛽", text: "ETH too low for gas fees", action: "Get ETH", onAction: () => openAction("convert"), color: "#F59E0B" });
+    // "Try" used to call `openAction("orders")`. With B20_ENABLED off that
+    // opened the action modal onto a panel whose tab had been filtered out of
+    // TABS and whose body had no branch — a modal containing a close button and
+    // nothing else. It now scrolls to a tab that always exists.
     if (new Date() >= new Date("2026-06-25"))
-      allMissions.push({ priority: "info", icon: "⚡", text: "Beryl live — B20 payments + faster L1 withdrawals", action: "Try", onAction: () => openAction("orders"), color: "#4FC3F7" });
+      allMissions.push({ priority: "info", icon: "⚡", text: "Beryl live — B20 payments + faster L1 withdrawals", action: "Try", onAction: () => setView("orders"), color: "#4FC3F7" });
   }
   const topMissions = allMissions.slice(0, 3);
   // Gated on the BALANCE READ, not on `total`.
@@ -624,7 +664,12 @@ export default function BankPage() {
               figure itself is unchanged — it still includes a supplied position
               if one exists, which is why the caption below names it. */}
           <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">USDC</div>
-          <div className="font-mono text-[22px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
+          {/* White, not green. Green is this app's "good / up" colour — it means
+              a gain in the mission list, a paid order, an incoming ledger row.
+              On a bare balance it is a direction claim over data the app keeps
+              no baseline for: there is no yesterday's balance to be up against.
+              A balance is neither good nor bad, it is just what you have. */}
+          <div className="font-mono text-[22px] font-bold text-white">${usd(walletState.balance)}</div>
           <div className="font-mono text-[9px] text-slate-600 mt-0.5">
             {net.short}
             {walletState.inYield > 0 ? ` · incl. $${usd(walletState.inYield)} supplied` : ""}
@@ -700,9 +745,31 @@ export default function BankPage() {
         {/* 6. Spacer */}
         <div className="flex-1" />
 
-        {/* 7. Network — read-only unless testnet mode is unlocked (?testnet=1) */}
+        {/* 7. Chains — the two this wallet reads, and what each one carries.
+            Titled NETWORK (singular) over one switchable chain, while the stock
+            table below has been reading a second one all along: readStockHoldings
+            returns `legs: [base, rh]` on every call, unconditionally. So the
+            wallet already spanned two chains and said so nowhere.
+
+            Robinhood is a ROW, not a button, and that asymmetry is deliberate —
+            it is not `WALLET_CHAIN_ORDER` being conservative for its own sake.
+            Making it selectable would repoint `chainId` at 4663, and three
+            things downstream would keep answering in Base:
+
+              /api/wallet/transactions  CHAIN[network] ?? "base"  → Base txs
+              /api/wallet/holdings      same shape                → Base tokens
+              TokenTable                84532 ? sepolia : base    → labelled Base
+
+            …and two would still MOVE REAL MONEY on Base: addCash/cashOut pin
+            `defaultNetwork=base` in the Coinbase Onramp URL, and SwapCard
+            force-switches the wallet to mainnet before signing. A picker that
+            silently sends Base data and Base money under a Robinhood heading is
+            the "testnet balances under a Base label" bug with the chains
+            swapped. Until those five are chain-aware, the honest surface is the
+            one below: name the chain, say what is actually read from it, and
+            offer the only control that works there — its own explorer. */}
         <div className="px-3 pb-3">
-          <div className="font-mono text-[9px] text-slate-600 mb-1.5">NETWORK</div>
+          <div className="font-mono text-[9px] text-slate-600 mb-1.5">CHAINS</div>
           {testnetUnlocked ? (
             <div className="flex gap-1">
               {WALLET_CHAIN_ORDER.map(nk => (
@@ -718,11 +785,32 @@ export default function BankPage() {
               ))}
             </div>
           ) : (
-            <div className="font-mono text-[10px] py-1.5 px-2 rounded-md flex items-center gap-1.5"
+            <div className="font-mono text-[10px] py-1.5 px-2 rounded-md"
               style={{ background: "#4FC3F70d", color: "#4FC3F7", border: "1px solid #4FC3F725" }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-[#34D399]" />
-              {net.label}
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#4FC3F7]" />
+                {net.label}
+              </div>
+              <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
+                cash · send · swap · agent payments
+              </div>
             </div>
+          )}
+          {/* Gated on the SAME predicate as StockTable's mount, so this row can
+              never claim a leg the page is not reading. On testnet the stock
+              table is absent (no B20 or RWA testnet twin), so this is too. */}
+          {!isTestnet && (
+            <a href={`${WALLET_CHAINS.robinhood.explorer}/address/${acct}`}
+              target="_blank" rel="noopener noreferrer"
+              className="block mt-1.5 font-mono text-[10px] py-1.5 px-2 rounded-md border border-[#1A1A2E] hover:border-[#4FC3F730] transition-colors">
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#1A1A2E] border border-slate-700" />
+                {WALLET_CHAINS.robinhood.label}
+              </div>
+              <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
+                tokenized stocks · read-only ↗
+              </div>
+            </a>
           )}
         </div>
 
@@ -774,7 +862,7 @@ export default function BankPage() {
               <span key={c.label} className="font-mono text-[9px] px-2 py-1 rounded-md"
                 style={c.warn
                   ? { color: "#F59E0B", border: "1px solid #F59E0B40", background: "#F59E0B10" }
-                  : { color: "#94a3b8", border: "1px solid #1A1A2E", background: "#0d0d12" }}>{c.label}</span>
+                  : { color: "#94A3B8", border: "1px solid #1A1A2E", background: "#0d0d12" }}>{c.label}</span>
             ))}
             {new Date() >= new Date("2026-06-25") && (
               <span className="font-mono text-[9px] px-2 py-1 rounded-md font-bold"
@@ -841,7 +929,8 @@ export default function BankPage() {
                   while the wallet sold yield; the rows below still itemise a
                   supplied position when there is one, so "USDC" covers it. */}
               <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">USDC</div>
-              <div className="font-mono text-[28px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
+              {/* White — same reason as the sidebar figure above. */}
+              <div className="font-mono text-[28px] font-bold text-white">${usd(walletState.balance)}</div>
               <div className="flex flex-col gap-1.5 mt-3">
                 {(walletUsdc ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
@@ -865,11 +954,27 @@ export default function BankPage() {
                     <span className="text-slate-300">${usd(morphoPos)}</span>
                   </div>
                 )}
-                {ethBal != null && ethBal > 0 && (
+                {/* `!= null`, not `> 0`. This row used to hide itself on a
+                    wallet holding zero ETH — the one wallet that most needs to
+                    be told, because zero ETH means it cannot sign anything at
+                    all. It stayed hidden because the low-gas warning lived on a
+                    SECOND card further down that rendered the same four rows
+                    again; that card is gone (see Section 2) and the warning
+                    lands here, on the only balance breakdown left.
+
+                    It reads `ethBal`, not `walletState.gasReserveEth`: the
+                    latter is `ethBal ?? 0`, so a read that never came back
+                    would be warned about as if it had returned zero. */}
+                {ethBal != null && (
                   <div className="flex justify-between font-mono text-[10px]">
                     <span className="text-slate-500">ETH (gas)</span>
-                    <span className="text-slate-400">{ethBal.toFixed(4)}</span>
+                    <span className={ethBal < 0.005 ? "text-amber-400" : "text-slate-400"}>
+                      {ethBal.toFixed(4)}
+                    </span>
                   </div>
+                )}
+                {ethBal != null && ethBal < 0.005 && (
+                  <div className="font-mono text-[9px] text-amber-400">⚠ Low — get ETH for gas</div>
                 )}
               </div>
             </div>
@@ -888,14 +993,14 @@ export default function BankPage() {
                   style={{ background: "#4FC3F7", color: "#050508" }}>
                   ➡ Send
                 </button>
-                <button onClick={addCash} disabled={onrampBusy || !isConnected || isTestnet}
-                  title={isTestnet ? "Base mainnet only" : undefined}
+                <button onClick={addCash} disabled={onrampBusy || !isConnected || !isBaseMainnet}
+                  title={!isBaseMainnet ? "Base mainnet only" : undefined}
                   className="font-mono text-[11px] font-bold py-2.5 px-3 rounded-xl disabled:opacity-40 transition-opacity hover:opacity-80"
                   style={{ background: "#34D39910", color: "#34D399", border: "1px solid #34D39930" }}>
                   {onrampBusy ? "…" : "💵 Add"}
                 </button>
-                <button onClick={cashOut} disabled={cashOutBusy || !isConnected || isTestnet}
-                  title={isTestnet ? "Base mainnet only" : undefined}
+                <button onClick={cashOut} disabled={cashOutBusy || !isConnected || !isBaseMainnet}
+                  title={!isBaseMainnet ? "Base mainnet only" : undefined}
                   className="font-mono text-[11px] py-2.5 px-3 rounded-xl text-slate-400 disabled:opacity-40 transition-opacity hover:text-slate-200"
                   style={{ border: "1px solid #1A1A2E" }}>
                   {cashOutBusy ? "…" : "🏦 Out"}
@@ -942,7 +1047,12 @@ export default function BankPage() {
                 <IdentityChip label={identity.connectionLabel} active={identity.family !== "unknown"} color="#4FC3F7" />
                 <IdentityChip label={identity.accountLabel} active={identity.accountKind === "smart"} color="#4FC3F7" />
                 <IdentityChip label={identity.passkeyLabel} active={identity.passkey === "yes"} color="#34D399" />
-                <IdentityChip label={name ?? fname ?? "No Basename"} active={!!(name ?? fname)} color="#A78BFA" />
+                {/* Was #A78BFA — the only violet in the file, one chip in a row
+                    of five, carrying no meaning the other four don't. The
+                    palette is one primary plus three semantic colours (green
+                    good / amber warn / red danger); a fifth hue used once is
+                    decoration pretending to be a category. */}
+                <IdentityChip label={name ?? fname ?? "No Basename"} active={!!(name ?? fname)} color="#4FC3F7" />
                 {/* The one honest constant here: non-custodial is a property of
                     THIS APP (it never holds a key or a fund), not of whichever
                     wallet connected — so unlike the chips above it cannot drift
@@ -992,53 +1102,31 @@ export default function BankPage() {
             <span className="font-mono text-[10px] text-[#4FC3F7] flex-shrink-0 ml-3">Usage →</span>
           </Link>
 
-          {/* ── Section 2: Wallet+Yield | AI+Portfolio ────────────────────── */}
+          {/* ── Section 2: AI Mission Control | Portfolio Allocation ────────
+              A "WALLET" card led the left column here, listing USDC, aUSDC,
+              Morpho and a GAS RESERVE row. Those are the same four rows the
+              balance card in Section 1 already renders, from the same four
+              variables, one screen-height apart — the same number written twice
+              on one page, which is the defect the previous release fixed
+              BETWEEN two pages. Two copies of one derivation is how a surface
+              ends up disagreeing with itself; the wallet's own history has that
+              happening three separate times (see the allocation card below).
+
+              Its one non-duplicate pixel was the low-gas warning, which is why
+              this is a merge and not a delete: that moved up into the Section 1
+              ETH row, where it now also fires at exactly zero.
+
+              A "YIELD RATES · BASE" board sat under it — the top four DefiLlama
+              pools with comparison bars. The previous release gated it to
+              holders only, on the argument that for them it was "context on the
+              money they have in". It wasn't: it ranked FOUR pools, of which the
+              user's was at most one, and the only action it offered was to go
+              somewhere else. Context you can't act on is an advert with a
+              smaller audience.
+
+              With both gone the left column held nothing, so the two surviving
+              cards are direct grid children rather than one-item stacks. */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3 items-start">
-
-            {/* Left stack */}
-            <div className="flex flex-col gap-3">
-
-              {/* Wallet card */}
-              <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
-                <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-3">WALLET</div>
-                <AssetRow label="USDC" sub="in wallet" usd={walletUsdc} color="#4FC3F7" />
-                {/* The aUSDC row rendered UNCONDITIONALLY, subtitled "Aave ·
-                    4.1% APY" from `bestApy` — the top pool on DefiLlama, not
-                    this position. So a wallet holding nothing in Aave was shown
-                    an "aUSDC" line quoting a rate it wasn't earning, on a pool
-                    it wasn't in, for a feature it could no longer enter. Now
-                    gated like the Morpho row beside it, and subtitled with the
-                    venue rather than a number we cannot attribute. */}
-                {(aavePos ?? 0) > 0 && (
-                  <AssetRow label="aUSDC" sub="supplied · Aave v3" usd={aavePos} color="#4FC3F7" />
-                )}
-                {(morphoPos ?? 0) > 0 && (
-                  <AssetRow label="Morpho" sub="supplied · Gauntlet USDC Prime" usd={morphoPos} color="#4FC3F7" />
-                )}
-                <div className="mt-2 pt-2 border-t border-[#1A1A2E]">
-                  <div className="font-mono text-[9px] text-slate-500 mb-1">GAS RESERVE</div>
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-[11px] text-slate-400">ETH</span>
-                    <span className="font-mono text-[11px] text-slate-300">{walletState.gasReserveEth.toFixed(4)}</span>
-                  </div>
-                  {walletState.gasReserveEth < 0.005 && (
-                    <div className="font-mono text-[9px] text-amber-400 mt-1">⚠ Low — get ETH for gas</div>
-                  )}
-                </div>
-              </div>
-
-              {/* A "YIELD RATES · BASE" board sat here — the top four DefiLlama
-                  pools with comparison bars. The previous release gated it to
-                  holders only, on the argument that for them it was "context on
-                  the money they have in". It wasn't: it ranked FOUR pools, of
-                  which the user's was at most one, and the only action it
-                  offered was to go somewhere else. Context you can't act on is
-                  an advert with a smaller audience. */}
-
-            </div>
-
-            {/* Right stack */}
-            <div className="flex flex-col gap-3">
 
               {/* AI Mission Control */}
               <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
@@ -1160,30 +1248,60 @@ export default function BankPage() {
                 )}
               </div>
 
-            </div>
           </div>
 
-          {/* ── Section 2.5: Token holdings — full live portfolio ──────────── */}
-          <TokenTable address={acct} onQuickSell={quickSell} />
+          {/* ── Section 3: the long tail, behind tabs ───────────────────────
+              Three full-width sections used to stack here — the token table,
+              the stock table, and the transaction list — each of which paginates
+              or scrolls internally. Below three cards and a link, that put the
+              transaction history somewhere between two and five screens down,
+              and nothing above it told you it was there.
 
-          {/* ── Section 2.6: Tokenized stocks — Base B20 + Robinhood RWA ────
-              Mainnet-only by construction: B20 stocks exist on Base 8453 and
-              the RWA registry on RH 4663, and neither has a testnet twin. On a
-              testnet dashboard this would show mainnet positions under a banner
-              saying "no real value", so it is absent instead — the same refusal
-              the Convert panel makes. */}
-          {!isTestnet && <StockTable address={acct} />}
+              Tabs, not an accordion or a "show more": these are three answers to
+              three different questions ("what do I hold", "what did I do"), only
+              one of which is being asked at a time, and a tab bar is the only
+              form that states the other options exist while showing one.
 
-          {/* ── Section 3: Transaction History ─────────────────────────────── */}
-          <TransactionHistory
-            transactions={txData?.transactions ?? []}
-            loading={txLoading}
-            error={txError}
-            needsKey={txData?.needsKey}
-            onRetry={() => setTxReload(k => k + 1)}
-            explorer={net.explorer}
-            address={acct}
-          />
+              Stocks sit WITH tokens rather than in a tab of their own. They are
+              the same question — what this wallet holds — asked of a second
+              venue, and StockTable already reads both chains itself. */}
+          <div className="flex items-center gap-1 mb-3 border-b border-[#1A1A2E]">
+            {VIEWS.map(v => (
+              <button key={v.id} onClick={() => setView(v.id)}
+                className="font-mono text-[11px] px-3 py-2 -mb-px border-b-2 transition-colors"
+                style={view === v.id
+                  ? { color: "#4FC3F7", borderColor: "#4FC3F7" }
+                  : { color: "#64748b", borderColor: "transparent" }}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+
+          {view === "portfolio" && (
+            <>
+              <TokenTable address={acct} onQuickSell={quickSell} />
+              {/* Mainnet-only by construction: B20 stocks exist on Base 8453 and
+                  the RWA registry on RH 4663, and neither has a testnet twin. On
+                  a testnet dashboard this would show mainnet positions under a
+                  banner saying "no real value", so it is absent instead — the
+                  same refusal the Convert panel makes. */}
+              {!isTestnet && <StockTable address={acct} />}
+            </>
+          )}
+
+          {view === "activity" && (
+            <TransactionHistory
+              transactions={txData?.transactions ?? []}
+              loading={txLoading}
+              error={txError}
+              needsKey={txData?.needsKey}
+              onRetry={() => setTxReload(k => k + 1)}
+              explorer={net.explorer}
+              address={acct}
+            />
+          )}
+
+          {view === "orders" && <OrdersPanel />}
 
         </div>
 
@@ -1254,11 +1372,11 @@ export default function BankPage() {
                     Rendering it while the dashboard is on testnet would move REAL
                     funds under a page captioned "no real value" — exactly the
                     class of mismatch this PR removes. Refuse instead. */}
-                {panel === "convert" && (isTestnet
+                {panel === "convert" && (!isBaseMainnet
                   ? <div className="rounded-lg px-3.5 py-3" style={{ background: "#F59E0B10", border: "1px solid #F59E0B40" }}>
                       <div className="font-mono text-[11px] font-bold" style={{ color: "#F59E0B" }}>Convert is Base mainnet only</div>
                       <div className="font-mono text-[9px] text-slate-400 mt-1 leading-relaxed">
-                        Swaps route through the 0x API on Base mainnet and would spend real funds. Switch off testnet to convert.
+                        Swaps route through the 0x API on Base mainnet and would spend real funds. You are on {net.short} — switch to Base to convert.
                       </div>
                       <button onClick={() => setNetwork("base")}
                         className="font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg mt-2.5 transition-opacity hover:opacity-80"
@@ -1267,7 +1385,6 @@ export default function BankPage() {
                       </button>
                     </div>
                   : <SwapCard account={acct} preset={sellPreset} />)}
-                {panel === "orders" && <OrdersPanel />}
                 {panel === "send" && (
                   <div>
                     <button onClick={() => setScanOpen(true)}
@@ -1459,20 +1576,15 @@ function AssetPill({ label, value, color }: { label: string; value: string; colo
   );
 }
 
-function AssetRow({ label, sub, usd: val, color }: { label: string; sub: string; usd: number | null; color: string }) {
-  return (
-    <div className="flex items-center justify-between py-2 border-b border-[#13131f] last:border-0">
-      <div className="flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-        <div>
-          <div className="font-mono text-[12px] text-slate-200">{label}</div>
-          <div className="font-mono text-[9px] text-slate-600">{sub}</div>
-        </div>
-      </div>
-      <div className="font-mono text-[12px] text-slate-300">{val != null ? `$${usd(val)}` : "—"}</div>
-    </div>
-  );
-}
+// `AssetRow` lived here. Its three call sites were the USDC / aUSDC / Morpho
+// rows of the Section 2 WALLET card, which this release deleted as a duplicate
+// of the Section 1 balance card. Deleted with them rather than left behind: the
+// component it duplicated renders those rows inline, so a second row primitive
+// is an invitation to grow the duplicate back.
+//
+// `AssetPill`, `AISuggestion` and `StatMini` below/above are ALSO unreferenced,
+// but they were already dead before this branch (0 call sites at its base
+// commit), so removing them belongs to its own change, not to a wallet rebuild.
 
 function AISuggestion({ icon, text, action, onAction, color }: {
   icon: string; text: string; action?: string; onAction?: () => void; color: string;
@@ -1583,14 +1695,23 @@ function BankLanding() {
     <div className="min-h-full bg-[#050508] flex items-center justify-center p-5 sm:p-8">
       <div className="w-full max-w-4xl grid md:grid-cols-2 gap-6 items-center">
         <div>
-          <div className="font-mono text-[13px] tracking-widest text-[#4FC3F7] font-bold mb-3">🔵 WALLET</div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white leading-tight mb-3">
-            A wallet you<br />actually own.
-          </h1>
-          <p className="font-mono text-[12px] text-slate-400 leading-relaxed mb-5 max-w-md">
-            Hold USDC, move money, and track every agent payment on Base — <span className="text-slate-200">non-custodial</span>.
-            You hold the keys; BlueAgent only prepares the transaction, you sign it.
-          </p>
+          {/* A headline and a paragraph used to sit between this label and the
+              bullets: "A wallet you actually own." over "Hold USDC, move money,
+              and track every agent payment on Base — non-custodial. You hold the
+              keys; BlueAgent only prepares the transaction, you sign it."
+
+              Every clause of it is repeated verbatim below. "Hold USDC, move
+              money" is bullet 3, "track every agent payment" is bullet 2,
+              "non-custodial / you hold the keys" is bullet 4 — which states it
+              twice more in its own title and body. Five claims, three of them
+              said twice within 200px, and the paragraph was the copy a reader
+              hits first, so the bullets under it read as a restatement rather
+              than as the detail.
+
+              The label is the heading now rather than a decorative eyebrow over
+              one: dropping the <h1> without promoting something would leave the
+              page with no heading at all. */}
+          <h1 className="font-mono text-[13px] tracking-widest text-[#4FC3F7] font-bold mb-4">🔵 WALLET</h1>
           <div className="space-y-3">
             {features.map(f => (
               <div key={f.title} className="flex gap-3">
