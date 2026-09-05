@@ -5,14 +5,20 @@ const APP_HOST = "app.blueagent.dev";
 const MAIN_HOST = "blueagent.dev";
 
 // Root routes that legitimately live on the app subdomain even though they're
-// outside the /app/* tree: public links generated with the app origin
-// (/pay from BlueBank, /share from chat), public embeds (/badge), and the
-// /waitlist gate landing (served on the app host so appWaitlistGate can bounce
-// to it same-origin instead of 301'ing off to marketing). Everything else
-// outside APP_SEGMENTS is marketing — its canonical home is the main host, so on
-// the app subdomain it 301s to blueagent.dev to avoid duplicate pages
-// (e.g. app.blueagent.dev/docs was duplicating blueagent.dev/docs).
-const APP_PUBLIC = new Set(["pay", "share", "badge", "waitlist"]);
+// outside the /app/* tree: public share links generated with the app origin
+// (/share from chat), public embeds (/badge), and the /waitlist gate landing
+// (served on the app host so appWaitlistGate can bounce to it same-origin
+// instead of 301'ing off to marketing). Everything else outside APP_SEGMENTS is
+// marketing — its canonical home is the main host, so on the app subdomain it
+// 301s to blueagent.dev to avoid duplicate pages (e.g. app.blueagent.dev/docs
+// was duplicating blueagent.dev/docs).
+//
+// `pay` left this set on 2026-09-05. archivedRedirect() is the first statement
+// of middleware() and 301s /pay[/…] to /chat, so this branch could never be
+// reached for it — measured, not assumed. src/app/pay/ is still in the tree; if
+// BlueBank's public payment surface is un-archived, drop the isPay branch there
+// and add `pay` back here, in that order.
+const APP_PUBLIC = new Set(["share", "badge", "waitlist"]);
 
 // Top-level segments that belong to the in-app surface (src/app/app/*). On the
 // app subdomain these are served from the internal /app/* tree while the URL
@@ -170,45 +176,6 @@ function culledRedirect(pathname: string): NextResponse | null {
   return null;
 }
 
-// BlueBank private preview gate. BlueBank and its public /pay payment surface
-// aren't GA yet — on production they stay blocked EXCEPT for someone holding the
-// preview token (?key=<BANK_PREVIEW_TOKEN> sets an unlock cookie). `accessUrl`
-// is host-aware so we bounce to the right (clean vs /app) Early Access page.
-// NOTE: this gate lives in middleware, not next.config redirects, because config
-// redirects run BEFORE middleware and can't be conditionally bypassed.
-function bankGate(
-  request: NextRequest,
-  isBankSurface: boolean,
-  accessUrl: string,
-): NextResponse | null {
-  if (!isBankSurface || process.env.NODE_ENV !== "production") return null;
-  const token = process.env.BANK_PREVIEW_TOKEN;
-  const COOKIE = "bank_preview";
-  const unlocked = !!token && request.cookies.get(COOKIE)?.value === token;
-  const queryKey = request.nextUrl.searchParams.get("key");
-
-  // Valid ?key=<token> → drop the unlock cookie, bounce to the clean URL.
-  if (token && queryKey && queryKey === token) {
-    const clean = request.nextUrl.clone();
-    clean.searchParams.delete("key");
-    const res = NextResponse.redirect(clean);
-    res.cookies.set(COOKIE, token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30, // 30 days
-    });
-    return res;
-  }
-  // No valid cookie (or token not configured) → show Early Access page.
-  if (!unlocked) {
-    return NextResponse.redirect(new URL(accessUrl, request.url));
-  }
-  // Unlocked — fall through to the app.
-  return null;
-}
-
 // Public product surfaces that stay open even when the waitlist gate is armed:
 // Blue Chat (also the farcaster / Base-App deep-link target, homeUrl=/app/chat),
 // Blue Hood (public track record), Blue Hub (builder marketplace + publish
@@ -243,7 +210,8 @@ const WAITLIST_EXEMPT = new Set(["chat", "hood", "hub", "wallet", "signup"]);
  * flipped. When armed it walls the private in-app workspace behind /waitlist,
  * while WAITLIST_EXEMPT surfaces (Chat/Hood/Hub) and the farcaster deep-link
  * stay public. `?key=<APP_WAITLIST_TOKEN>` on any in-app path drops a 30-day
- * unlock cookie (same shape as bankGate) so the team + invited testers pass.
+ * unlock cookie so the team + invited testers pass. (This is now the only
+ * ?key-unlock gate in the file — the BlueBank one it was modelled on is gone.)
  * Only ever fires on in-app segments; static files, /api and marketing routes
  * (firstSeg not in APP_SEGMENTS) fall straight through, so /waitlist itself
  * never loops.
@@ -288,9 +256,11 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // BlueAgent Relaunch: archived routes (Blue Bank + /pay) → /chat, same
-  // semantic on both hosts. Runs first so bankGate (below) is dead code —
-  // kept for now to avoid a bigger diff, will remove in the About/Docs
-  // follow-up PR.
+  // semantic on both hosts. Runs FIRST, and the rest of this file leans on
+  // that: it is what made the old BlueBank preview gate unreachable, and why
+  // that gate (plus its Early Access page and the BANK_PREVIEW_TOKEN env var)
+  // could be deleted outright on 2026-09-05 rather than rewired. Anything that
+  // needs to see a /bank or /pay path must run ABOVE this line.
   const archived = archivedRedirect(pathname, request.nextUrl.search);
   if (archived) return archived;
 
@@ -373,15 +343,6 @@ export function middleware(request: NextRequest) {
       clean.pathname = pathname.replace(/^\/app/, "") || "/";
       return NextResponse.redirect(clean, { status: 301 });
     }
-
-    // BlueBank preview gate (clean URL /bank == internal /app/bank).
-    const isBankSurface =
-      ((pathname === "/bank" || pathname.startsWith("/bank/")) &&
-        pathname !== "/bank/access") ||
-      pathname === "/pay" ||
-      pathname.startsWith("/pay/");
-    const gate = bankGate(request, isBankSurface, "/bank/access");
-    if (gate) return gate;
 
     // Waitlist gate — walls the private workspace when APP_WAITLIST=1; Chat,
     // Hood, Hub (WAITLIST_EXEMPT) stay open, as does the ?key unlock path.
@@ -491,11 +452,6 @@ export function middleware(request: NextRequest) {
       { status: 301 },
     );
   }
-
-  // BlueBank public /pay gate stays on the main host too (defensive).
-  const isBankSurface = pathname === "/pay" || pathname.startsWith("/pay/");
-  const gate = bankGate(request, isBankSurface, "/app/bank/access");
-  if (gate) return gate;
 
   return NextResponse.next();
 }
