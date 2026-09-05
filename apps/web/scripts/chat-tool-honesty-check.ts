@@ -146,6 +146,22 @@ check("no call site still collapses phase1 with ?.choices?.[0]",
 check("the unreachable prompt calls it an outage, not a model limitation",
   /temporary outage/.test(unreach) && !/temporary outage/.test(noTools));
 
+// ── 4b. The two branch gates agree about the free tier ───────────────────────
+// `hasHubTools` is ONE boolean feeding the prompt, but the tools it describes
+// are attached by TWO gates, one per provider. They disagreed: Venice carried
+// `!freeNoTools`, Virtuals did not. Nothing was firing, because `presets.ts`
+// routes `free` to a Venice model — an invariant held by a fact in a different
+// file with no compiler link. Repoint the free preset at any of the six
+// Virtuals models sitting next to it and the Virtuals branch attaches the full
+// paid Hub schema to a 0-credit message, while the prompt correctly says it has
+// none. Asserted per-branch rather than by counting, so deleting one still fails.
+console.log("\n4b. both provider gates exclude the free tier");
+const venGate = /if \(!isE2EE && !knowledgeOnly && !freeNoTools\)/.test(ROUTE);
+const virGate = /if \(!knowledgeOnly && !freeNoTools\)/.test(ROUTE);
+check("Venice branch gates on !freeNoTools", venGate);
+check("Virtuals branch gates on !freeNoTools too — a 0-credit message cannot "
+  + "reach a paid Hub tool whichever provider the free preset points at", virGate);
+
 // ── 5. blue_dca: the offer and the keeper travel together ────────────────────
 console.log("\n5. blue_dca is not offered while its keeper is unscheduled");
 

@@ -2708,11 +2708,18 @@ export async function POST(req: NextRequest) {
   // `hasConnectorTools` (#166/#195) were each derived from the real gates while
   // the main tool list — the biggest claim in the prompt — stayed unconditional.
   //
-  // Mirrors the tool gates on both branches below: `!isE2EE && !knowledgeOnly &&
-  // !freeNoTools` (Venice) and `!knowledgeOnly` (Virtuals). If either changes,
-  // this changes with it. The FOURTH way a request can arrive tool-free — Phase 1
-  // itself failing — cannot be known here, so it is handled at the branch, which
-  // rebuilds the prompt through `buildSystem(false, true)`.
+  // Mirrors the tool gates on both branches below. Those two gates USED to
+  // differ — Venice `!isE2EE && !knowledgeOnly && !freeNoTools`, Virtuals just
+  // `!knowledgeOnly` — and this line was written against the union of them,
+  // which made it WRONG for Virtuals in the safe direction and would have become
+  // a zero-credit bypass the moment the free preset was repointed at a Virtuals
+  // model. Both branches now carry `!freeNoTools`, so the mirror is exact and
+  // `isE2EEModel` is the only asymmetry left (E2EE models are Venice-only).
+  // If either gate changes, this changes with it.
+  //
+  // The FOURTH way a request can arrive tool-free — Phase 1 itself failing —
+  // cannot be known here, so it is handled at the branch, which rebuilds the
+  // prompt through `buildSystem(false, true)`.
   const hasHubTools = !knowledgeOnly && !freeNoTools && !isE2EEModel;
 
   // A function, not a string, because the "Phase 1 broke" case only becomes
@@ -2886,7 +2893,17 @@ export async function POST(req: NextRequest) {
     })),
   ];
 
-  if (!knowledgeOnly) {
+  // `!freeNoTools` is not redundant here, it is load-bearing. The Venice branch
+  // has always carried it; this branch never did, and the invariant its comment
+  // states — "a 0-credit message must never be able to invoke a paid Hub tool" —
+  // held only because `presets.ts` happens to route `free` to a Venice model.
+  // That is a fact in ANOTHER FILE with no compiler link: repoint the free preset
+  // at any of the six Virtuals models beside it and this branch would attach the
+  // full Hub schema and run Phase 1 for zero credits, while `hasHubTools` (false,
+  // correctly) told the model it had none. Same defect as #204 itself — a gate
+  // mirrored by hand — so it is closed structurally rather than left true by
+  // coincidence. Not currently firing; asserted by chat-tool-honesty-check.
+  if (!knowledgeOnly && !freeNoTools) {
     const forceTool =
       address && /^0x[a-fA-F0-9]{40}$/.test(address) && wantsWalletBalance(cleanMessages)
         ? "check_wallet"
