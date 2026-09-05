@@ -256,4 +256,5 @@ refactor: restructure, no behavior change
 chore:    tooling, deps, config
 ```
 
-Branch: always work on `dev`. PRs go `dev → main`.
+Branch: cut a short-lived branch from `main`, PR it back into `main`, delete it on merge.
+`dev` is retired (2026-09-05) — do not branch from it or re-create it.

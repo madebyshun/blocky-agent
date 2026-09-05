@@ -129,7 +129,10 @@ chore:    tooling, deps, config
 
 ## Branch policy
 
-**Always work on `dev`.** Never commit directly to `main`. PRs go `dev → main`.
+**Cut a short-lived branch from `main`, PR it back into `main`, delete it on merge.** Never commit
+directly to `main`. **`dev` is retired (2026-09-05) — do not branch from it or re-create it**; see
+Git discipline in `CLAUDE.md` for the two measured reasons (61-file drift, and `dev` silently lacking
+the CI workflow so `verify` never ran on any `dev` commit).
 
 ---
 
@@ -147,7 +150,7 @@ Pipeline for every change, in order:
 2. npx tsc --noEmit -p tsconfig.json   # type errors (fast) — run from apps/web
 3. npm run build                        # next build — lint, prerender, server/client import errors
 4. Manual runtime test at localhost     # logic/UX bugs a build can't catch
-5. Only when 2–4 PASS → merge dev→main → push (single deploy)
+5. Only when 2–4 PASS → open a PR (branch→main); merge only when the Vercel preview is green
 ```
 
 Notes:
