@@ -76,14 +76,24 @@ export function buildWalletState(snapshot: WalletSnapshot): WalletState {
   // The route's value is the only one now.
   const gasSavedUsd = snapshot.gasSavedUsd ?? null;
 
-  // Health score 0-100: 4 × 25-point dimensions
+  // Health score 0-100: 3 × 33-point dimensions, one carrying the spare point
+  // so a wallet that clears all three reads 100 rather than 99.
+  //
+  // It was 4 × 25, and one of the four was `bestApy != null` — 25 points for
+  // whether a DefiLlama fetch came back. That is a fact about OUR network call,
+  // not about the user's wallet: the same wallet scored 25 lower during an API
+  // outage. `bestApy` is gone from the snapshot entirely now that the wallet no
+  // longer fetches yield rates, which would have pinned that term at 0 forever.
+  //
+  // `inYield > 0` went with it, for a different reason: with the Earn entrance
+  // closed, supplying into Aave is not something a user can choose to do, and a
+  // score must only measure things its subject can act on.
   const healthScore = Math.min(
     100,
     Math.round(
-      (inYield > 0 ? 25 : 0) +
-      (snapshot.bestApy != null ? 25 : 0) +
-      (snapshot.ethBal > 0.005 ? 25 : 0) +
-      (snapshot.transferCountMonth > 0 ? 25 : 0),
+      (snapshot.ethBal > 0.005 ? 34 : 0) +
+      (snapshot.transferCountMonth > 0 ? 33 : 0) +
+      (balance > DUST_USD ? 33 : 0),
     ),
   );
 
@@ -97,7 +107,6 @@ export function buildWalletState(snapshot: WalletSnapshot): WalletState {
     ethUnpriced,
     holdsAssets,
     allocation:          { stablecoin: allocStablecoin, other: allocOther },
-    bestApy:             snapshot.bestApy,
     netFlowMonth:        snapshot.netFlowMonth ?? 0,
     transferCountMonth:  snapshot.transferCountMonth ?? 0,
     gasSavedUsd,

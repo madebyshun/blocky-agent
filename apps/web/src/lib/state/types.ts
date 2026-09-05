@@ -36,7 +36,6 @@ export interface WalletState {
     stablecoin: number | null;   // % of priced value held in stablecoins
     other: number | null;        // % held in everything else (currently ETH)
   };
-  bestApy: number | null;
   netFlowMonth: number;
   transferCountMonth: number;
   gasSavedUsd: number | null; // null when no real tx data
@@ -44,12 +43,23 @@ export interface WalletState {
   updatedAt: string;
 }
 
+/**
+ * Raw readings the wallet page hands in. Every field is something we MEASURED
+ * about this user — a balance, a transfer count, a price we fetched to convert
+ * one of them.
+ *
+ * `bestApy` used to sit in here and was the exception: the top USDC yield on
+ * DefiLlama, a market-wide figure with nothing to do with the wallet being
+ * described. It fed a 25-point term in `healthScore` and a "$X earning Y%" line
+ * in the UI, where Y was a rate this user was not being paid. Removed when the
+ * wallet stopped selling yield — and the shape of the type is the guardrail:
+ * with no market data in the snapshot, no derived field can quietly become one.
+ */
 export interface WalletSnapshot {
   walletUsdc: number;
   aavePos: number;
   morphoPos: number;
   ethBal: number;
-  bestApy: number | null;
   netFlowMonth: number;
   transferCountMonth: number;
   /** Live ETH/USD from /api/wallet/transactions; `null` when the feed failed. */

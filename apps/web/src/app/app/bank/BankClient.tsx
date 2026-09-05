@@ -1,8 +1,14 @@
 "use client";
 
 // BlueBank dashboard — responsive grid layout: sidebar | grid content.
-// Non-custodial Base neobank: real on-chain balances (wagmi), live yield rates
-// (DefiLlama), real transactions (Moralis). Nothing is fabricated.
+// Non-custodial Base neobank: real on-chain balances (wagmi), real transactions
+// (Moralis). Nothing is fabricated.
+//
+// This wallet does NOT sell yield. The Earn entrance was closed one release ago
+// (supply deferred to phase 2) and this one removes the shop window that stayed
+// up after it: the APY boards, the rate sparkline, the DeFi app grid. What
+// survives is the part that is about the user's own money — a position they
+// already hold, and the exit from it. See the `earn*` block below.
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useAccount, useReadContract, useBalance, useSwitchChain } from "wagmi";
@@ -14,12 +20,14 @@ import { formatUnits } from "viem";
 import { QRCodeSVG } from "qrcode.react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { WALLET_CHAINS, WALLET_CHAIN_ORDER, type WalletChain } from "@/lib/wallet/chains";
-// ⚠️ EARN-ONLY import. The wallet's identity (chain, explorer, what counts as
-// cash) now comes from @/lib/wallet/chains; this line is what the Earn removal
-// deletes, along with the three lookups it feeds.
-import {
-  YIELD_NETWORKS, ERC20_ABI, AAVE_POOL_ABI, ERC4626_ABI, VENUES, supplyApyPct,
-} from "@/lib/yield-execution";
+// ⚠️ EARN-ONLY import, and now WITHDRAW-only: the contract addresses needed to
+// read a position the user already holds and hand them back out of it. The
+// wallet's identity (chain, explorer, what counts as cash) comes from
+// @/lib/wallet/chains — nothing here decides what the wallet IS.
+//
+// `AAVE_POOL_ABI` + `supplyApyPct` were dropped with the rate boards: an APY is
+// only actionable if you can supply more, and you can't.
+import { YIELD_NETWORKS, ERC20_ABI, ERC4626_ABI, VENUES } from "@/lib/yield-execution";
 import { MoveToYieldCard, SendCard } from "@/app/chat/components/ToolCards";
 import { useBasename, shortAddr } from "@/lib/useBasename";
 import QrScanner from "./QrScanner";
@@ -39,10 +47,11 @@ import { buildWalletState } from "@/lib/state";
 const usd = (n: number | null | undefined) =>
   n == null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const CAMPAIGNS: { name: string; desc: string; badge: string; color: string }[] = [
-  { name: "Base Ecosystem Fund", desc: "Builder grants — up to $50K", badge: "OPEN", color: "#4FC3F7" },
-  { name: "Morpho Boost", desc: "+0.5% APY on USDC deposits", badge: "LIVE", color: "#A78BFA" },
-];
+// A `CAMPAIGNS` array sat here with two entries — "Base Ecosystem Fund" and
+// "Morpho Boost · +0.5% APY on USDC deposits" — and NOTHING rendered it. Dead
+// on arrival, but the second one is why it goes in this commit rather than a
+// tidy-up: it advertised a deposit bonus for an entrance that is closed, and a
+// dead advert is one `{CAMPAIGNS.map(…)}` away from being a live lie.
 
 // "withdraw" was "earn" until yield was deferred to phase 2. The panel still
 // renders MoveToYieldCard, but withdraw-only: no new supply can be started from
@@ -222,13 +231,12 @@ export default function BankPage() {
     args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct },
   });
   const { data: ethRaw } = useBalance({ address: acct, chainId, query: { enabled: !!acct } });
+  // Balance reads only. The Aave `getReserveData` call that fed the supply-APY
+  // display is gone with the display — a rate the user cannot act on is not
+  // worth an RPC round-trip on every render of the wallet.
   const { data: aaveRaw } = useReadContract({
     address: earnNet?.aUsdc, abi: ERC20_ABI, functionName: "balanceOf",
     args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct && !!earnNet },
-  });
-  const { data: aaveReserve } = useReadContract({
-    address: earnNet?.pool, abi: AAVE_POOL_ABI, functionName: "getReserveData",
-    args: earnNet ? [earnNet.usdc] : undefined, chainId, query: { enabled: !!earnNet },
   });
   const { data: morphoRaw } = useReadContract({
     address: morphoVnet?.target, abi: ERC4626_ABI, functionName: "maxWithdraw",
@@ -240,34 +248,26 @@ export default function BankPage() {
   const ethBal     = ethRaw ? Number(formatUnits(ethRaw.value, ethRaw.decimals)) : null;
   const aavePos    = aaveRaw != null ? Number(formatUnits(aaveRaw as bigint, 6)) : null;
   const morphoPos  = morphoRaw != null ? Number(formatUnits(morphoRaw as bigint, 6)) : null;
-  const aaveApy    = aaveReserve ? supplyApyPct((aaveReserve as { currentLiquidityRate: bigint }).currentLiquidityRate) : null;
 
-  // ── Best yield rate (DefiLlama) ──────────────────────────────────────────
-  type Rate = { project: string; label: string; apy: number };
-  const [rates, setRates] = useState<Rate[] | null>(null);
-  useEffect(() => {
-    let off = false;
-    fetch("/api/yield/rates").then(r => r.json()).then(d => { if (!off) setRates((d?.rates as Rate[]) ?? []); }).catch(() => {});
-    return () => { off = true; };
-  }, []);
-  // ⚠️ DefiLlama mainnet pools, network-blind — harmless only while mainnet is
-  // the default. `/api/yield/rates` is not passed `network` and has no testnet
-  // equivalent to pass, so on Sepolia these APYs describe pools the user is not
-  // looking at. Today `network` starts at "base" and testnet is opt-in behind
-  // `?testnet=1`, so the mismatch is confined to a deliberate developer mode.
-  // Flip the default back to a testnet and this silently starts quoting
-  // mainnet yields over testnet balances.
-  const bestApy   = rates && rates.length ? rates[0].apy : null;
-  const morphoApy = rates?.find(r => r.project === "morpho-blue")?.apy ?? null;
-
-  // Morpho 30d APY sparkline for sidebar
-  const [hist, setHist] = useState<{ points: number[]; current: number | null } | null>(null);
-  useEffect(() => {
-    let off = false;
-    fetch("/api/yield/morpho-history").then(r => r.json()).then(d => { if (!off) setHist({ points: d.points ?? [], current: d.current ?? null }); }).catch(() => {});
-    return () => { off = true; };
-  }, []);
-
+  // ── Two rate fetches used to run here, on every wallet load ──────────────
+  // `/api/yield/rates` (DefiLlama) fed three APY boards, and
+  // `/api/yield/morpho-history` fed a 30-day sparkline. All four surfaces are
+  // gone, so the calls are too.
+  //
+  // Worth recording why they were a liability and not just clutter: neither was
+  // passed `network`. They returned MAINNET pool yields regardless of the chain
+  // the dashboard was reading, so on testnet the page quoted real-money APYs
+  // over play-money balances. That was survivable only because mainnet is the
+  // default — a comment used to sit here saying exactly that, load-bearing and
+  // one config change from being wrong. Deleting the fetches deletes the trap.
+  //
+  // `/api/yield/morpho-history` goes in THIS commit rather than a cleanup pass:
+  // its header named the sparkline above as its only consumer, and a repo-wide
+  // grep confirms it now has zero callers. The retiring rule is one commit, and
+  // an orphaned route that still answers is the shape of every surface this repo
+  // has had to retire late. `/api/yield/rates` STAYS — the chat tool cards
+  // (`chat/components/ToolCards.tsx`) still call it, so it is not orphaned.
+  //
   // ── Real wallet history (Moralis) ────────────────────────────────────────
   type TxStats = { transferCountMonth: number; netFlowUsdcMonth: number; gasSavedUsd: number | null; ethUsdPrice: number | null };
   const [txData, setTxData] = useState<{ transactions: WalletTx[]; stats?: TxStats; needsKey?: boolean; error?: string } | null>(null);
@@ -367,7 +367,14 @@ export default function BankPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: historySnapshot,
-          system: `You are BlueAgent Wallet assistant. User: ${name ?? shortAddr(acct)}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · In yield: $${usd(inYield)} at ${bestApy?.toFixed(1) ?? "—"}%. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Focus on Base DeFi and wallet operations.`,
+          // The prompt states balances and no rate. It used to end
+          // "In yield: $X at Y%", where Y was `bestApy` — DefiLlama's top USDC
+          // pool, a market-wide figure, not this user's position. The assistant
+          // read it as the user's own rate and quoted it back. With the yield
+          // entrance closed there is no rate to state at all, and the old
+          // "Focus on Base DeFi" steer pointed answers at a product this page
+          // no longer sells.
+          system: `You are BlueAgent Wallet assistant. User: ${name ?? shortAddr(acct)}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · Supplied, withdraw-only: $${usd(inYield)}. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Help with balances, sending and receiving on Base, and withdrawing supplied funds. Do not recommend yield strategies or quote APYs — this wallet no longer offers them.`,
           model: "fast",
         }),
       });
@@ -442,12 +449,11 @@ export default function BankPage() {
     aavePos: aavePos ?? 0,
     morphoPos: morphoPos ?? 0,
     ethBal: ethBal ?? 0,
-    bestApy,
     netFlowMonth,
     transferCountMonth,
     ethUsdPrice,
     gasSavedUsd,
-  }), [walletUsdc, aavePos, morphoPos, ethBal, bestApy, netFlowMonth, transferCountMonth, ethUsdPrice, gasSavedUsd]);
+  }), [walletUsdc, aavePos, morphoPos, ethBal, netFlowMonth, transferCountMonth, ethUsdPrice, gasSavedUsd]);
 
   // What the connected account IS — read off the live connector + on-chain
   // bytecode, never asserted. Called here (above the early return) because it
@@ -521,9 +527,15 @@ export default function BankPage() {
   // `balancesKnown` guards the loading case too — during the RPC round-trip a
   // funded wallet also looks empty, and it must not flash a grade it is about
   // to contradict.
+  //
+  // The heaviest term used to be `yieldScore` — 40% of the grade, keyed on what
+  // fraction of the balance was supplied into Aave/Morpho, floor 20 for anyone
+  // supplying nothing. With the Earn entrance closed that is a 40% penalty for
+  // declining to use a feature the wallet no longer offers, which every user
+  // now permanently fails and none of them can fix. A score has to be about
+  // something the user can act on, so it is gone and the surviving three
+  // dimensions are reweighted to sum to 1 rather than silently rescaled.
   const scoreReady     = balancesKnown && total > 0;
-  const deployedRatio  = total > 0 ? inYield / total : 0;
-  const yieldScore     = deployedRatio > 0.8 ? 95 : deployedRatio > 0.5 ? 80 : deployedRatio > 0.2 ? 60 : deployedRatio > 0 ? 40 : 20;
   // Diversification degrades honestly when ETH has no price: "holds ETH at all"
   // is still knowable from the balance, only the ">5% of portfolio" tier needs
   // a price. Previously both tiers were decided by a constant.
@@ -532,7 +544,7 @@ export default function BankPage() {
   const gasScore       = ethBal == null ? 50 : ethBal > 0.05 ? 95 : ethBal > 0.01 ? 80 : ethBal > 0.005 ? 60 : 20;
   const actScore       = transferCountMonth > 10 ? 90 : transferCountMonth > 5 ? 75 : transferCountMonth > 1 ? 55 : 20;
   const portfolioScore: number | null =
-    scoreReady ? Math.round(yieldScore * 0.4 + divScore * 0.25 + gasScore * 0.2 + actScore * 0.15) : null;
+    scoreReady ? Math.round(divScore * 0.4 + gasScore * 0.35 + actScore * 0.25) : null;
   const scoreGrade     = portfolioScore == null ? null : portfolioScore >= 85 ? "A" : portfolioScore >= 70 ? "B" : portfolioScore >= 55 ? "C" : "D";
   // Slate, not red, when there is no score — colour is a claim too.
   const scoreColor     = portfolioScore == null ? "#475569"
@@ -552,14 +564,20 @@ export default function BankPage() {
   } else {
     // The two missions that used to sit here — "$X idle, earn ~$Y/mo" and
     // "Enable Auto Earn" — both invited a NEW supply, which is the entrance
-    // this phase closes. Only the passive one below survives: it reports a
-    // position the user already holds rather than asking for another.
+    // the last release closed. Only the passive one below survives: it reports
+    // a position the user already holds rather than asking for another.
     //
     // Auto Earn is gone outright, not hidden. It persisted a flag to
     // localStorage and nothing anywhere read it back, so the toggle promised
     // an auto-deploy that never ran once.
-    if (inYield > 0 && bestApy != null)
-      allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} earning ${bestApy.toFixed(1)}% · ~$${((inYield * bestApy / 100) / 12).toFixed(0)}/month`, color: "#34D399" });
+    //
+    // The surviving line no longer quotes a rate or projects a monthly figure.
+    // Both came from `bestApy` — the TOP pool on DefiLlama, not the pool this
+    // user is actually in — so "$500 earning 6.1% · ~$3/month" was a real
+    // balance multiplied by someone else's yield. The balance is measured; the
+    // return on it was never something this page could read.
+    if (inYield > 0)
+      allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} supplied — withdrawable any time`, action: "Withdraw", onAction: () => openAction("withdraw"), color: "#34D399" });
     if (ethBal != null && ethBal < 0.005)
       allMissions.push({ priority: "warn", icon: "⛽", text: "ETH too low for gas fees", action: "Get ETH", onAction: () => openAction("convert"), color: "#F59E0B" });
     if (new Date() >= new Date("2026-06-25"))
@@ -579,7 +597,7 @@ export default function BankPage() {
   const missionSummary =
     !balancesKnown ? "Reading your balances…" :
     total === 0 ? `Wallet connected · add USDC on ${net.short} to get started.` :
-    inYield > 0 ? `$${usd(walletUsdc)} liquid · $${usd(inYield)} earning ${bestApy?.toFixed(1) ?? "—"}% APY` :
+    inYield > 0 ? `$${usd(walletUsdc)} liquid · $${usd(inYield)} supplied` :
     `$${usd(walletUsdc)} USDC on ${net.short}`;
 
   const hour = new Date().getHours();
@@ -603,38 +621,38 @@ export default function BankPage() {
               below it charted that same ETH — the heading claiming a total it
               never computed. The caption already said "USDC + yield"; the
               heading says it now, and the caption carries the ETH it excludes. */}
-          <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">USDC + YIELD</div>
+          {/* "USDC + YIELD" while the wallet sold yield; plain "USDC" now. The
+              figure itself is unchanged — it still includes a supplied position
+              if one exists, which is why the caption below names it. */}
+          <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">USDC</div>
           <div className="font-mono text-[22px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
-          <div className="font-mono text-[9px] text-slate-600 mt-0.5 mb-2">
-            {net.short}{ethBal != null && ethBal > 0 ? ` · ${ethBal.toFixed(4)} ETH held separately` : ""}
+          <div className="font-mono text-[9px] text-slate-600 mt-0.5">
+            {net.short}
+            {walletState.inYield > 0 ? ` · incl. $${usd(walletState.inYield)} supplied` : ""}
+            {ethBal != null && ethBal > 0 ? ` · ${ethBal.toFixed(4)} ETH held separately` : ""}
           </div>
-          {/* This sparkline is MORPHO'S APY, not the user's balance history — we
-              keep no per-wallet time series. It used to render in #34D399, the
-              exact green of the figure above it, captioned at 8px underneath:
-              a rising green line directly beneath "$0.00" reads as the money
-              going up. Separated by a rule, recoloured to the app's blue
-              (market data, not your data), and labelled ABOVE the chart where
-              the label is read before the shape. */}
-          {(hist?.points?.length ?? 0) > 1 && (
-            <div className="mt-2 pt-2 border-t border-[#1A1A2E]">
-              <div className="font-mono text-[9px] text-slate-500 mb-1">
-                Morpho USDC APY · 30d <span className="text-slate-600">(market, not your balance)</span>
-              </div>
-              <Spark points={hist?.points ?? []} color="#4FC3F7" height={28} />
-            </div>
-          )}
+          {/* A 30-day Morpho APY sparkline used to close this card. It was
+              MARKET data drawn inside the user's balance widget — never their
+              balance history, which this app does not keep — and it survived an
+              earlier fix that only recoloured and relabelled it. The honest
+              version of a chart you cannot draw is no chart. */}
         </div>
 
-        {/* 3. Yield position — only for a wallet that HAS one. It used to render
-            at $0.00 with a "Deploy →" button underneath, which made an empty
-            widget the loudest pitch on the page for the one feature this phase
-            withdraws. Nothing supplied, nothing to say. */}
+        {/* 3. Supplied position — only for a wallet that HAS one. It used to
+            render at $0.00 with a "Deploy →" button underneath, which made an
+            empty widget the loudest pitch on the page for the one feature this
+            phase withdraws. Nothing supplied, nothing to say.
+
+            Headed "EARNING" over a "best X% APY" caption, where X was the top
+            pool on DefiLlama rather than the pool the money is in. The heading
+            is now what we can actually read from chain — a balance — and the
+            only control on it is the way out. */}
         {walletState.inYield > 0 && (
           <div className="mx-3 mb-3 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3">
-            <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-1">EARNING</div>
+            <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-1">SUPPLIED</div>
             <div className="font-mono text-[18px] font-bold text-[#4FC3F7]">${usd(walletState.inYield)}</div>
             <div className="font-mono text-[9px] text-slate-600 mt-0.5">
-              best {bestApy != null ? `${bestApy.toFixed(1)}%` : "—"} APY
+              Aave · Morpho on Base
             </div>
             <button onClick={() => openAction("withdraw")}
               className="w-full font-mono text-[10px] font-bold mt-2 py-1.5 rounded-lg"
@@ -670,26 +688,15 @@ export default function BankPage() {
           </div>
         </div>
 
-        {/* 5. Base Apps grid */}
-        <div className="mx-3 mb-3">
-          <div className="font-mono text-[9px] text-slate-600 mb-1.5">⚡ BASE APPS</div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {[
-              { name: "Aerodrome", url: "https://aerodrome.finance",    color: "#EF4444" },
-              { name: "Moonwell",  url: "https://moonwell.fi",          color: "#A78BFA" },
-              { name: "Morpho",    url: "https://morpho.org",           color: "#4FC3F7" },
-              { name: "Uniswap",   url: "https://app.uniswap.org",      color: "#FF007A" },
-              { name: "Aave",      url: "https://app.aave.com",         color: "#B6509E" },
-              { name: "Compound",  url: "https://app.compound.finance", color: "#00D395" },
-            ].map(p => (
-              <a key={p.name} href={p.url} target="_blank" rel="noopener noreferrer"
-                className="font-mono text-[9px] py-1.5 px-2 rounded-lg text-center hover:opacity-80 transition-opacity"
-                style={{ background: `${p.color}10`, color: p.color, border: `1px solid ${p.color}25` }}>
-                {p.name}
-              </a>
-            ))}
-          </div>
-        </div>
+        {/* 5. ⚡ BASE APPS was here — a six-tile grid of outbound links to
+            Aerodrome, Moonwell, Morpho, Uniswap, Aave and Compound, in six
+            different brand colours, pinned above the network switcher.
+
+            Three separate reasons it goes, any one of which is sufficient:
+            it is a lending/yield shop window in a wallet that no longer sells
+            yield; it is the only block on the page whose every control leaves
+            the product; and its six brand colours were the single largest
+            source of decorative colour in the app (see the palette pass). */}
 
         {/* 6. Spacer */}
         <div className="flex-1" />
@@ -831,8 +838,10 @@ export default function BankPage() {
             <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
               {/* Was "TOTAL BALANCE" — over a stablecoins-only figure, with an
                   "ETH (gas)" row listed underneath it that the total excludes.
-                  A heading is a claim about what was summed. */}
-              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">USDC + YIELD</div>
+                  A heading is a claim about what was summed. Then "USDC + YIELD"
+                  while the wallet sold yield; the rows below still itemise a
+                  supplied position when there is one, so "USDC" covers it. */}
+              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">USDC</div>
               <div className="font-mono text-[28px] font-bold text-[#34D399]">${usd(walletState.balance)}</div>
               <div className="flex flex-col gap-1.5 mt-3">
                 {(walletUsdc ?? 0) > 0 && (
@@ -841,16 +850,20 @@ export default function BankPage() {
                     <span className="text-slate-300">${usd(walletUsdc)}</span>
                   </div>
                 )}
+                {/* Both rows stay — they are the user's money, and a supplied
+                    position that stops being shown is a position the user
+                    cannot find. Already correctly gated on a POSITIVE balance,
+                    so a wallet that never touched Earn sees neither. */}
                 {(aavePos ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
                     <span className="text-slate-500">aUSDC (Aave)</span>
-                    <span className="text-[#34D399]">${usd(aavePos)}</span>
+                    <span className="text-slate-300">${usd(aavePos)}</span>
                   </div>
                 )}
                 {(morphoPos ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
                     <span className="text-slate-500">Morpho</span>
-                    <span className="text-[#A78BFA]">${usd(morphoPos)}</span>
+                    <span className="text-slate-300">${usd(morphoPos)}</span>
                   </div>
                 )}
                 {ethBal != null && ethBal > 0 && (
@@ -978,9 +991,18 @@ export default function BankPage() {
               <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
                 <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-3">WALLET</div>
                 <AssetRow label="USDC" sub="in wallet" usd={walletUsdc} color="#4FC3F7" />
-                <AssetRow label="aUSDC" sub={`Aave · ${aaveApy != null ? `${aaveApy.toFixed(1)}%` : bestApy != null ? `${bestApy.toFixed(1)}%` : "—"} APY`} usd={aavePos} color="#34D399" />
+                {/* The aUSDC row rendered UNCONDITIONALLY, subtitled "Aave ·
+                    4.1% APY" from `bestApy` — the top pool on DefiLlama, not
+                    this position. So a wallet holding nothing in Aave was shown
+                    an "aUSDC" line quoting a rate it wasn't earning, on a pool
+                    it wasn't in, for a feature it could no longer enter. Now
+                    gated like the Morpho row beside it, and subtitled with the
+                    venue rather than a number we cannot attribute. */}
+                {(aavePos ?? 0) > 0 && (
+                  <AssetRow label="aUSDC" sub="supplied · Aave v3" usd={aavePos} color="#4FC3F7" />
+                )}
                 {(morphoPos ?? 0) > 0 && (
-                  <AssetRow label="Morpho" sub={`Gauntlet · ${morphoApy != null ? `${morphoApy.toFixed(1)}%` : "—"} APY`} usd={morphoPos} color="#A78BFA" />
+                  <AssetRow label="Morpho" sub="supplied · Gauntlet USDC Prime" usd={morphoPos} color="#4FC3F7" />
                 )}
                 <div className="mt-2 pt-2 border-t border-[#1A1A2E]">
                   <div className="font-mono text-[9px] text-slate-500 mb-1">GAS RESERVE</div>
@@ -994,37 +1016,13 @@ export default function BankPage() {
                 </div>
               </div>
 
-              {/* Yield rates — shown only to a wallet that already holds a
-                  position, for whom this is context on the money they have in.
-                  For everyone else it was a full-width board advertising a
-                  feature they can no longer enter, with an "Earn →" button on
-                  it. Gated rather than deleted so phase 2 can un-gate it. */}
-              {inYield > 0 && (
-                <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="font-mono text-[9px] text-slate-500 tracking-widest">YIELD RATES · BASE</div>
-                    <button onClick={() => openAction("withdraw")}
-                      className="font-mono text-[9px] px-2 py-1 rounded-lg"
-                      style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
-                      Withdraw →
-                    </button>
-                  </div>
-                  {rates && rates.length ? rates.slice(0, 4).map((r, i) => (
-                    <div key={r.project} className="mb-2">
-                      <div className="flex justify-between font-mono text-[10px] mb-1">
-                        <span className={i === 0 ? "text-[#34D399]" : "text-slate-400"}>{i === 0 ? "★ " : ""}{r.label}</span>
-                        <span className={i === 0 ? "text-[#34D399] font-bold" : "text-slate-300"}>{r.apy.toFixed(2)}%</span>
-                      </div>
-                      <div className="h-1 rounded-full bg-[#1A1A2E] overflow-hidden">
-                        <div className="h-full rounded-full transition-all"
-                          style={{ width: `${Math.min(100, (r.apy / (rates[0].apy + 1)) * 100)}%`, background: i === 0 ? "#34D399" : "#4FC3F740" }} />
-                      </div>
-                    </div>
-                  )) : (
-                    <div className="font-mono text-[10px] text-slate-600">loading rates…</div>
-                  )}
-                </div>
-              )}
+              {/* A "YIELD RATES · BASE" board sat here — the top four DefiLlama
+                  pools with comparison bars. The previous release gated it to
+                  holders only, on the argument that for them it was "context on
+                  the money they have in". It wasn't: it ranked FOUR pools, of
+                  which the user's was at most one, and the only action it
+                  offered was to go somewhere else. Context you can't act on is
+                  an advert with a smaller audience. */}
 
             </div>
 
@@ -1199,18 +1197,11 @@ export default function BankPage() {
               <div className="overflow-y-auto p-4 min-h-0">
                 {panel === "positions" && (
                   <div>
-                    <PositionRow label="Aave v3" pos={aavePos} apy={aaveApy} onManage={() => setPanel("withdraw")} />
-                    <PositionRow label="Morpho · Gauntlet USDC Prime" pos={morphoPos} apy={morphoApy}
+                    {/* A "BEST SAFE RATE · BASE" leaderboard used to follow these
+                        two rows, inside the panel a user opens to LEAVE. */}
+                    <PositionRow label="Aave v3" pos={aavePos} onManage={() => setPanel("withdraw")} />
+                    <PositionRow label="Morpho · Gauntlet USDC Prime" pos={morphoPos}
                       disabled={!morphoVnet} disabledNote="mainnet only" onManage={() => setPanel("withdraw")} />
-                    <div className="mt-3 rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-3">
-                      <div className="font-mono text-[9px] text-slate-600 mb-1.5">BEST SAFE RATE · BASE</div>
-                      {rates && rates.length ? rates.slice(0, 3).map((r, i) => (
-                        <div key={r.project} className="flex items-center justify-between py-0.5 font-mono text-[10px]">
-                          <span className={i === 0 ? "text-[#34D399]" : "text-slate-400"}>{i === 0 ? "★ " : "  "}{r.label}</span>
-                          <span className={i === 0 ? "text-[#34D399]" : "text-slate-300"}>{r.apy.toFixed(2)}%</span>
-                        </div>
-                      )) : <div className="font-mono text-[10px] text-slate-600">loading…</div>}
-                    </div>
                     {/* The button said "Start earning" to anyone with no
                         position — the last remaining control that could open a
                         new deposit. It is now the exit only, and it stays put
@@ -1516,25 +1507,16 @@ function IdentityChip({ label, active, color }: { label: string; active: boolean
 }
 
 // Dependency-free area sparkline for the sidebar
-function Spark({ points, color, height = 48, fill = false }: { points: number[]; color: string; height?: number; fill?: boolean }) {
-  if (!points || points.length < 2)
-    return <div className="font-mono text-[10px] text-slate-700" style={fill ? { width: "100%" } : { height }}>loading chart…</div>;
-  const w = 100, h = 48;
-  const min = Math.min(...points), max = Math.max(...points), range = max - min || 1;
-  const step = w / (points.length - 1);
-  const coords = points.map((p, i) => `${(i * step).toFixed(2)},${(h - ((p - min) / range) * h).toFixed(2)}`);
-  const line = "M" + coords.join(" L");
-  const area = `${line} L${w},${h} L0,${h} Z`;
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={fill ? { width: "100%", height: "100%" } : { width: "100%", height }}>
-      <path d={area} fill={color} fillOpacity="0.12" />
-      <path d={line} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
+// A local `Spark` SVG line-chart component lived here. Its ONE call site was
+// the Morpho APY sparkline in the sidebar, so it goes with it. (BaseTokensCard
+// has its own `Spark` — different file, different component, still in use.)
 
-function PositionRow({ label, pos, apy, onManage, disabled, disabledNote }: {
-  label: string; pos: number | null; apy: number | null; onManage: () => void; disabled?: boolean; disabledNote?: string;
+// `apy` was a prop here, appended to the balance as " · ~4.12%". Dropped with
+// the rest of the rate surface: it came from the Aave reserve read for one row
+// and from DefiLlama's top pool for the other, so two rows in the same list
+// quoted rates measured two different ways and only one of them was this user's.
+function PositionRow({ label, pos, onManage, disabled, disabledNote }: {
+  label: string; pos: number | null; onManage: () => void; disabled?: boolean; disabledNote?: string;
 }) {
   return (
     <div className="flex items-center justify-between py-2 border-b border-[#13131f] last:border-0">
@@ -1542,7 +1524,7 @@ function PositionRow({ label, pos, apy, onManage, disabled, disabledNote }: {
         <div className="font-mono text-[12px] text-slate-200">{label}</div>
         <div className="font-mono text-[10px] text-slate-600">
           {disabled ? <span className="text-slate-700">{disabledNote}</span>
-            : <>{pos != null ? `${pos.toFixed(2)} USDC` : "—"}{apy != null && <span className="text-[#34D399]"> · ~{apy.toFixed(2)}%</span>}</>}
+            : pos != null ? `${pos.toFixed(2)} USDC` : "—"}
         </div>
       </div>
       {!disabled && (
