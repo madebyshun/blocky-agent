@@ -115,11 +115,27 @@ maintenance** and **stopping exposure**. Everything below exists to close that g
 
 ## Git discipline
 
-- Always **`git branch --show-current` before committing.** Work and commit on `dev`, never on `main`.
-  *(Real bug: a tool committed while accidentally on main was lost when a later dev→main merge overwrote it.)*
-- Ship to production via **GitHub Pull Request (dev → main)**, not a local merge. Local `main` is often behind
+- **Branch from `main`, PR into `main`, delete the branch on merge.** One short-lived branch per change.
+  Always **`git branch --show-current` before committing** — never commit directly to `main`.
+  *(Real bug: a tool committed while accidentally on main was lost when a later merge overwrote it.)*
+- **`dev` is RETIRED (2026-09-05). Do not branch from it, commit to it, or re-create it.** The rule until
+  then was "always work on `dev`, PRs go dev → main", and a long-lived shared branch failed twice over:
+  - **It drifted.** By the time it was drained (PR #269) `dev` was **61 files** behind `main` and carried
+    three unshipped features. Only 6 files actually overlapped, so 55 of those files were pure latency —
+    work sitting unshipped for no technical reason.
+  - **It was silently ungated, which is the part that matters.** `.github/workflows/ci.yml` lived on `main`
+    and *not* on `dev`, so the `verify` job — the repo's only universal PR gate — **never ran on a single
+    `dev` commit.** #269 showed no `verify` check at all until `main` was merged in. A branch that is
+    behind is visible; a branch that is behind *on its own CI config* is not, and it quietly exempts
+    itself from the checks everything else passes. Short-lived branches cut from `main` inherit the
+    current workflow by construction and cannot drift out of the gate.
+- Ship to production via **GitHub Pull Request into `main`**, not a local merge. Local `main` is often behind
   origin; local merges create divergence and conflicts.
 - After pushing, the PR triggers a Vercel preview build. **Do NOT merge until that preview is green.**
+- **Stacked PRs: merging the parent does NOT retarget the child unless the parent's branch is deleted.**
+  If you preserve a parent branch (`--delete-branch` omitted), GitHub leaves the child's base pointing at
+  it, and merging the child then lands in the parent instead of `main`. Retarget explicitly with
+  `gh pr edit <child> --base main` before merging, and verify with `gh pr view <child> --json baseRefName`.
 - Commit in **small checkpoints** (one tool / one fix per commit) so a bad change is easy to isolate and revert.
   Avoid one giant "build the whole feature" commit.
 
@@ -134,8 +150,9 @@ maintenance** and **stopping exposure**. Everything below exists to close that g
 ## Definition of done
 
 A change is done only when: (1) `npx next build` is green, (2) the handler returns correct output when tested via
-`HANDLERS[id]`, (3) it's committed on `dev` with a clear message, (4) for a new tool, it's registered in BOTH
-`HANDLERS` and `AGENT_TOOLS` and catalog count == handler count. **State each of these explicitly when reporting done.**
+`HANDLERS[id]`, (3) it's committed with a clear message on a branch cut from `main`, and opened as a PR into
+`main`, (4) for a new tool, it's registered in BOTH `HANDLERS` and `AGENT_TOOLS` and catalog count == handler
+count. **State each of these explicitly when reporting done.**
 
 ---
 
@@ -266,7 +283,10 @@ chore:    tooling, deps, config
 
 ## Branch policy
 
-**Always work on `dev`.** Never commit directly to `main`. PRs go `dev → main`.
+**Cut a short-lived branch from `main`, PR it back into `main`, delete it on merge.** Never commit
+directly to `main`. **`dev` is retired (2026-09-05) — do not branch from it or re-create it**; see
+Git discipline above for the two measured reasons (61-file drift, and `dev` silently lacking the CI
+workflow so `verify` never ran on it).
 
 ---
 
@@ -284,7 +304,7 @@ Pipeline for every change, in order:
 2. npx tsc --noEmit -p tsconfig.json   # type errors (fast) — run from apps/web
 3. npm run build                        # next build — lint, prerender, server/client import errors
 4. Manual runtime test at localhost     # logic/UX bugs a build can't catch
-5. Only when 2–4 PASS → open a PR (dev→main); merge only when the Vercel preview is green
+5. Only when 2–4 PASS → open a PR (branch→main); merge only when the Vercel preview is green
 ```
 
 Notes:

@@ -297,11 +297,11 @@ fake.
 - Do not seed Robinhood $BLUEAGENT liquidity from the treasury. Let the
   curve fill organically — that's the whole point of Virtuals.
 - Do not pre-share the contract address to any private channel.
-- Do not deploy from `main`. Update `apps/web` on `dev` → PR → merge
-  only after the Vercel preview is green.
+- Do not commit straight to `main`. Update `apps/web` on a branch cut from
+  `main` → PR → merge only after the Vercel preview is green.
 
 ---
 
 _Last updated: matches the state of `/blueagent-on-robinhood` and
-`/docs/blueagent-on-robinhood` on `dev` at the time of writing. If those
+`/docs/blueagent-on-robinhood` in the repo at the time of writing. If those
 pages change, this doc probably needs to change too._

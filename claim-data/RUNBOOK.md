@@ -84,8 +84,9 @@ The `-f` is required and deliberate: those paths are gitignored precisely so a
 fixture or dry-run build can never be committed by accident and served as if it
 were the real table. Overriding it here is a conscious act.
 
-Commit on `dev`, PR to `main`, merge when the preview is green. Post the root
-publicly. Note the value — you will compare it against the contract in step 5:
+Commit on a branch cut from `main`, PR to `main`, merge when the preview is
+green. Post the root publicly. Note the value — you will compare it against the
+contract in step 5:
 
 ```
 MERKLE ROOT  0x________________________________________________________________
@@ -201,8 +202,8 @@ Then **redeploy**. Env changes only take effect on a new build, and this flag in
 particular is compiled into the client bundle — an existing deployment will keep
 serving the gated-off page no matter what the dashboard says.
 
-Ship it the normal way: commit on `dev`, PR to `main`, wait for the Vercel
-preview to go green, merge. Do not deploy straight to production.
+Ship it the normal way: commit on a branch cut from `main`, PR to `main`, wait
+for the Vercel preview to go green, merge. Do not deploy straight to production.
 
 Before merging, on the preview URL:
 
