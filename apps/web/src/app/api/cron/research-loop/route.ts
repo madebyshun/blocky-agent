@@ -1,7 +1,41 @@
 /**
  * Blue Agent — Research Loop
  *
- * Cron: every 6 hours (0 0,6,12,18 * * *)
+ * ⚠ UNSCHEDULED 2026-09-05. The route still works and is still reachable with
+ * CRON_SECRET; it simply no longer runs on a timer. Reported unused by ShunTr,
+ * and every run cost a burst of Upstash reads+writes against the budget that has
+ * suspended the database three times (#148) — the schedule was the live cost,
+ * not the code. To re-enable, re-add the entry to `apps/web/vercel.json`; crons
+ * are declared THERE, not at the repo root, which has no vercel.json at all.
+ *
+ * It was NOT deleted, because unlike the surfaces in the "retiring a surface"
+ * rule this one has live readers:
+ *   • it is the sole writer of `aeon:deep-research`, which five PAID x402
+ *     handlers read (base-grant-finder, builder-deep-dd, investor-memo,
+ *     multi-agent-workflow, stack-recommender);
+ *   • /api/signals serves `research:signals:latest` / `:history`, and
+ *     /api/health advertises that endpoint.
+ *
+ * Unscheduling cannot serve stale data silently, and cannot switch on
+ * fabrication in a paid tool. Both properties were read out of the code before
+ * the schedule was removed, not assumed:
+ *   • `aeon:deep-research` — setAeonOutput writes a 26h TTL and getAeonOutput
+ *     rejects anything older than 25h, so the key expires about a day after the
+ *     last run. All five readers go through the same local `aeon()` helper,
+ *     which returns null, and each then substitutes a short generic string
+ *     (`?? "Base ecosystem"`, `?? target`, …). They lose Aeon context; not one
+ *     of them is instructed to invent it. base-grant-finder never read its own
+ *     result at all — it grounds on the CURATED list instead.
+ *   • `research:signals:latest` — TTL is 7h (KV_TTL_SIGNALS below) while the
+ *     live schedule was daily, so the key was ALREADY expired for ~17h of every
+ *     24 and /api/signals already answered `hasData: false` for most of the day.
+ *     Unscheduling makes permanent a state that was already the majority one.
+ *   • `research:signals:history` — 14d TTL, drains over two weeks.
+ *
+ * Cron (historical): the header below described `0 0,6,12,18 * * *`; the last
+ * schedule actually live in vercel.json was `0 6 * * *`, daily. That drift is
+ * what left the 7h signals TTL with a 17h/day hole in it.
+ *
  * Autonomous research loop for Base builders.
  *
  * Different from Daily Brief:

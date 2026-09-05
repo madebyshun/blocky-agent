@@ -21,13 +21,19 @@ describing a cadence nothing ran at.
 | `/api/cron/blue-hood/brief-worker` | `*/3 * * * *` | every 3 min | drains `bh:brief:queue` (async-brief refactor). Pops up to `BH_BRIEF_BATCH` (default 8) arrow ids, fetches A4 brief per arrow, attaches, writes chat card, runs Web Push fan-out. Poll cycle no longer blocks on A4. `BH_BRIEF_BATCH` clamped [1, 20]. Auth: `Authorization: Bearer $CRON_SECRET`. |
 | `/api/cron/blue-hood/alert-drain` | `*/2 * * * *` | every 2 min | drains the pending-alert queue to watchlist subscribers (Telegram DM + Web Push). Auth: `Authorization: Bearer $CRON_SECRET`. |
 | `/api/cron/blue-hood/archive-watch` | `7 * * * *` | hourly, at :07 | watchdog over the arrow archive — detects holes in the series and reports them rather than silently backfilling. Auth: `Authorization: Bearer $CRON_SECRET`. |
-| `/api/cron/research-loop` | `0 6 * * *` | daily 06:00 UTC | Autonomous builder-research loop; writes Aeon KV via `setAeonOutput`. Unrelated to Blue Hood; here for the whole-app view. |
 | `/api/cron/user-tasks` | `*/5 * * * *` | every 5 min | Blue Chat background scheduled tasks — fires the tasks a user switched to Background so they run with the tab closed. Unrelated to Blue Hood; here for the whole-app view. Auth: `Authorization: Bearer $CRON_SECRET`. |
 
 The `/api/cron/feed/daily` row was removed on 2026-09-02 when Blue Feed was
 retired and its cron deleted from `vercel.json`. `research-loop` was labelled
 "Blue Feed autonomous research" here, which was never true — it feeds Aeon KV
-and is untouched by the retirement.
+and was untouched by the retirement.
+
+`/api/cron/research-loop` (`0 6 * * *`, daily 06:00 UTC) was **unscheduled
+2026-09-05** and moved to Manual-only below. The route is unchanged and still
+reachable with CRON_SECRET; only the timer is gone. Reason: reported unused, and
+each run burned a burst of Upstash reads+writes against the budget that has
+suspended the database three times (#148). What it feeds and how each reader
+degrades is written out in the route header — read that before re-adding it.
 
 `/api/cron/user-tasks` is the only cron here that **spends real user credits**,
 so three of its behaviours are load-bearing and are documented in the route
@@ -57,6 +63,7 @@ header rather than inferred from the cadence above:
 
 | Path | Notes |
 |---|---|
+| `GET /api/cron/research-loop` | Autonomous builder-research loop; writes `aeon:deep-research` via `setAeonOutput` (26h TTL) and `research:signals:latest` (7h TTL) / `:history` (14d TTL). **Unscheduled 2026-09-05** — route intact, timer removed. Five paid x402 handlers read the Aeon key and each degrades to a generic string when it expires; none fabricates. Auth: CRON_SECRET. |
 | `POST /api/cron/blue-hood/purge?confirm=1` | Wipe all arrow records + reset serial counter. Used before prod launch so `#0001` is the engine's first real arrow. Auth: CRON_SECRET. |
 | `POST /api/cron/blue-hood/seed-test-arrow` | Dev-only synthetic arrow (always `origin: "seeded"`, hidden from public feed). Local UI smoke path. Endpoint 404s in prod. |
 | `GET /api/hood/llm-health` | Manual poll of Virtuals, the only LLM gateway. Called by `scripts/blue-hood-smoke.ts` (see BH_SMOKE_STRICT). |

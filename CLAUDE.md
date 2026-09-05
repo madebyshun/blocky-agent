@@ -75,9 +75,14 @@ how good the prompt is. **Prompts do not prevent hallucination; data sources do.
 - **JSON parsing from LLMs must be lenient.** LLMs wrap JSON in fences and add preamble. Never use raw
   `JSON.parse(text)` — strip fences, slice from first `{` to last `}`, then parse inside try/catch. Reuse the
   existing parse helper pattern in the x402 handlers.
-- **Aeon data comes from Vercel KV** (`getAeonOutput(skill)` in `_lib/aeon-kv.ts`), fed by the research-loop cron.
-  Do NOT fetch an Aeon `SKILL.md` from GitHub and ask the LLM to "synthesize from training knowledge" — that
-  fabricates. Only the skills live in KV are real.
+- **Aeon data comes from Vercel KV** (`getAeonOutput(skill)` in `_lib/aeon-kv.ts`), written by
+  `/api/cron/research-loop`. Do NOT fetch an Aeon `SKILL.md` from GitHub and ask the LLM to "synthesize
+  from training knowledge" — that fabricates. Only the skills live in KV are real.
+  ⚠️ That cron was **unscheduled 2026-09-05** (Upstash budget, #148 — route intact, timer removed), so
+  `aeon:deep-research` is expired in production and every reader takes its `null` path. That is designed,
+  not a regression: the five paid x402 readers lose Aeon context, they do not invent it. Do not "fix" an
+  empty Aeon key by generating one — re-run the route with CRON_SECRET, or re-add the schedule to
+  `apps/web/vercel.json` after reading the route header.
 
 ## Retiring a surface (luật chống-bỏ-rơi)
 
