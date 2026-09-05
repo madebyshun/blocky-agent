@@ -71,8 +71,14 @@ const APP_SEGMENTS = new Set([
   // `profile` and `terminal` removed 2026-07 (0.1 route consolidation) — both
   // 301 to their canonical home via culledRedirect() below (profile →
   // dashboard, terminal → chat), so they intentionally do NOT rewrite into
-  // /app/* here. Their src/app/**/{profile,terminal} page stubs are kept as
-  // dead code (smaller diff, mirrors the /bank precedent).
+  // /app/* here.
+  //
+  // This used to add "their page stubs are kept as dead code". That is no longer
+  // true of either: /terminal's stub had already been deleted by the time anyone
+  // re-read this line, and /profile's went on 2026-09-05 (#29) along with its
+  // orphaned editor, its API route and its lib. So culledRedirect() below is now
+  // the ONLY thing keeping these URLs resolving — there is no page underneath to
+  // catch them if a branch is removed. scripts/culled-routes-check.ts asserts it.
   //
   // `wallet` SHIPPED (#291) — the "Wallet support" pillar, live (noindex) at
   // /app/wallet. It reuses the fully-built BlueBank dashboard (real wagmi
@@ -140,8 +146,11 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
  * now live inside a canonical product tab. 301 on EITHER host (runs before the
  * host reshuffle, like archivedRedirect) so the redirect is identical on
  * blueagent.dev and app.blueagent.dev — and so external / legacy deep links
- * never 404 (the non-negotiable of 0.1). Files are kept as dead code rather
- * than deleted (smaller diff, mirrors the /bank precedent); only routing is cut.
+ * never 404 (the non-negotiable of 0.1). Originally only routing was cut and the
+ * page files were kept as dead code; that has since been undone per surface as
+ * each was confirmed unreachable, so do NOT assume a page exists behind any
+ * branch below. /profile's went on 2026-09-05 (#29). Every branch here is
+ * load-bearing on its own: delete one and that URL 404s the same day.
  *   /code[/…]     → marketing /docs        (the code console folded into docs)
  *   /micro[/…]    → app Hub                (micro-apps were the ancestors of Hub tools)
  *   /terminal[/…] → Blue Chat              (the browser terminal folded into /chat)
