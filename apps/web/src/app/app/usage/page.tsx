@@ -1,22 +1,32 @@
 "use client";
 
-// /app/usage — real credit usage for the connected wallet.
+// /app/usage — everything the connected wallet has CONSUMED from BlueAgent.
 //
-// 100% real data: reads GET /api/credits/balance/[address] (getBalance in the
-// credit ledger). No mock numbers. Shows the two spendable buckets — the daily
-// tier allowance (use-it-or-lose-it) and the USDC-topup pool — plus all-time
-// spend and the recent ledger events. "Top up" opens the same TopUpModal used
+// Two rails, one page, because they answer one question:
+//   • credits — the daily tier allowance and the USDC-topup pool, read from
+//     GET /api/credits/balance/[address] (getBalance in the credit ledger)
+//   • USDC — the per-tool agent spend console, which used to sit on /app/wallet
+//
+// 100% real data, no mock numbers. "Top up" opens the same TopUpModal used
 // everywhere; the pricing table lives on /plans.
 //
 // This is the ONE page that breaks the credit arithmetic down. The dashboard
 // used to reprint three of these four figures from the same endpoint, so the
 // two could disagree — and did. It now shows the balance and links here.
+//
+// SpendConsole moved here for the same reason, one level up: the wallet showed
+// "what did I spend on BlueAgent" in USDC while this page showed it in credits,
+// both sourced from the same ledger, on two pages a user reaches separately.
+// The split is now by SUBJECT, not by unit — /app/wallet is money you hold and
+// move, /app/usage is what you consumed. The console keeps the two units in
+// separate columns; see its own header for why they are never added.
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useWallet } from "@/hooks/useWallet";
 import { WalletPickerModal } from "@/components/WalletPicker";
 import TopUpModal from "@/components/TopUpModal";
+import SpendConsole from "@/components/SpendConsole";
 import type { BalanceSummary, LedgerEvent } from "@/lib/credit-ledger";
 
 // Compact "time ago" for ledger rows (ms epoch → "3m", "2h", "5d").
@@ -122,7 +132,7 @@ export default function UsagePage() {
         <div className="min-w-0">
           <p className="font-mono text-xs text-[#4FC3F7] tracking-widest truncate">// USAGE</p>
           <p className="font-mono text-[10px] text-slate-700 mt-1 truncate">
-            Credit balance & activity · {label ?? "no wallet"}
+            Credits & agent spend · {label ?? "no wallet"}
           </p>
         </div>
         {isConnected && (
@@ -215,6 +225,24 @@ export default function UsagePage() {
                   data!.recent.map((ev, i) => <EventRow key={`${ev.ts}-${i}`} ev={ev} />)
                 )}
               </div>
+            </div>
+
+            {/* ── Rail two: the per-tool spend console ─────────────────────────
+                Everything above is the credit rail — what you hold, and the raw
+                events that moved it. This is both rails at once, aggregated by
+                TOOL, which is the join no block explorer can make: the tool id
+                only ever existed in the request that triggered the payment.
+
+                Deliberately below the ledger, not interleaved with it. The two
+                answer different questions at different scopes — the cards are
+                lifetime, the console's rails are a bounded window and label
+                themselves as such — and stacking a windowed figure next to a
+                lifetime one invites the subtraction neither supports. */}
+            <div>
+              <p className="font-mono text-[10px] text-slate-600 tracking-widest uppercase mb-2">
+                Per tool
+              </p>
+              <SpendConsole address={address} />
             </div>
           </div>
         )}

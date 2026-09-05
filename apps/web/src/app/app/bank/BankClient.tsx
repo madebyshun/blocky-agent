@@ -11,6 +11,7 @@
 // already hold, and the exit from it. See the `earn*` block below.
 
 import { useState, useEffect, useRef, useMemo } from "react";
+import Link from "next/link";
 import { useAccount, useReadContract, useBalance, useSwitchChain } from "wagmi";
 import { useWalletDisconnect } from "@/lib/walletSession";
 import { useWallet } from "@/hooks/useWallet";
@@ -36,8 +37,6 @@ import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payme
 import OrdersPanel from "./OrdersPanel";
 import { B20_ENABLED } from "@/lib/orders";
 import TransactionHistory, { type WalletTx } from "./TransactionHistory";
-// Shared with the Blue Hub home — lives in components/, not this route folder.
-import SpendConsole from "@/components/SpendConsole";
 import TokenTable from "./TokenTable";
 import StockTable from "./StockTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
@@ -969,17 +968,29 @@ export default function BankPage() {
 
           </div>
 
-          {/* ── Section 1.5: AGENT SPEND ───────────────────────────────────
-              Deliberately ABOVE the portfolio/yield grid, not tucked beside it.
-              Balances, allocation donuts and APY tables are what every wallet
-              on Base already shows; this panel is the only thing on the page
-              that no other wallet CAN show, because the tool behind a payment
-              exists only in the request we served. Ordering the page by what is
-              differentiated rather than by what is conventional is the point of
-              the section, so please don't "tidy" it back down the page. */}
-          <div className="mb-3">
-            <SpendConsole address={acct} />
-          </div>
+          {/* ── Section 1.5: a link where the AGENT SPEND panel used to be ──
+              The full <SpendConsole> lived here. It answers "what did I spend
+              on BlueAgent", which is the same question /app/usage exists to
+              answer with credits — two pages, one subject, and the numbers came
+              from the same ledger, so they could disagree without either being
+              wrong. The panel moved to /app/usage; this page keeps the money
+              you hold and move, that page keeps what you consumed.
+
+              A link, not a silent removal: the console is still the one thing
+              here no generic Base wallet can show, and dropping the entrance to
+              it would lose the feature rather than relocate it. */}
+          <Link
+            href="/app/usage"
+            className="flex items-center justify-between mb-3 rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] px-4 py-3 hover:border-[#4FC3F730] transition-colors"
+          >
+            <div className="min-w-0">
+              <div className="font-mono text-[9px] text-slate-500 tracking-widest">AGENT SPEND</div>
+              <div className="font-mono text-[10px] text-slate-600 mt-0.5">
+                What your payments bought, per tool — with your credit balance.
+              </div>
+            </div>
+            <span className="font-mono text-[10px] text-[#4FC3F7] flex-shrink-0 ml-3">Usage →</span>
+          </Link>
 
           {/* ── Section 2: Wallet+Yield | AI+Portfolio ────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3 items-start">
@@ -1554,11 +1565,16 @@ function BankLanding() {
   // The second bullet used to promise "Earn ~X% APY on idle USDC". It is the
   // first thing an unconnected visitor reads, and it sold the one feature this
   // phase withdraws — so it advertised a door that is now closed. Replaced with
-  // the agent spend console, which is the thing on this page no other wallet
-  // can show (see the SpendConsole comment above).
+  // the agent spend console, which is the thing about this product no other
+  // wallet can show.
+  //
+  // The console itself now lives on /app/usage, so the bullet says where. A
+  // landing bullet describing a panel that is no longer on the page it lands
+  // you on is the same defect as the APY promise it replaced: copy that outlived
+  // the thing it described.
   const features: { icon: string; title: string; body: string }[] = [
     signIn,
-    { icon: "📊", title: "See every payment your agent made", body: "Each x402 tool call your agent paid for, itemised in USDC — the ledger a generic wallet cannot reconstruct." },
+    { icon: "📊", title: "See every payment your agent made", body: "Each x402 tool call your agent paid for, itemised in USDC on your Usage page — the ledger a generic wallet cannot reconstruct." },
     { icon: "➡", title: "Send to any wallet or name.base", body: "Pay anyone on Base by address or Basename. Instant, 24/7, no cut-off times." },
     { icon: "🔒", title: "Non-custodial — you hold the keys", body: "You sign every transaction from your own wallet. BlueAgent never holds your keys or funds." },
     { icon: "🌐", title: "On-chain, withdraw anytime", body: "Your money lives on Base, not in a silo. Pull it out whenever you want, in one click." },

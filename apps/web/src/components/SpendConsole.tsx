@@ -9,10 +9,17 @@
  * per day, across both rails that pay for a Hub call.
  *
  * Mounted in TWO places, which is why it lives in `components/` and not under a
- * route folder: /wallet (the spend console proper) and the Blue Hub home, where
- * the money is actually spent. Hub gates it on a connected address so the
- * `disconnected` branch below is a /wallet-only state — but the branch has to
- * exist regardless, and getting it wrong is what made this file move at all.
+ * route folder: /app/usage (the spend console proper) and the Blue Hub home,
+ * where the money is actually spent. Neither mount gates on a connected
+ * address, so the `disconnected` branch below is reachable from both — getting
+ * that branch wrong is what made this file move out of a route folder at all.
+ *
+ * It used to hang off /app/wallet. Moved 2026-09 because the wallet and
+ * /app/usage were answering the SAME question — "what did I spend on
+ * BlueAgent" — from the same ledger, in different units, on two pages a user
+ * reaches separately. Two renderings of one number can disagree, and the split
+ * is now by subject: /app/wallet is money you hold and move, /app/usage is what
+ * you consumed. The wallet keeps a link where the panel was.
  *
  * ─── Two columns, never one ─────────────────────────────────────────────────
  *
@@ -172,9 +179,11 @@ export function emptyState(d: SpendSummaryDTO): "none" | "unreadable" | "rows" {
  * "loading", "failed" and "disconnected" are each NOT "zero", and they are not
  * each other either. `disconnected` means there is no address to ask about:
  * nothing is in flight, nothing failed, no answer is pending. This used to be
- * folded into `loading`, which was survivable on /wallet (where the page is
- * about a connected wallet) and is a visible lie on Hub, where most visitors
- * are not connected: a spinner that never resolves, for a request never made.
+ * folded into `loading`, which was survivable on the wallet page (which gates
+ * its whole body on a connected wallet) and is a visible lie on Hub, where most
+ * visitors are not connected: a spinner that never resolves, for a request
+ * never made. /app/usage gates on connection too, but only outside this panel —
+ * the branch stays load-bearing.
  */
 type Load =
   | { s: "disconnected" }
