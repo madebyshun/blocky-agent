@@ -1,14 +1,17 @@
 "use client";
 
-// The account control at the foot of the app sidebar: who you are, and the four
-// places that are about YOU rather than about the product.
+// The account control at the foot of the app sidebar: who you are, the places
+// that are about YOU rather than about the product, and the way out.
 //
 // WHY IT EXISTS: the shell had a nav group LABELLED "Account" that contained
-// Plans and Docs — a pricing page and a manual. There was no route to your own
-// profile, no way to see which identity was signed in, and no sign-out anywhere
-// except buried inside the wallet picker modal. You could be signed in as one
-// person, looking at another person's balance, with nothing on screen naming
-// either.
+// Plans and Docs — a pricing page and a manual. There was no way to see which
+// identity was signed in, and no sign-out anywhere except buried inside the
+// wallet picker modal. You could be signed in as one person, looking at another
+// person's balance, with nothing on screen naming either.
+//
+// The load-bearing part is therefore the identity header and Sign out, not the
+// link list: `/usage` and `/plans` also sit in the nav rail, and repeating them
+// here is a convenience. Sign out exists nowhere else.
 //
 // WHAT IT DELIBERATELY DOES NOT DO: it shows no balance, no credit count and no
 // spend figure. Those live on /wallet and /usage, which this menu links to. A
@@ -37,8 +40,23 @@ const SOURCE_LABEL: Record<IdentitySource, string> = {
   address: "Wallet",
 };
 
+// ⚠️ THERE IS NO `/profile` ROW HERE ON PURPOSE, and adding one back without
+// also building the page would ship a menu item that lies.
+//
+// MEASURED, not assumed: `/profile` was culled in the 2026-07 route
+// consolidation. `src/middleware.ts:159` permanently 301s it to `/dashboard`,
+// and `src/app/app/profile/page.tsx` is a bare `redirect("/dashboard")` stub.
+// So a "Profile — identity & connected accounts" row would bounce the user to
+// a page titled "Credits, usage, activity" — a different subject, and one that
+// duplicates the Usage row two lines below it.
+//
+// This was caught by rendering the shell and following the link, NOT by CI:
+// `scripts/link-liveness-check.ts` states its scope at line 28 as "absolute
+// outbound links only, deliberately", so an internal <Link href> pointing at a
+// dead route is invisible to it. Do not assume the checker covers this.
+//
+// The row returns in the SAME commit that makes `/profile` a real page.
 const ITEMS: { href: string; label: string; hint: string }[] = [
-  { href: "/profile", label: "Profile", hint: "Identity & connected accounts" },
   { href: "/usage", label: "Usage", hint: "Credits & agent spend" },
   { href: "/plans", label: "Plans", hint: "Tiers & top-ups" },
 ];
