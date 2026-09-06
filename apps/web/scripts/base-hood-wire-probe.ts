@@ -93,6 +93,7 @@ function healthyQuote(over: Partial<BaseStockQuote> = {}): BaseStockQuote {
     feed_updated_at: Math.floor(Date.now() / 1000) - 60,
     feed_age_seconds: 60,
     feed_is_stale: false,
+    price_in_band: true,
     dex_price_usd: dex,
     dex_pool_address: "0x1111111111111111111111111111111111111111",
     dex_liquidity_usd: 100_000,
@@ -311,10 +312,16 @@ async function gate4_graderChainRouting() {
   if (baseGradeable) {
     check("Base arrow → readGradePrices returned prices (routed to Base source)", basePrices !== null);
     if (basePrices) {
-      // oracle sanity — a real multiplier-adjusted NVDA share price (~$215),
-      // NOT $215 × 1e18. Proves the Base multiplier path, not a raw feed answer.
-      check("Base grade oracle in NVDA sane band [$120,$340]",
-        basePrices.oracle >= 120 && basePrices.oracle <= 340, `$${basePrices.oracle.toFixed(2)}`);
+      // Oracle sanity — a real multiplier-adjusted NVDA share price, NOT
+      // share × 1e18. Proves the Base multiplier path, not a raw feed answer.
+      // Read from the REGISTRY band rather than a literal: this probe and
+      // `readBaseStockQuote` are asserting the same property (magnitude break,
+      // not market move), so two hand-maintained copies could only drift apart
+      // — and the tighter one would start failing on a real move that the
+      // runtime happily accepts, which reads as a bug in the wrong component.
+      check(`Base grade oracle in NVDA registry saneBand [$${nvda.saneBand.lo},$${nvda.saneBand.hi}]`,
+        basePrices.oracle >= nvda.saneBand.lo && basePrices.oracle <= nvda.saneBand.hi,
+        `$${basePrices.oracle.toFixed(2)}`);
       // The load-bearing proof it read BASE not RH: drift/dex triple-match the
       // independent Base read. RH's NVDA pool drift is an independent number;
       // matching it here to this tolerance is not possible by coincidence.
