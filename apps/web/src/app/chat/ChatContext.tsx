@@ -23,7 +23,7 @@ import { useScheduleSync, type UseScheduleSync } from "./use-schedule-sync";
 import { useSiweSignIn } from "./use-siwe-signin";
 import {
   creditCost, deductCredits, addCredits,
-  getNextRefresh, refreshCreditsIfNeeded, getDailyCr,
+  getNextRefresh, refreshCreditsIfNeeded, getDailyCr, GUEST_DAILY,
   setCredits as setCreditsLS,
 } from "@/lib/credits";
 import {
@@ -118,8 +118,13 @@ interface ChatContextValue {
 // Pre-connection default holderTier. Token-free: no balance, no discount.
 // The "Guest" label surfaces whenever no wallet is connected; a connected
 // wallet overrides this via onWalletChange → getTierInfo ("Member").
+//
+// `dailyCr` is GUEST_DAILY, not a literal: it used to be a hardcoded 500 — the
+// MEMBER allowance — so between mount and the first `onWalletChange` the
+// composer footer (`holderTier.dailyCr` in ChatInput) told a guest they had
+// "500 cr/day" while the balance beside it counted down from 100.
 const GUEST_TIER: TierInfo = {
-  tier: "Guest", blueBalance: 0, dailyCr: 500, discount: 0, color: "#4FC3F7",
+  tier: "Guest", blueBalance: 0, dailyCr: GUEST_DAILY, discount: 0, color: "#4FC3F7",
 };
 
 function formatCountdown(ms: number): string {

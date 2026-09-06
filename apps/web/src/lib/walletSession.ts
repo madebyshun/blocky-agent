@@ -19,6 +19,16 @@ import { useDisconnect } from "wagmi";
  * sessionStorage (not localStorage) is deliberate: the intent lives for the tab/
  * webview session only. Fully closing and reopening the app is a fresh intent —
  * auto-connect should resume then, which is the expected host behaviour.
+ *
+ * ⚠️ THIS IS NOT THE ONLY DISCONNECT FLAG. wagmi's own `disconnect()` — which
+ * `useWalletDisconnect` below calls — separately persists
+ * `<connectorId>.disconnected` in **localStorage**, and `clearUserDisconnected`
+ * does not touch it. The two disagree by design of the libraries, not of this
+ * file, and on the Privy tree the persistent one silently won: it blocks
+ * `@privy-io/wagmi`'s auto-reconnect for ever, so one tap of "Disconnect"
+ * detached a signed-in user's embedded wallet on every future visit. See
+ * `lib/privy/wallet-activate.tsx`, which restores the per-tab semantics this
+ * header describes.
  */
 const KEY = "ba:userDisconnected";
 
