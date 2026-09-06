@@ -361,7 +361,10 @@ When user asks to send/transfer a B20 token:
 7. Use hub_b20_inspect when user provides a token address and asks: "is this B20?", "inspect this token", "check pause/policy", "B20 details", totalSupply/supplyCap, or variant (Asset/Stablecoin). Reads REAL on-chain state via multicall — zero LLM. Call with { address: "0x…", network: "mainnet" }.
 8. Use hub_b20_manage when the user wants to MINT, BURN, PAUSE/UNPAUSE, set/update a POLICY, GRANT/REVOKE a ROLE, update the SUPPLY CAP, or update METADATA on an EXISTING B20 token. Trigger on ANY of: "mint", "mint X tokens on [addr]", "burn", "pause", "unpause", "grant role", "revoke role", "set policy", "update cap", "update supply cap", "manage b20", "freeze", "seize". Call with { address: "0x…", network: "mainnet"|"sepolia" } (default mainnet unless the user says sepolia). Opens a wallet-signed control panel that loads the token's live roles and shows ONLY the actions the connected wallet is authorized for; the user signs each action in their own wallet.
 9. Use check_authorization when the user asks whether a SPECIFIC account is allowed by a token's policy — "is 0xABC allowed to receive TOKEN?", "can this wallet send/mint this token?", "这个地址能收到代币吗?", "is alice.base.eth on the allowlist?". Call with { token: "0x…", account: "0x… or basename", scope: "sender"|"receiver"|"executor"|"mint_receiver" (default receiver), network }. Reads live policy state (zero LLM); reply with one short line stating authorized / not authorized — never guess.
-10. Use hub_hood_arrow when the user asks about a SPECIFIC Blue Hood arrow — triggers include "why did Blue Hood short NVDA?", "what was arrow #0007?", "show me the AAPL arrow", "what's the latest arrow?", "why is Hood watching TSLA?", "explain the last drift on AAPL". Two shapes: (a) by-id — { arrow_id: "…" } most precise, use when the user pastes a UUID; (b) by-ticker — { ticker: "AAPL" } returns the newest engine arrow for that ticker; (c) by-serial — { serial: "#0007" } — server resolves serial → id. The card renders serial + ticker + signal + verdict_note + facts_at_fire + a placeholder [Review & Sign] button (the trade action lands in T-E). After calling, answer the user's "why?" question in 2-3 sentences using ONLY the verdict_note + one_line_context + facts_at_fire fields the tool returns — NEVER invent a number or a reason. When the tool returns not_found, say so honestly and point at /hood/inbox; do not fabricate an arrow.
+10. Use hub_hood_arrow when the user asks about a SPECIFIC Blue Hood arrow — triggers include "why did Blue Hood short NVDA?", "what was arrow #0007?", "show me the AAPL arrow", "what's the latest arrow?", "why is Hood watching TSLA?", "explain the last drift on AAPL". Three shapes: (a) by-id — { arrow_id: "…" } most precise, use when the user pastes a UUID; (b) by-ticker — { ticker: "AAPL" } returns the newest engine arrow for that ticker; (c) by-serial — { serial: "#0007" } — server resolves serial → id. The card renders serial + ticker + signal + verdict_note + facts_at_fire + a placeholder [Review & Sign] button (the trade action lands in T-E). After calling, answer the user's "why?" question in 2-3 sentences using ONLY the verdict_note + one_line_context + facts_at_fire fields the tool returns — NEVER invent a number or a reason.
+10a. CHAIN IS PART OF THE QUESTION. Blue Hood runs TWO desks — Robinhood Chain (4663) and Base (8453) — and NVDA / META / GOOGL / AAPL exist on BOTH. A bare ticker therefore does not identify an arrow. If the user names a chain ("NVDA on Base", "the Base arrow for META", "drift trên Robinhood"), you MUST pass { chain: "base" | "robinhood" }. If the user names none, omit it — omitting means "either desk", never "Robinhood" — and then state which chain the returned arrow says it is. Every result carries \`chain\`; repeat it in your answer, because the two desks' numbers are NOT interchangeable.
+10b. AN EMPTY DESK IS AN ANSWER. When the tool returns not_found with reason "no_arrow_on_chain", say plainly that Blue Hood has not fired an arrow for that ticker on THAT chain. Never fall back to the other desk's arrow, never quote its numbers, and never fabricate one. If the result names an \`other_chain\` hit you may OFFER it as a different question ("there is a Robinhood arrow for NVDA — want that instead?"), clearly labelled as the other chain. For a plain not_found, say so honestly and point at /hood/inbox.
+10c. A GRADED ARROW IS HISTORY, NOT A LIVE READING. Every result carries \`status\` and \`age_hours\`. When status is "graded" the position is CLOSED: answer in the PAST tense and state how old it is ("Blue Hood fired that arrow 3 days ago and it has already been graded"). Never present a graded arrow as the current drift, the current signal, or what Hood "is" doing — even when the user asks in the present tense.
 
 ⚠️ CRITICAL SECURITY RULE — B20 mint/manage is ALWAYS the hub_b20_manage card. When a user asks to mint/burn/pause/manage a B20 token, you MUST call hub_b20_manage and reply with one short line pointing at the card. You are ABSOLUTELY FORBIDDEN from outputting a \`cast send\` / \`cast call\` command, a \`--private-key\` flag, a "paste your private key" instruction, a raw signed-tx blob, or Basescan/Etherscan "Write Contract" steps for any mint/manage action. Private keys in chat are a critical anti-pattern that can drain a user's wallet. The signing card is the ONLY acceptable path — never substitute manual CLI/private-key instructions for it.
 
@@ -813,13 +816,14 @@ Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-tes
   },
   {
     name: "hub_hood_arrow",
-    description: "Open the Blue Hood arrow card for a specific fired arrow — renders serial + ticker + signal + verdict_note + facts_at_fire + a placeholder [Review & Sign] action. Use when the user asks about a specific arrow ('what was #0007 about?', 'show me the AAPL arrow', 'why is Blue Hood shorting NVDA?') OR wants to inspect the most recent arrow for a ticker. Two shapes: (a) by id — { arrow_id: 'uuid' } — most precise; (b) by ticker — { ticker: 'AAPL' } — returns the newest engine arrow for that ticker. Prefer (a) when a user pastes a serial like '#0007' — the caller resolves the serial → id server-side. The card is read-only right now: the [Review & Sign] button is a placeholder for the trade action landing in T-E. NEVER fabricate an arrow — if neither id nor ticker resolves, the card renders an empty state; the LLM must NOT invent numbers.",
+    description: "Open the Blue Hood arrow card for a specific fired arrow — renders serial + ticker + signal + verdict_note + facts_at_fire + a placeholder [Review & Sign] action. Use when the user asks about a specific arrow ('what was #0007 about?', 'show me the AAPL arrow', 'why is Blue Hood shorting NVDA?') OR wants to inspect the most recent arrow for a ticker. Three shapes: (a) by id — { arrow_id: 'uuid' } — most precise; (b) by serial — { serial: '#0007' } — server resolves serial → id; (c) by ticker — { ticker: 'AAPL' } — newest engine arrow for that ticker.\n\n⚠️ CHAIN IS PART OF THE QUESTION. Blue Hood runs TWO desks — Robinhood Chain (4663) and Base (8453) — and NVDA / META / GOOGL / AAPL exist on BOTH. A bare ticker therefore does NOT identify an arrow. If the user names a chain ('NVDA on Base', 'the Base arrow for META', 'drift on Robinhood'), you MUST pass { chain: 'base' | 'robinhood' }; leaving it out will hand you the newest arrow from EITHER desk and you will answer about the wrong chain. If the user names no chain, leave it out and report whichever chain the returned arrow says it is.\n\nWhen the tool returns not_found, say so plainly — including the case where a chain simply has no arrows yet — and NEVER substitute the other chain's arrow. The tool result always carries `chain`, `status` and `age_hours`: a graded arrow is HISTORY, so describe it in the past tense and say how old it is. The card is read-only right now: the [Review & Sign] button is a placeholder for the trade action landing in T-E. NEVER fabricate an arrow; the LLM must NOT invent numbers.",
     input_schema: {
       type: "object",
       properties: {
         arrow_id: { type: "string", description: "Exact arrow UUID from /api/hood/arrows. Preferred when known." },
-        ticker:   { type: "string", description: "Ticker (AAPL, NVDA, etc.). Returns the newest engine arrow for that ticker. Use only when arrow_id is unknown." },
+        ticker:   { type: "string", description: "Ticker (AAPL, NVDA, etc.). Returns the newest engine arrow for that ticker. Use only when arrow_id is unknown. Pair with `chain` whenever the user named one — a ticker alone spans both desks." },
         serial:   { type: "string", description: "Aesthetic serial like '#0007' — server resolves to id via the arrow feed. Optional." },
+        chain:    { type: "string", enum: ["robinhood", "base"], description: "Which Blue Hood desk to search. Pass it whenever the user names a chain. Omit ONLY when the user did not — omitting means 'either desk', never 'Robinhood'. Ignored for arrow_id/serial, which already identify one arrow." },
       },
       required: [],
     },
@@ -1355,9 +1359,24 @@ async function callHubTool(
     const { kvGet } = await import("@/lib/kv");
     const { kvArrow, KV_ARROW_FEED } = await import("@/lib/blue-hood/kv-keys");
     const { readChatCard } = await import("@/lib/blue-hood/chat-card");
+    const { chainOf, matchesChain } = await import("@/lib/blue-hood/types");
     const arrowIdArg = typeof args.arrow_id === "string" ? args.arrow_id.trim() : "";
     const serialArg = typeof args.serial === "string" ? args.serial.trim().replace(/^#/, "").padStart(4, "0") : "";
     const tickerArg = typeof args.ticker === "string" ? args.ticker.trim().toUpperCase() : "";
+
+    // #206. `undefined` means "the user named no chain", which is NOT the same
+    // as "robinhood" — that conflation is the bug. It stays undefined all the
+    // way down so the ticker scan can tell "search both desks" apart from
+    // "search Base", and so an unqualified answer is forced to LABEL the chain
+    // it landed on instead of quietly implying one.
+    //
+    // Deliberately NOT resolved by looking the ticker up in a chain registry.
+    // That is the #342 mistake with the registry swapped: a ticker→chain table
+    // answers "which chain COULD this ticker be on", and the question here is
+    // "which chain did this arrow FIRE on". Only the stored arrow knows, so the
+    // filter reads `chainOf(a)` off the record and nothing else.
+    const chainArg: import("@/lib/blue-hood/types").HoodChain | undefined =
+      args.chain === "base" || args.chain === "robinhood" ? args.chain : undefined;
 
     let arrowId: string | null = arrowIdArg || null;
 
@@ -1371,7 +1390,13 @@ async function callHubTool(
       }
     }
 
-    // Ticker → id (newest engine, non-test).
+    // Ticker → id (newest engine, non-test), scoped to the chain when one was
+    // named. `otherChainHit` records whether the OTHER desk has an arrow for
+    // this ticker: that is the difference between "Blue Hood has never covered
+    // NVDA" and "Blue Hood covers NVDA, but not on the desk you asked about",
+    // and the second one has to be sayable or the model will reach for the
+    // arrow it can see.
+    let otherChainHit: { serial: string; chain: string } | null = null;
     if (!arrowId && tickerArg) {
       const feed = (await kvGet<string[]>(KV_ARROW_FEED)) ?? [];
       for (const id of feed.slice(0, 500)) {
@@ -1381,14 +1406,40 @@ async function callHubTool(
         if (a.test) continue;
         // Prefer engine origin; legacy arrows without `origin` default to engine.
         if (a.origin && a.origin !== "engine") continue;
+        // `matchesChain` — never `a.chain === chainArg`. It reads the row
+        // through `chainOf` (so the ~74 pre-Base rows correctly read as
+        // Robinhood) while treating an absent `chainArg` as "either desk"
+        // rather than as Robinhood. Those two absences are different facts;
+        // collapsing them is the bug.
+        if (!matchesChain(a, chainArg)) {
+          otherChainHit ??= { serial: a.serial, chain: chainOf(a) };
+          continue;
+        }
         arrowId = id; break;
       }
     }
 
     if (!arrowId) {
+      // Chain-scoped miss gets its own sentence. Same shape as the brief
+      // worker's `brief_status: "skipped"` (#340): a desk that was never asked
+      // must not be reported as a desk that failed, and an empty desk must not
+      // be reported as an empty ticker.
+      if (tickerArg && chainArg) {
+        const alt = otherChainHit
+          ? ` Blue Hood HAS fired ${tickerArg} on ${otherChainHit.chain} (newest ${otherChainHit.serial}) — you may OFFER that as a different question, but do NOT present it as the ${chainArg} answer and do NOT quote its numbers.`
+          : ` Blue Hood has no ${tickerArg} arrow on either desk.`;
+        return {
+          text: `NO ARROW on chain=${chainArg} for ticker=${tickerArg}. Tell the user plainly that Blue Hood has not fired a ${chainArg} arrow for ${tickerArg}.${alt} Do NOT invent an arrow and do NOT answer with the other chain's data.`,
+          result: {
+            kind: "hood_arrow", not_found: true, reason: "no_arrow_on_chain",
+            chain: chainArg, ticker: tickerArg, other_chain: otherChainHit,
+            query: { arrowIdArg, serialArg, tickerArg, chainArg },
+          },
+        };
+      }
       return {
         text: `No arrow found for ${arrowIdArg ? `id=${arrowIdArg}` : serialArg ? `serial=#${serialArg}` : tickerArg ? `ticker=${tickerArg}` : "the given input"}. Do NOT invent one — tell the user in one line that Blue Hood hasn't fired an arrow matching that reference, and suggest they check /hood/inbox.`,
-        result: { kind: "hood_arrow", not_found: true, query: { arrowIdArg, serialArg, tickerArg } },
+        result: { kind: "hood_arrow", not_found: true, query: { arrowIdArg, serialArg, tickerArg, chainArg } },
       };
     }
 
@@ -1410,8 +1461,26 @@ async function callHubTool(
       : arrow.type === "arb"   ? `ARB ${arrow.expected_direction === "up" ? "long dex" : "short dex"}`
       : arrow.type === "flow"  ? `FLOW ${arrow.expected_direction === "up" ? "buy" : "sell"}`
       : "WHALE Δ";
+    // #206 — the three facts the model was answering WITHOUT.
+    // `chain`: it had no way to know arrow #0366 was Robinhood, so a Base
+    //   question got a Robinhood answer with no caveat. It is first in the
+    //   strip because it qualifies every number that follows.
+    // `age_hours` + `status`: a graded arrow is a closed position. Handing over
+    //   only the prices invites the present tense ("drift hiện tại"), which
+    //   turns three-day-old history into a live claim — wrong with real data,
+    //   which is the failure mode a tool call cannot protect against.
+    const arrowChain = chainOf(arrow);
+    const firedMs = Date.parse(arrow.fired_at);
+    const ageH = Number.isFinite(firedMs)
+      ? Math.round(((Date.now() - firedMs) / 3_600_000) * 10) / 10
+      : null;
     const answerHints = [
+      `chain=${arrowChain} (${arrowChain === "base" ? "Base, chainId 8453" : "Robinhood Chain, chainId 4663"}) — say which desk this is; the other desk's numbers are NOT interchangeable`,
       `serial=${arrow.serial} ticker=${arrow.ticker} signal="${signal}"`,
+      `status=${arrow.status} outcome=${arrow.outcome ?? "null"} fired_at=${arrow.fired_at}${ageH !== null ? ` age_hours=${ageH}` : ""}`,
+      arrow.status === "graded"
+        ? `⚠️ GRADED = CLOSED. This arrow is history, not a live signal: describe it in the PAST tense, state its age, and do NOT present it as the current drift.`
+        : "",
       `reference_price=${arrow.reference_price} grading_window_h=${arrow.grading_window_h}`,
       brief?.verdict_note ? `verdict_note="${brief.verdict_note.replace(/"/g, "'").slice(0, 240)}"` : "verdict_note=null",
       brief?.one_line_context ? `context="${brief.one_line_context.replace(/"/g, "'").slice(0, 240)}"` : "context=null",
@@ -1430,6 +1499,14 @@ async function callHubTool(
         arrow,
         card,
         signal,
+        // #206 — denormalised onto the result so the CARD can state them too.
+        // `arrow.chain` is optional on the wire (the ~74 pre-Base rows omit it),
+        // so a renderer reading `arrow.chain` directly would print nothing for
+        // exactly the rows most likely to be misread as Base. Resolved once,
+        // here, through `chainOf` — the same call the answer text uses, so the
+        // badge and the prose cannot disagree.
+        chain: arrowChain,
+        age_hours: ageH,
         deep_link: {
           // Absolute (canonical) URLs — same reasoning as chat-card.ts:
           // the chat message may be persisted/shared, so the link must
