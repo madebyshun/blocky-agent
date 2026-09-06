@@ -58,6 +58,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { chainOf, matchesChain, type HoodChain } from "../src/lib/blue-hood/types";
+import { buildB20Section } from "../src/app/api/chat/system-prompt";
 
 const WEB = path.resolve(path.dirname(path.resolve(process.argv[1])), "..");
 const read = (p: string) => readFileSync(path.join(WEB, p), "utf8");
@@ -79,6 +80,14 @@ const codeOnly = (s: string) =>
 const ROUTE = read("src/app/api/chat/route.ts");
 const CARD = read("src/app/chat/components/HoodArrowCard.tsx");
 const TYPES = read("src/lib/blue-hood/types.ts");
+/**
+ * Rules 10a–10c moved here in #205, which split the B20 block by speech act and
+ * pushed the "Use <tool> when…" half into a gated builder. `PROMPT` is read
+ * separately from `ROUTE` on purpose: the schema and the handler are still in
+ * `route.ts` and the rules are not, and pretending otherwise by concatenating
+ * the two would hide the next move.
+ */
+const PROMPT = read("src/app/api/chat/system-prompt.ts");
 
 let failures = 0;
 /** Counted, never hardcoded — a hand-maintained total goes stale the first time
@@ -142,13 +151,20 @@ check("omitting chain is documented as 'either desk', never as Robinhood",
 // that was silent in the prod failure. Asserted separately so deleting either
 // one fails.
 check("prompt rule 10a teaches the same thing as the schema",
-  /10a\. CHAIN IS PART OF THE QUESTION/.test(ROUTE));
+  /10a\. CHAIN IS PART OF THE QUESTION/.test(PROMPT));
 check("prompt rule 10b makes an empty desk an ANSWER, not a fallback",
-  /10b\. AN EMPTY DESK IS AN ANSWER/.test(ROUTE)
-  && /Never fall back to the other desk's arrow/.test(ROUTE));
+  /10b\. AN EMPTY DESK IS AN ANSWER/.test(PROMPT)
+  && /Never fall back to the other desk's arrow/.test(PROMPT));
 check("prompt rule 10c forbids the present tense for a graded arrow",
-  /10c\. A GRADED ARROW IS HISTORY/.test(ROUTE)
-  && /PAST tense/.test(ROUTE));
+  /10c\. A GRADED ARROW IS HISTORY/.test(PROMPT)
+  && /PAST tense/.test(PROMPT));
+// These three rules only reach the model when a tool is attached, which is
+// correct — they are instructions about how to call and read `hub_hood_arrow`.
+// But that makes them reachable ONLY through the gated half, so assert they
+// actually ride it rather than sitting in a dead branch of the file.
+check("and they ship in the tool-carrying prompt, not merely in the source",
+  /10a\. CHAIN IS PART OF THE QUESTION/.test(buildB20Section(true))
+  && /10c\. A GRADED ARROW IS HISTORY/.test(buildB20Section(true)));
 
 // ── 3. chain is resolved from the ARROW, never from a ticker registry ────────
 console.log("\n3. the chain comes off the stored row — not a ticker→chain lookup");

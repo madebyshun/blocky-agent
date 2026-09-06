@@ -46,6 +46,15 @@
  *      never appeared in `vercel.json` on any branch. Offer and schedule must
  *      come back together — this asserts the COUPLING, not the removal, so
  *      re-enabling is legitimate the moment the cron is real.
+ *   5. A PROMPT SECTION THE GUARD CANNOT SEE. This is the one that actually got
+ *      through (#205). The first version of this file asserted against
+ *      `buildBaseSystem(...)` alone, and passed — while the shipped prompt still
+ *      named twelve tools, because `B20_SECTION` was a separate `route.ts`
+ *      constant appended unconditionally to the same array. Checking a PART of
+ *      the prompt reads exactly like checking the prompt. So the assertions
+ *      below run against the full assembled tool-free system prompt, and a
+ *      structural check reads the assembly array itself and fails on any new
+ *      unconditional module constant — the shape of the bug, not the instance.
  *
  * Source-reading, not network: these are properties of the text we ship.
  *
@@ -53,7 +62,10 @@
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { buildBaseSystem, buildAgentCapabilities } from "../src/app/api/chat/system-prompt";
+import {
+  buildBaseSystem, buildAgentCapabilities, buildB20Section,
+} from "../src/app/api/chat/system-prompt";
+import { SOUL_MD } from "../src/lib/soul";
 
 const WEB   = path.resolve(path.dirname(path.resolve(process.argv[1])), "..");
 const ROUTE = readFileSync(path.join(WEB, "src/app/api/chat/route.ts"), "utf8");
@@ -71,34 +83,92 @@ function check(name: string, cond: boolean, detail = "") {
 }
 
 // Every tool name the prompt is allowed to mention ONLY when tools are attached.
-// Drawn from the real sections rather than a hand-copied list, so a newly added
-// tool is covered without touching this file.
-const TOOL_NAMES = ["hub_token_price", "hub_crypto_rpc", "check_wallet", "prepare_swap",
-  "hub_risk_gate", "hub_honeypot", "hub_builder_score", "hub_narrative"];
+// DERIVED from the schema list in route.ts, not hand-copied: the previous
+// hand-written array carried the comment "drawn from the real sections… so a
+// newly added tool is covered without touching this file", which was simply not
+// true — it listed 8 of 49, and the 12 it omitted were the ones that leaked.
+// A comment claiming a property the code does not have is worse than no comment,
+// because it stops the next reader from checking.
+const TOOL_NAMES = [...ROUTE.matchAll(/^\s{4}name:\s*"([a-z0-9_]+)",$/gm)]
+  .map((m) => m[1]);
+
+// Guard the guard: this regex depends on the formatting of the schema objects.
+// If a prettier pass reindents them, the list silently empties and every
+// absence assertion below starts passing vacuously.
+check("tool names are derived from route.ts, not hand-listed",
+  TOOL_NAMES.length >= 40, `${TOOL_NAMES.length} schemas found`);
 
 const withTools = buildBaseSystem({ hasWebSearch: false, hasTools: true });
 const noTools   = buildBaseSystem({ hasWebSearch: false, hasTools: false });
 const unreach   = buildBaseSystem({ hasWebSearch: false, hasTools: false, toolsUnreachable: true });
 
+// THE WHOLE PROMPT, not one section of it. Checking `buildBaseSystem` alone is
+// what let #205 through: the B20 dispatch table rode in on a different array
+// element. Everything unconditional in `buildSystem`'s array is concatenated
+// here; the structural check in §1b proves nothing else has been added to it.
+const assembledNoTools = [
+  SOUL_MD,
+  noTools,
+  buildAgentCapabilities(false),
+  buildB20Section(false),
+].join("\n\n");
+const assembledWithTools = [
+  SOUL_MD,
+  withTools,
+  buildAgentCapabilities(true),
+  buildB20Section(true),
+].join("\n\n");
+
 // ── 1. The tool-free prompt names no tool ────────────────────────────────────
 console.log("\n1. hasTools:false describes no capability the request lacks");
 
-const named = TOOL_NAMES.filter((t) => noTools.includes(t));
-check("no hub tool is named when the request carries none", named.length === 0,
-  named.length ? `leaked: ${named.join(", ")}` : "0 of " + TOOL_NAMES.length);
+const named = TOOL_NAMES.filter((t) => assembledNoTools.includes(t));
+check("no hub tool is named ANYWHERE in the assembled tool-free prompt",
+  named.length === 0,
+  named.length ? `leaked: ${named.join(", ")}` : `0 of ${TOOL_NAMES.length}`);
 
 check("the tool-free prompt says so explicitly, not by omission",
   /YOU HAVE NONE ON THIS REQUEST/.test(noTools));
 
 // The counter-assertion. Without it this file passes on an empty string, which
 // is the failure mode of every "assert absence" test ever written.
-const kept = TOOL_NAMES.filter((t) => withTools.includes(t));
-check("hasTools:true STILL names the tools — the test can fail both ways",
-  kept.length === TOOL_NAMES.length, `${kept.length}/${TOOL_NAMES.length} present`);
+const kept = TOOL_NAMES.filter((t) => assembledWithTools.includes(t));
+check("the tool-CARRYING prompt still names tools — the test can fail both ways",
+  kept.length >= 8, `${kept.length}/${TOOL_NAMES.length} named in prose`);
 
 check("agent-capabilities section branches too, and drops hub_token_price",
   !buildAgentCapabilities(false).includes("hub_token_price")
   && buildAgentCapabilities(true).includes("hub_token_price"));
+
+// ── 1b. Nothing new can be appended to the prompt behind the guard's back ────
+// `assembledNoTools` above is a hand-written copy of the assembly array, so it
+// is only honest while the two agree. This reads the real array out of route.ts
+// and fails on any element the copy doesn't know about.
+console.log("\n1b. the assembly array holds no unreviewed unconditional section");
+
+const arr = ROUTE.match(
+  /const buildSystem = [\s\S]*?=> \[([\s\S]*?)\]\.filter\(Boolean\)/,
+)?.[1] ?? "";
+check("the buildSystem array is still findable — this check is not vacuous",
+  arr.length > 200, `${arr.length} chars`);
+
+// A bare SCREAMING_CASE identifier on its own line is an unconditional module
+// constant: no ternary, no `hasTools`, nothing to gate it. That is precisely
+// the shape `B20_SECTION` had. SOUL_MD is the one legitimate case — it is the
+// identity layer and (asserted below) names no tool.
+const bareConsts = [...arr.matchAll(/^\s*([A-Z][A-Z0-9_]{2,}),\s*$/gm)].map((m) => m[1]);
+const unreviewed = bareConsts.filter((c) => c !== "SOUL_MD");
+check("no unconditional SCREAMING_CASE prompt constant besides SOUL_MD",
+  unreviewed.length === 0,
+  unreviewed.length
+    ? `ungated: ${unreviewed.join(", ")} — gate it on hasTools or add it to assembledNoTools`
+    : `only SOUL_MD (${bareConsts.length} bare)`);
+check("SOUL_MD earns its exemption: the identity layer names no tool",
+  TOOL_NAMES.every((t) => !SOUL_MD.includes(t)));
+
+// The B20 section must arrive through the gated builder, not as a constant.
+check("B20 rides the hasTools flag like every other section",
+  /buildB20Section\(hasTools\)/.test(arr));
 
 // ── 2. No receipt template, in EITHER branch ─────────────────────────────────
 console.log("\n2. the receipt format is not taught anywhere");
@@ -184,6 +254,49 @@ console.log("\n6. no prompt section claims an unregistered integration");
 
 check("the Coinbase spot-trading claim is gone (no schema ever backed it)",
   !/You have access to Coinbase spot trading/.test(ROUTE));
+
+// ── 7. B20 splits by SPEECH ACT — facts stay, dispatch goes ──────────────────
+// The tempting simplification is "B20 is one topic, ship it or don't". Both
+// halves of that are wrong: dropping it makes the model worse at "what is B20?"
+// on the free tier, and shipping it whole is the bug. What decides is what a
+// sentence DOES — state a fact, forbid something, or ask for a call.
+console.log("\n7. B20 keeps its facts and prohibitions with no tools attached");
+
+const b20Free = buildB20Section(false);
+const b20Full = buildB20Section(true);
+
+check("the standard's facts survive: a tool-free model still answers 'what is B20?'",
+  /Rust PRECOMPILE/.test(b20Free) && /VERIFIED B20 FACTS/.test(b20Free)
+  && /0xB20f000000000000000000000000000000000000/.test(b20Free));
+
+// A prohibition is MORE load-bearing without tools, not less: with no card to
+// point at, "just use cast send --private-key" is the model's nearest exit.
+check("the private-key prohibition survives — it is not a capability claim",
+  /PRIVATE KEY NEVER GOES IN CHAT/.test(b20Free) && /--private-key/.test(b20Free));
+check("the no-DCA rule survives in both branches",
+  /NO DCA/.test(b20Free) && /DCA/.test(b20Full));
+
+// `simulateContract` was in the old text as an instruction — "ALWAYS simulate
+// the transaction first using simulateContract" — and it is not a registered
+// chat tool in either branch. Same family as #196/#166: a named capability with
+// nothing behind it. Replaced by the prohibition, which must hold everywhere.
+check("no branch instructs the model to call simulateContract",
+  !/simulateContract/.test(b20Free) && !/simulateContract/.test(b20Full)
+  && !/simulateContract/.test(ROUTE));
+check("and it says so outright, in both branches",
+  /YOU DO NOT SIMULATE TRANSACTIONS/.test(b20Free)
+  && /YOU DO NOT SIMULATE TRANSACTIONS/.test(b20Full));
+// The revert modes are a FACT about B20 the user needs before sending, and they
+// used to be reachable only through the simulate instructions that just left.
+check("policy/pause reverts are still explained without a simulate step",
+  /PolicyForbids/.test(b20Free) && /paused by the issuer/.test(b20Free));
+
+check("the dispatch table ships ONLY with tools",
+  !/Use hub_b20_inspect/.test(b20Free) && /Use hub_b20_inspect/.test(b20Full));
+check("the Hood chain + age rules (#206) ride with the dispatch table",
+  /CHAIN IS PART OF THE QUESTION/.test(b20Full)
+  && /A GRADED ARROW IS HISTORY/.test(b20Full)
+  && !/CHAIN IS PART OF THE QUESTION/.test(b20Free));
 
 console.log(`\n${failures ? "FAIL" : "PASS"} — ${checks - failures}/${checks} checks passed`);
 if (failures) process.exit(1);
