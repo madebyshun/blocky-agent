@@ -202,9 +202,28 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
   const [err, setErr] = useState("");
   const [txHash, setTxHash] = useState("");
 
-  // Doppler launchpad tokens are standard ERC-20 with 18 decimals (100B fixed
-  // supply). The 0x quote works in base units, so this only affects display.
-  const tokenDecimals = 18;
+  // ⚠️ READ ON-CHAIN. This was `const tokenDecimals = 18` with a comment saying
+  // "the 0x quote works in base units, so this only affects display". That was
+  // WRONG, and wrong on the money path: `sell.decimals` feeds `parseUnits()` in
+  // TWO places that become calldata — `sellBase` (the 0x quote's sellAmount,
+  // which determines transaction.data) and the `approve()` args below. On a 6-dec
+  // token a typed "100" would encode 1e20 instead of 1e8: a 10^12 error.
+  //
+  // Nothing in a LaunchRecord can be trusted to supply this — the type has NO
+  // `decimals` field, and its two live writers can't add one: /api/b20hub/register
+  // is unauthenticated and takes the address straight from the client, and
+  // /api/robinhood/prepare accepts a caller-supplied `decimals` that
+  // /api/robinhood/receipt then drops on the floor. The token contract is the
+  // only source that cannot drift.
+  //
+  // `undefined` while loading or if the call reverts — NEVER silently 18. A
+  // wrong scale is worse than a disabled button, so the UI gates on this below
+  // rather than guessing (CLAUDE.md: missing data → "unknown", never infer).
+  const { data: tokenDecRaw, isLoading: decLoading, isError: decError } = useReadContract({
+    address: l.tokenAddress as `0x${string}`, abi: ERC20_ABI, functionName: "decimals",
+    chainId: base.id,
+  });
+  const tokenDecimals = tokenDecRaw !== undefined ? Number(tokenDecRaw) : undefined;
 
   // Resolve the sell / buy legs from the Buy|Sell mode.
   // Buy  → spend `pay` token, receive the launched token.
@@ -227,10 +246,15 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
   });
   const balance = sell.native
     ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
-    : (erc20Bal != null ? Number(formatUnits(erc20Bal as bigint, sell.decimals)) : null);
+    : (erc20Bal != null && sell.decimals !== undefined
+        ? Number(formatUnits(erc20Bal as bigint, sell.decimals)) : null);
 
   const amt = parseFloat(amount);
-  const sellBase = amount && amt > 0 ? (() => { try { return parseUnits(amount, sell.decimals).toString(); } catch { return ""; } })() : "";
+  // No scale → no base-unit amount → no quote → no swap. The `undefined` guard
+  // is the whole point: an unknown decimals must never fall through to 18.
+  const sellBase = amount && amt > 0 && sell.decimals !== undefined
+    ? (() => { try { return parseUnits(amount, sell.decimals!).toString(); } catch { return ""; } })()
+    : "";
   const overBalance = balance != null && amt > balance;
 
   // Debounced 0x quote.
@@ -249,8 +273,10 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
     return () => clearTimeout(t);
   }, [sellBase, sell.addr, buy.addr, address]);
 
-  const buyAmount = quote?.buyAmount ? Number(formatUnits(BigInt(quote.buyAmount), buy.decimals)) : null;
-  const minBuy = quote?.minBuyAmount ? Number(formatUnits(BigInt(quote.minBuyAmount), buy.decimals)) : null;
+  const buyAmount = quote?.buyAmount && buy.decimals !== undefined
+    ? Number(formatUnits(BigInt(quote.buyAmount), buy.decimals)) : null;
+  const minBuy = quote?.minBuyAmount && buy.decimals !== undefined
+    ? Number(formatUnits(BigInt(quote.minBuyAmount), buy.decimals)) : null;
   const rate = buyAmount != null && amt > 0 ? buyAmount / amt : null;
 
   function switchMode(m: "buy" | "sell") { if (m === mode) return; setMode(m); setAmount(""); setQuote(null); setStep("idle"); setErr(""); }
@@ -259,13 +285,22 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
     setAmount(String(sell.native ? Math.max(0, balance - 0.00005) : balance));
   }
 
-  const canSwap = !!address && !!quote?.transaction && amt > 0 && !overBalance && !loading;
+  // `tokenDecimals !== undefined` is a HARD precondition, not a nicety — every
+  // parseUnits below turns a typed amount into calldata.
+  const canSwap = !!address && !!quote?.transaction && amt > 0 && !overBalance
+    && !loading && tokenDecimals !== undefined;
   const busy = step === "approving" || step === "swapping";
 
   async function doSwap() {
     if (!address) { setErr("Connect your wallet"); setStep("error"); return; }
     if (quote?.needsKey) { setErr("Swap needs a 0x API key (ZEROX_API_KEY)"); setStep("error"); return; }
     if (!quote?.transaction) { setErr(quote?.error || "No route for this pair"); setStep("error"); return; }
+    // Belt-and-braces: canSwap already gates on this, but doSwap is what signs,
+    // so it re-checks rather than trusting a prop upstream of it.
+    if (sell.decimals === undefined || buy.decimals === undefined) {
+      setErr("Could not read this token's decimals — refusing to build a transaction");
+      setStep("error"); return;
+    }
     setErr(""); setTxHash("");
     try {
       await switchChainAsync({ chainId: base.id });
@@ -405,6 +440,12 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
             {quote?.needsKey && <p className="font-mono text-[9px] text-amber-400 mb-2">Swap needs a free 0x API key — set <span className="text-slate-300">ZEROX_API_KEY</span>.</p>}
             {quote?.error && !quote.needsKey && !loading && amt > 0 && <p className="font-mono text-[9px] text-amber-400 mb-2">No route: {quote.error}</p>}
             {step === "error" && <p className="font-mono text-[10px] text-amber-400 mb-2">{err}</p>}
+            {decError && (
+              <p className="font-mono text-[9px] text-amber-400 mb-2">
+                Couldn&apos;t read <span className="text-slate-300">decimals()</span> on this
+                contract — trading is disabled rather than guessing the token&apos;s scale.
+              </p>
+            )}
 
             <button onClick={doSwap} disabled={!canSwap || busy}
               className="w-full font-mono text-[12px] font-bold py-2.5 rounded-lg transition-all disabled:opacity-50"
@@ -412,6 +453,8 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
                 ? { background: "#22C55E15", color: "#22C55E", border: "1px solid #22C55E40" }
                 : { background: "#EF444415", color: "#EF4444", border: "1px solid #EF444440" }}>
               {!isConnected ? "Connect your wallet"
+                : decError ? "Token decimals unavailable"
+                : decLoading ? "Reading token decimals…"
                 : busy ? (step === "approving" ? "Approve in wallet…" : "Confirm in wallet…")
                 : overBalance ? "Insufficient balance"
                 : mode === "buy"
@@ -471,7 +514,19 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
   });
 
   const tokenSym = (l.tokenSymbol || l.tokenName || "TOKEN").replace(/^\$/, "");
-  const tokenDecimals = 18; // Robinhood direct-deploy launches use 18d ERC-20s.
+
+  // ⚠️ READ ON-CHAIN — was `const tokenDecimals = 18` justified by "Robinhood
+  // direct-deploy launches use 18d ERC-20s". 18 is only the DEFAULT:
+  // /api/robinhood/prepare takes `decimals` from the request body, so a caller
+  // can deploy any scale, and /api/robinhood/receipt then writes the launch
+  // record WITHOUT it (LaunchRecord has no such field). The assumption had no
+  // enforcement behind it, and it feeds parseUnits() for both `amountInWei` and
+  // `minOutBase` in doSwap — i.e. real swap calldata, not display.
+  const { data: rhDecRaw, isLoading: decLoading, isError: decError } = useReadContract({
+    address: l.tokenAddress as `0x${string}`, abi: ERC20_ABI, functionName: "decimals",
+    chainId: RH_CHAIN_ID,
+  });
+  const tokenDecimals = rhDecRaw !== undefined ? Number(rhDecRaw) : undefined;
 
   const [mode, setMode] = useState<"buy" | "sell">("buy");
   const [amount, setAmount] = useState("");
@@ -483,7 +538,8 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
   const [txHash, setTxHash] = useState("");
 
   const nativeBalance = nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null;
-  const erc20Balance = tokenBal != null ? Number(formatUnits(tokenBal as bigint, tokenDecimals)) : null;
+  const erc20Balance = tokenBal != null && tokenDecimals !== undefined
+    ? Number(formatUnits(tokenBal as bigint, tokenDecimals)) : null;
   const sellBalance = mode === "buy" ? nativeBalance : erc20Balance;
   const amt = parseFloat(amount);
   const overBalance = sellBalance != null && amt > sellBalance;
@@ -518,13 +574,20 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
   const rate = estimatedOut != null && amt > 0 ? estimatedOut / amt : null;
   const minOut = estimatedOut != null ? estimatedOut * (1 - slippagePct / 100) : null;
 
-  const canSwap = !!address && hasPool && amt > 0 && !overBalance && !loadingQuote && step !== "approving" && step !== "swapping";
+  // tokenDecimals is a hard precondition — it feeds parseUnits() into calldata.
+  const canSwap = !!address && hasPool && amt > 0 && !overBalance && !loadingQuote
+    && tokenDecimals !== undefined && step !== "approving" && step !== "swapping";
   const busy = step === "approving" || step === "swapping";
 
   async function doSwap() {
     if (!address) { setErr("Connect your wallet"); setStep("error"); return; }
     if (!hasPool || !quote?.pool) { setErr("No pool available for this token"); setStep("error"); return; }
     if (!amt || amt <= 0) { setErr("Enter an amount"); setStep("error"); return; }
+    // doSwap is what signs, so it re-checks the scale rather than trusting canSwap.
+    if (tokenDecimals === undefined) {
+      setErr("Could not read this token's decimals — refusing to build a transaction");
+      setStep("error"); return;
+    }
     setErr(""); setTxHash("");
     try {
       // Wallet may be on a different chain — prompt to switch.
@@ -716,6 +779,12 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
             )}
             {quote?.error && <p className="font-mono text-[10px] text-amber-400 mb-2">Quote error: {quote.error}</p>}
             {step === "error" && <p className="font-mono text-[10px] text-amber-400 mb-2">{err}</p>}
+            {decError && (
+              <p className="font-mono text-[9px] text-amber-400 mb-2">
+                Couldn&apos;t read <span className="text-slate-300">decimals()</span> on this
+                contract — trading is disabled rather than guessing the token&apos;s scale.
+              </p>
+            )}
 
             <button onClick={doSwap} disabled={!canSwap || busy}
               className="w-full font-mono text-[12px] font-bold py-2.5 rounded-lg transition-all disabled:opacity-50"
@@ -723,6 +792,8 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
                 ? { background: "#22C55E15", color: "#22C55E", border: "1px solid #22C55E40" }
                 : { background: "#EF444415", color: "#EF4444", border: "1px solid #EF444440" }}>
               {!isConnected ? "Connect your wallet"
+                : decError ? "Token decimals unavailable"
+                : decLoading ? "Reading token decimals…"
                 : busy ? (step === "approving" ? "Approve in wallet…" : "Confirm in wallet…")
                 : quote?.hasPool === false ? "No pool yet"
                 : overBalance ? "Insufficient balance"

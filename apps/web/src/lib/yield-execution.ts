@@ -69,6 +69,13 @@ export const ERC20_ABI = [
     inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
   { name: "transfer", type: "function", stateMutability: "nonpayable",
     inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
+  // `decimals` is the ONLY safe source for a token's scale. Anything that turns
+  // a human-typed amount into base units (parseUnits) must read it from the
+  // token itself — never from a constant, and never from a launch record, which
+  // has no such field to carry it. See the header of the trade modals in
+  // app/launches/LaunchesClient.tsx for the bug this closed.
+  { name: "decimals", type: "function", stateMutability: "view",
+    inputs: [], outputs: [{ type: "uint8" }] },
 ] as const satisfies Abi;
 
 export const AAVE_POOL_ABI = [
