@@ -1,11 +1,25 @@
 /**
  * Blue Agent — Token Launch registry.
  *
- * Every token deployed through Blue Chat (POST /api/launch-token, real deploy
- * — not a simulateOnly preview) is recorded here so the public /app/launches
- * showcase has a durable list that doesn't churn like Bankr's 50-most-recent
- * feed. Stored in KV (Upstash in prod, in-memory in dev) as a single capped,
- * newest-first array under `LAUNCHES_KEY`.
+ * Every token deployed through Blue Agent is recorded here so the public
+ * /app/launches showcase has a durable list of its own. Stored in KV (Upstash
+ * in prod, in-memory in dev) as a single capped, newest-first array under
+ * `LAUNCHES_KEY`.
+ *
+ * TWO writers today, both self-hosted and both alive:
+ *   • /api/robinhood/receipt — direct ERC-20 deploy on Robinhood Chain (4663)
+ *   • /api/b20hub/register   — B20 launch on Base (8453)
+ *
+ * A THIRD writer, /api/launch-token (Bankr's launchpad), was deleted 2026-09-06
+ * after Bankr suspended the account — 403 on every deploy. Its RECORDS stay:
+ * they are evidence of tokens that really were deployed and really do exist
+ * on-chain, and CLAUDE.md is explicit that retiring a route does not entitle
+ * anyone to delete the data behind it.
+ *
+ * ⚠️ Those rows are NOT distinguishable from the others — there is no `source`
+ * field, and adding one now would not backfill history. Do not write a reader
+ * that assumes every record has a live writer behind it, and do not "clean up"
+ * rows you cannot attribute.
  */
 import { kvGet, kvSet } from "./kv";
 

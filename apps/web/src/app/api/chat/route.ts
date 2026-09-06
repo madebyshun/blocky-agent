@@ -343,23 +343,6 @@ function veniceMaxTokens(modelId: string): number {
 
 const HUB_TOOLS = [
   {
-    name: "prepare_token_launch",
-    description: "Open the unified token-launch card. If the user hasn't said which chain, the card FIRST shows a Base-vs-Robinhood-Chain picker; picking Base leads to the Bankr launchpad flow (real token on Base, Uniswap V4, 100B fixed supply, gas SPONSORED by Bankr), picking Robinhood Chain leads to the direct-deploy flow (raw ERC-20 contract-creation tx signed by the user's own wallet, chainId 4663). The CARD itself collects every field — token name, ticker, description, logo URL, website, and (Base only) fee recipient — as editable inputs; the user fills them in and clicks Launch/Deploy. \n\nCRITICAL — NEVER INVENT ANYTHING: do NOT make up a token name, ticker, description, logo, or website. Pass through ONLY values the user explicitly typed in THIS request; leave every other field empty so the user fills it in the card. If the user gave no details, call this with NO arguments. \n\nALWAYS A BRAND-NEW TOKEN: ignore any 'Active project' from memory and any token discussed or already deployed earlier; never assume a relaunch and never claim a launch is 'paused' or 'pending'. Only reuse an earlier token if the user explicitly names it now. \n\nDo NOT gather details by asking questions and do NOT mention total supply (fixed at 100B). Fee recipient defaults to BlueAgent when left blank, so you don't need to collect it. \n\nAfter calling, reply with ONE short line telling the user to fill in the card above and hit Launch — never claim the token launched (only the user's Launch click deploys it) and never quote a gas/ETH cost.",
-    input_schema: {
-      type: "object",
-      properties: {
-        tokenName:        { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly typed a token name in this request; otherwise omit. Never invent one." },
-        tokenSymbol:      { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a ticker. Never invent one." },
-        description:      { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a description. Never invent one." },
-        image:            { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a logo image URL. Never invent one." },
-        website:          { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a website URL. Never invent one." },
-        feeRecipientType: { type: "string", enum: ["wallet", "x", "farcaster", "ens"], description: "OPTIONAL — pass ONLY if the user explicitly named where fees go. Left blank, the card defaults fees to BlueAgent." },
-        feeRecipientValue:{ type: "string", description: "OPTIONAL — the handle/address for feeRecipientType (e.g. @username or name.eth). Pass only if the user explicitly named one." },
-      },
-      required: [],
-    },
-  },
-  {
     name: "prepare_yield",
     description: "Open the MOVE-TO-YIELD card so the user can supply idle USDC into Aave v3 on Base (earn lending yield) or withdraw it back — NON-custodial, the user SIGNS in their own wallet; Blue Agent never holds keys or funds. Use when the user wants to: 'earn yield', 'put my USDC to work', 'deposit/supply to Aave', 'move idle USDC to yield', 'stake my USDC for interest', OR 'withdraw/pull my USDC out of Aave'. The CARD collects and edits amount, network (Base Sepolia testnet by DEFAULT — safe to test — or Base mainnet), and the action (supply/withdraw); the user reviews and signs.\n\nCRITICAL — NEVER INVENT AN AMOUNT: pass `amount` ONLY if the user explicitly stated a number in THIS request; otherwise omit it and let the card collect it. Pass action='withdraw' only if the user explicitly asked to withdraw/pull out. Network defaults to testnet; pass network='base' ONLY if the user explicitly asked for mainnet / real funds.\n\nThis tool NEVER moves funds by itself — only the user's signature in the card executes anything. After calling, reply with ONE short line telling the user to review and sign in the card above; never claim funds were moved and never quote an APY figure you weren't given.",
     input_schema: {
@@ -1212,15 +1195,6 @@ async function callHubTool(
 ): Promise<ToolCallResult> {
   // Client-rendered marker tools — no server endpoint. The chat UI reads the
   // result.kind and renders an interactive card.
-  if (toolName === "prepare_token_launch") {
-    // Preview only — the LaunchCard takes an explicit user confirmation before
-    // it POSTs to /api/launch-token. We never deploy from here.
-    return {
-      text: "Token-launch card rendered. The card shows all details — do NOT restate them as a table and do NOT quote any gas/ETH cost (gas is sponsored). Reply with one short line: tell the user to review and hit Launch in the card.",
-      staticReply: "Your token-launch card is ready above — review the details and hit **Launch** when you're set. Gas is sponsored.",
-      result: { kind: "token_launch", ...args },
-    };
-  }
   if (toolName === "prepare_yield") {
     // Marker only — the MoveToYieldCard collects amount/network/action and the
     // user SIGNS approve+supply (or withdraw) in their own wallet. We never
@@ -2266,7 +2240,6 @@ Try asking:
 "build me a token launchpad on Base"
 "is this token safe: 0x..."
 "best APY on Base right now?"
-"launch a token called BlueBot"
 "deploy a B20 stablecoin called vUSD"
 "what's the narrative on Base this week?"
 "analyze this B20 contract: 0x..."
