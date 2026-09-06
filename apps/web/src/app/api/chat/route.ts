@@ -21,7 +21,7 @@ import { getRobinhoodAddressBalances } from "@/lib/robinhood/blockscout";
 import { mcpCallTool } from "@/lib/mcp-client";
 import { SOUL_MD } from "@/lib/soul";
 import { VIRTUALS_PRESETS } from "@/app/api/_lib/llm";
-import { buildBaseSystem, buildAgentCapabilities } from "./system-prompt";
+import { buildBaseSystem, buildAgentCapabilities, buildB20Section } from "./system-prompt";
 
 export const runtime = "nodejs";
 // Vercel kills serverless functions at 60s by default — explicit budget so
@@ -329,62 +329,15 @@ function veniceMaxTokens(modelId: string): number {
 // inert until a real Coinbase tool is registered, at which point it belongs on
 // the connector path like every other MCP server.
 
-// B20 / Beryl awareness — always injected so the model understands the new
-// Base Native Token Standard (Beryl upgrade, live June 25 2026).
-const B20_SECTION = `## B20 Token Awareness (Beryl upgrade, live June 25 2026)
-B20 is the Base Native Token Standard — a Rust PRECOMPILE (not a Solidity contract).
-Full ERC-20 selector compatibility. Two variants: Asset (RWA/compliance) and Stablecoin (mint/burn).
-
-7 RBAC roles: ADMIN · MINT · BURN · BURN_BLOCKED · PAUSE · UNPAUSE · METADATA
-B20 is a Rust precompile in the Base node — NOT EVM bytecode, enforcement is node-level.
-PolicyRegistry (0x8453000000000000000000000000000000000002) enforces exactly TWO policy types: ALLOWLIST and BLOCKLIST.
-Freeze-seize = burnBlocked() gated by BURN_BLOCKED_ROLE (NOT a policy type).
-Supply cap = updateSupplyCap() gated by DEFAULT_ADMIN_ROLE (NOT a policy type).
-Create policy: policyRegistry.createPolicy(admin, PolicyType) → uint64 policyId; then token.updatePolicy(scope, policyId). NO registerPolicy().
-4 policy scopes: TRANSFER_SENDER_POLICY, TRANSFER_RECEIVER_POLICY, TRANSFER_EXECUTOR_POLICY, MINT_RECEIVER_POLICY.
-isB20(addr) helper identifies B20 tokens. transferWithMemo(to, amount, memo) for payment refs.
-
-Beryl also: withdrawal finalization reduced 7 → 5 days, Reth V2 node (50% disk, +33% throughput).
-
-When user asks to send/transfer a B20 token:
-1. ALWAYS simulate the transaction first using simulateContract
-2. If simulation returns PolicyForbids → warn: "Transfer blocked by this token's policy. Contact the issuer."
-3. If simulation returns paused → warn: "Transfers are paused by the issuer."
-4. Only proceed if simulation succeeds — never bypass
-5. Use hub_b20_analyze for B20 deployment questions / role explanations
-6. Use hub_b20_launch when user asks to deploy/launch/create a B20 token — trigger on ANY of: "launch b20", "b20 launch", "deploy b20", "create b20", "b20 token", or longer phrasings. Call with { name, symbol, variant: "asset"|"stablecoin", optional supply_cap, currency_code }. Opens an interactive card where the PRIMARY action is signing a createB20 Factory transaction to deploy directly on Sepolia/mainnet; Foundry script generation is a SECONDARY manual option.
-6c. Use robinhood_swap when the user wants to swap, BUY, or SELL a token on ROBINHOOD CHAIN — trigger on ANY of: "buy X on robinhood", "sell X on robinhood", "swap 0.001 ETH for CASHDOG on robinhood chain", "swap 50 USDC for VEX on robinhood", "sell 100 VIRTUAL for CLAWBANK on robinhood", "trade HOODRAT on robinhood", or similar Robinhood swap intent. Two shapes: (a) ETH↔token — { direction: "buy"|"sell", token, optional amount }. (b) token↔token — { token_in: tokenIn contract 0x… OR ticker, token: tokenOut contract OR ticker, optional amount, optional slippage_bps }. Token↔token currently requires a DIRECT Uniswap V3 pool between the two tokens on Robinhood Chain; if none exists the card shows a clear "no route" state (multi-hop via WETH is a follow-up). Symbols are resolved server-side against the live GeckoTerminal Robinhood index; never fabricate an address. Non-custodial: the user's own wallet signs approve(s) + swap(s) against the deployed RobinhoodSwapRouter (0x3bb0…d23D on chain 4663). NEVER use this for Base tokens (use prepare_swap for Base).
-6d. Use robinhood_send when the user wants to SEND or TRANSFER an ERC-20 (or native ETH) on ROBINHOOD CHAIN (chainId 4663) — trigger on ANY of: "send 25 USDC to 0x… on robinhood", "transfer 0.1 ETH to 0x… on RH", "pay 100 HOOD to 0x… on robinhood chain", or similar Robinhood send intent. Call with { toAddress: recipient 0x…, token: ERC-20 contract 0x… OR "ETH"/"NATIVE" for native ETH, amount: decimal string in whole units ("25.5", "0.1"), tokenSymbol: optional display hint }. fromAddress is OPTIONAL — the card automatically uses the user's connected wallet. DO NOT ASK THE USER FOR THEIR WALLET ADDRESS — the browser already has it. The server builds a raw transfer(address,uint256) calldata (or native value tx) and returns { to, data, value, chainId: 4663 } — the user's own wallet signs and broadcasts. Non-custodial: no server keys, no swap logic, no router. NEVER invent a token address — if the user gave only a symbol, ask for the contract. NEVER use for Base sends (use prepare_send for Base).
-6e. Use robinhood_bridge when the user wants to BRIDGE or MOVE a token (or native ETH) BETWEEN Base (chainId 8453) and Robinhood Chain (chainId 4663) — trigger on ANY of: "bridge X TOKEN to robinhood", "bridge from base to rh", "move 100 USDC to robinhood", "bridge back to base", "send 0.1 ETH from base to robinhood", or similar cross-chain intent between these two chains. Call with { fromChain: "base"|"robinhood", toChain: "base"|"robinhood" (must differ), fromAddress: connected wallet 0x…, token: ERC-20 contract 0x… on fromChain OR "ETH"/"NATIVE" for native ETH, amount: decimal string in whole units ("100", "0.1"), optional recipient (defaults to sender), optional tokenSymbol display hint }. The server fetches a live Relay Protocol quote and returns { to, data, value, chainId } for the source chain — the user's own wallet signs the (optional) approve then the deposit tx, and Relay solvers fill the destination chain (delivery tracked on relay.link). Non-custodial: no server keys, no server signing. NEVER invent a token address — if the user gave only a symbol without a contract, ask for it. NEVER use for same-chain swaps (use robinhood_swap or prepare_swap).
-6f. There is NO DCA / recurring-buy tool. If the user asks to DCA, dollar-cost-average, "buy X every day", or set up any recurring purchase, say plainly that scheduled buys are not available yet and offer a one-off swap via prepare_swap instead. Do NOT describe how a DCA schedule would work as though you could create one, and never quote an allowance, keeper address, fee, or run count.
-6b. RESERVED — no launch tool on Robinhood Chain currently. If the user asks to launch/deploy/create a token on Robinhood, reply that the Virtuals-native launch flow is coming soon (rebuild in progress). Do NOT use hub_b20_launch (Base-only). For "give me a token", "show me tokens", "trending on robinhood", or any BROWSE-style RH query, use blue_stream with chain: "robinhood" — it returns live trending pools + TVL. Never confuse browse ("give me a token") with launch ("create a token").
-6g. hub_b20_launch is the ONLY token-deploy tool that exists. There is NO general-purpose launchpad — no Bankr flow, no meme-coin launcher, no "100B fixed supply", no sponsored gas, no creator-fee split. That path was retired 2026-09-06 because Bankr suspended the account it ran on (403 "Account suspended" on every deploy). If the user asks to launch/create/deploy a plain token ("launch a token called BlueBot", "make me a memecoin"), say plainly that the only launch path today is a B20 token on Base and offer hub_b20_launch — do NOT invent a launchpad, do NOT quote a supply/fee/gas arrangement, and do NOT promise a deploy you cannot perform.
-7. Use hub_b20_inspect when user provides a token address and asks: "is this B20?", "inspect this token", "check pause/policy", "B20 details", totalSupply/supplyCap, or variant (Asset/Stablecoin). Reads REAL on-chain state via multicall — zero LLM. Call with { address: "0x…", network: "mainnet" }.
-8. Use hub_b20_manage when the user wants to MINT, BURN, PAUSE/UNPAUSE, set/update a POLICY, GRANT/REVOKE a ROLE, update the SUPPLY CAP, or update METADATA on an EXISTING B20 token. Trigger on ANY of: "mint", "mint X tokens on [addr]", "burn", "pause", "unpause", "grant role", "revoke role", "set policy", "update cap", "update supply cap", "manage b20", "freeze", "seize". Call with { address: "0x…", network: "mainnet"|"sepolia" } (default mainnet unless the user says sepolia). Opens a wallet-signed control panel that loads the token's live roles and shows ONLY the actions the connected wallet is authorized for; the user signs each action in their own wallet.
-9. Use check_authorization when the user asks whether a SPECIFIC account is allowed by a token's policy — "is 0xABC allowed to receive TOKEN?", "can this wallet send/mint this token?", "这个地址能收到代币吗?", "is alice.base.eth on the allowlist?". Call with { token: "0x…", account: "0x… or basename", scope: "sender"|"receiver"|"executor"|"mint_receiver" (default receiver), network }. Reads live policy state (zero LLM); reply with one short line stating authorized / not authorized — never guess.
-10. Use hub_hood_arrow when the user asks about a SPECIFIC Blue Hood arrow — triggers include "why did Blue Hood short NVDA?", "what was arrow #0007?", "show me the AAPL arrow", "what's the latest arrow?", "why is Hood watching TSLA?", "explain the last drift on AAPL". Two shapes: (a) by-id — { arrow_id: "…" } most precise, use when the user pastes a UUID; (b) by-ticker — { ticker: "AAPL" } returns the newest engine arrow for that ticker; (c) by-serial — { serial: "#0007" } — server resolves serial → id. The card renders serial + ticker + signal + verdict_note + facts_at_fire + a placeholder [Review & Sign] button (the trade action lands in T-E). After calling, answer the user's "why?" question in 2-3 sentences using ONLY the verdict_note + one_line_context + facts_at_fire fields the tool returns — NEVER invent a number or a reason. When the tool returns not_found, say so honestly and point at /hood/inbox; do not fabricate an arrow.
-
-⚠️ CRITICAL SECURITY RULE — B20 mint/manage is ALWAYS the hub_b20_manage card. When a user asks to mint/burn/pause/manage a B20 token, you MUST call hub_b20_manage and reply with one short line pointing at the card. You are ABSOLUTELY FORBIDDEN from outputting a \`cast send\` / \`cast call\` command, a \`--private-key\` flag, a "paste your private key" instruction, a raw signed-tx blob, or Basescan/Etherscan "Write Contract" steps for any mint/manage action. Private keys in chat are a critical anti-pattern that can drain a user's wallet. The signing card is the ONLY acceptable path — never substitute manual CLI/private-key instructions for it.
-
-## B20 Education Mode (teach the Base + Chinese builder community)
-You are ALSO a B20 EDUCATOR. When a user asks to LEARN/UNDERSTAND B20 — triggers include "B20是什么", "what is B20", "B20 vs ERC-20", "B20 和 ERC-20 有什么区别", "解释B20", "explain B20", "what is MINT_ROLE", "B20 的角色", "B20政策是什么", "B20 转账策略如何工作", "如何发行 B20" — answer DIRECTLY and accurately (no tool call needed). If the user writes in Chinese, answer in 简体中文; otherwise answer in English. Use ONLY the verified facts below. If a number, address, holder count, or token-specific detail is NOT listed here, say you don't know and tell the user to scan the live token (B20 Scanner / hub_b20_inspect). NEVER fabricate addresses, supply, holders, prices, or any on-chain number — fabrication is worse than "I don't know".
-
-VERIFIED B20 FACTS (the ONLY facts you may state as fact):
-- B20 = Base's native token standard. A Rust PRECOMPILE inside the Base node (NOT an EVM/Solidity contract) → enforcement is node-level. ~50% cheaper transfers than ERC-20, fully ERC-20 selector compatible, audited by Base + Spearbit.
-- B20Factory: 0xB20f000000000000000000000000000000000000 — isB20(addr) on the Factory is the ONLY authoritative proof a token is a real B20.
-- PolicyRegistry: 0x8453000000000000000000000000000000000002 · ActivationRegistry: 0x8453000000000000000000000000000000000001
-- B20 token addresses start with 0xB200… (the variant is encoded in byte 10). ⚠️ The 0xB200 PREFIX CAN BE FAKED — only isB20() on the Factory proves authenticity. Never trust the prefix alone.
-- Two variants: ASSET (6–18 decimals, has a rebase multiplier + an 8th OPERATOR_ROLE) and STABLECOIN (fixed 6 decimals, carries an ISO currency code, e.g. USD).
-- Roles (7): DEFAULT_ADMIN, MINT, BURN, BURN_BLOCKED, PAUSE, UNPAUSE, METADATA. The ASSET variant adds an 8th: OPERATOR. MINT_ROLE = the role that authorizes minting; granted by DEFAULT_ADMIN via grantRole.
-- Policy types (2): ALLOWLIST (deny by default, only listed addresses pass) and BLOCKLIST (allow by default, listed addresses blocked).
-- Policy scopes (4): TRANSFER_SENDER, TRANSFER_RECEIVER, TRANSFER_EXECUTOR, MINT_RECEIVER.
-- Sentinel policies: ALWAYS_ALLOW (policyId = 0, open to everyone) and ALWAYS_BLOCK (denies everyone).
-- Freeze-seize is a 2-step flow: block the address via a policy, then burnBlocked() (gated by BURN_BLOCKED_ROLE). It is NOT a policy type.
-- Supply cap: updateSupplyCap() gated by DEFAULT_ADMIN_ROLE; type(uint128).max means uncapped.
-- Memos: a bytes32 memo can ride on transfer/mint/burn via transferWithMemo / mintWithMemo / burnWithMemo — used for order IDs, payment refs, audit trails.
-- initCalls: deploy + configure (grant roles, set supply cap) + optional seed-mint all execute in ONE atomic createB20 transaction.
-- Rollout: Mainnet is delayed; Base Sepolia + Vibenet are active for testing now.
-- For any real, token-specific data (supply, holders, pause state, policies, admin), direct the user to the B20 Scanner or call hub_b20_inspect — never guess.`;
+// B20 / Beryl awareness — MOVED to ./system-prompt.ts (2026-09-06, #205).
+// It used to be a `B20_SECTION` constant here, appended unconditionally, and the
+// comment justifying that said: "background knowledge about a token standard,
+// not a claim about what this request can do." Half of it was. The other half
+// was a dispatch table naming twelve tools ("Use hub_b20_inspect when…"), which
+// is exactly a claim about this request's capability — so the tool-free prompt
+// kept advertising tools even after #407 gated the tool list. It lives in
+// `system-prompt.ts` now because a `route.ts` may only export route handlers,
+// which is what kept it out of reach of the guard in the first place.
 
 // ─── Hub tool definitions (Anthropic tool format) ─────────────────────────────
 
@@ -728,7 +681,9 @@ Use this ONLY for:
 
 Supported networks (EVM mainnets, verified against Venice's own catalog 2026-09-05): base, robinhood, ethereum, arbitrum, optimism, polygon, avalanche, bsc, blast, linea, zksync.
 Default to "base" for Base-related queries. "robinhood" is Robinhood Chain (4663), the product's second live chain.
-Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-testnet, polygon-amoy, avalanche-fuji, etc.`,
+Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-testnet, polygon-amoy, avalanche-fuji, etc.
+
+⚠️ NEVER CONVERT HEX YOURSELF. The reply carries a \`decoded\` object holding the same numbers already converted on the server — \`decoded.value.decimal\` for a single quantity (block height, balance, gas), \`decoded.fields.<name>.decimal\` inside a block/tx/receipt, plus \`.ether\` for wei, \`.gwei\` for gas prices and \`.iso\` for timestamps. Quote those verbatim. Doing the base-16 arithmetic in your head produces a plausible, wrong number — measured: a Base block height reported ~20,000 blocks low. If \`decoded\` is missing for a value, say you cannot read it rather than converting the hex.`,
     input_schema: {
       type: "object",
       properties: {
@@ -797,13 +752,14 @@ Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-tes
   },
   {
     name: "hub_hood_arrow",
-    description: "Open the Blue Hood arrow card for a specific fired arrow — renders serial + ticker + signal + verdict_note + facts_at_fire + a placeholder [Review & Sign] action. Use when the user asks about a specific arrow ('what was #0007 about?', 'show me the AAPL arrow', 'why is Blue Hood shorting NVDA?') OR wants to inspect the most recent arrow for a ticker. Two shapes: (a) by id — { arrow_id: 'uuid' } — most precise; (b) by ticker — { ticker: 'AAPL' } — returns the newest engine arrow for that ticker. Prefer (a) when a user pastes a serial like '#0007' — the caller resolves the serial → id server-side. The card is read-only right now: the [Review & Sign] button is a placeholder for the trade action landing in T-E. NEVER fabricate an arrow — if neither id nor ticker resolves, the card renders an empty state; the LLM must NOT invent numbers.",
+    description: "Open the Blue Hood arrow card for a specific fired arrow — renders serial + ticker + signal + verdict_note + facts_at_fire + a placeholder [Review & Sign] action. Use when the user asks about a specific arrow ('what was #0007 about?', 'show me the AAPL arrow', 'why is Blue Hood shorting NVDA?') OR wants to inspect the most recent arrow for a ticker. Three shapes: (a) by id — { arrow_id: 'uuid' } — most precise; (b) by serial — { serial: '#0007' } — server resolves serial → id; (c) by ticker — { ticker: 'AAPL' } — newest engine arrow for that ticker.\n\n⚠️ CHAIN IS PART OF THE QUESTION. Blue Hood runs TWO desks — Robinhood Chain (4663) and Base (8453) — and NVDA / META / GOOGL / AAPL exist on BOTH. A bare ticker therefore does NOT identify an arrow. If the user names a chain ('NVDA on Base', 'the Base arrow for META', 'drift on Robinhood'), you MUST pass { chain: 'base' | 'robinhood' }; leaving it out will hand you the newest arrow from EITHER desk and you will answer about the wrong chain. If the user names no chain, leave it out and report whichever chain the returned arrow says it is.\n\nWhen the tool returns not_found, say so plainly — including the case where a chain simply has no arrows yet — and NEVER substitute the other chain's arrow. The tool result always carries `chain`, `status` and `age_hours`: a graded arrow is HISTORY, so describe it in the past tense and say how old it is. The card is read-only right now: the [Review & Sign] button is a placeholder for the trade action landing in T-E. NEVER fabricate an arrow; the LLM must NOT invent numbers.",
     input_schema: {
       type: "object",
       properties: {
         arrow_id: { type: "string", description: "Exact arrow UUID from /api/hood/arrows. Preferred when known." },
-        ticker:   { type: "string", description: "Ticker (AAPL, NVDA, etc.). Returns the newest engine arrow for that ticker. Use only when arrow_id is unknown." },
+        ticker:   { type: "string", description: "Ticker (AAPL, NVDA, etc.). Returns the newest engine arrow for that ticker. Use only when arrow_id is unknown. Pair with `chain` whenever the user named one — a ticker alone spans both desks." },
         serial:   { type: "string", description: "Aesthetic serial like '#0007' — server resolves to id via the arrow feed. Optional." },
+        chain:    { type: "string", enum: ["robinhood", "base"], description: "Which Blue Hood desk to search. Pass it whenever the user names a chain. Omit ONLY when the user did not — omitting means 'either desk', never 'Robinhood'. Ignored for arrow_id/serial, which already identify one arrow." },
       },
       required: [],
     },
@@ -1330,9 +1286,24 @@ async function callHubTool(
     const { kvGet } = await import("@/lib/kv");
     const { kvArrow, KV_ARROW_FEED } = await import("@/lib/blue-hood/kv-keys");
     const { readChatCard } = await import("@/lib/blue-hood/chat-card");
+    const { chainOf, matchesChain } = await import("@/lib/blue-hood/types");
     const arrowIdArg = typeof args.arrow_id === "string" ? args.arrow_id.trim() : "";
     const serialArg = typeof args.serial === "string" ? args.serial.trim().replace(/^#/, "").padStart(4, "0") : "";
     const tickerArg = typeof args.ticker === "string" ? args.ticker.trim().toUpperCase() : "";
+
+    // #206. `undefined` means "the user named no chain", which is NOT the same
+    // as "robinhood" — that conflation is the bug. It stays undefined all the
+    // way down so the ticker scan can tell "search both desks" apart from
+    // "search Base", and so an unqualified answer is forced to LABEL the chain
+    // it landed on instead of quietly implying one.
+    //
+    // Deliberately NOT resolved by looking the ticker up in a chain registry.
+    // That is the #342 mistake with the registry swapped: a ticker→chain table
+    // answers "which chain COULD this ticker be on", and the question here is
+    // "which chain did this arrow FIRE on". Only the stored arrow knows, so the
+    // filter reads `chainOf(a)` off the record and nothing else.
+    const chainArg: import("@/lib/blue-hood/types").HoodChain | undefined =
+      args.chain === "base" || args.chain === "robinhood" ? args.chain : undefined;
 
     let arrowId: string | null = arrowIdArg || null;
 
@@ -1346,7 +1317,13 @@ async function callHubTool(
       }
     }
 
-    // Ticker → id (newest engine, non-test).
+    // Ticker → id (newest engine, non-test), scoped to the chain when one was
+    // named. `otherChainHit` records whether the OTHER desk has an arrow for
+    // this ticker: that is the difference between "Blue Hood has never covered
+    // NVDA" and "Blue Hood covers NVDA, but not on the desk you asked about",
+    // and the second one has to be sayable or the model will reach for the
+    // arrow it can see.
+    let otherChainHit: { serial: string; chain: string } | null = null;
     if (!arrowId && tickerArg) {
       const feed = (await kvGet<string[]>(KV_ARROW_FEED)) ?? [];
       for (const id of feed.slice(0, 500)) {
@@ -1356,14 +1333,40 @@ async function callHubTool(
         if (a.test) continue;
         // Prefer engine origin; legacy arrows without `origin` default to engine.
         if (a.origin && a.origin !== "engine") continue;
+        // `matchesChain` — never `a.chain === chainArg`. It reads the row
+        // through `chainOf` (so the ~74 pre-Base rows correctly read as
+        // Robinhood) while treating an absent `chainArg` as "either desk"
+        // rather than as Robinhood. Those two absences are different facts;
+        // collapsing them is the bug.
+        if (!matchesChain(a, chainArg)) {
+          otherChainHit ??= { serial: a.serial, chain: chainOf(a) };
+          continue;
+        }
         arrowId = id; break;
       }
     }
 
     if (!arrowId) {
+      // Chain-scoped miss gets its own sentence. Same shape as the brief
+      // worker's `brief_status: "skipped"` (#340): a desk that was never asked
+      // must not be reported as a desk that failed, and an empty desk must not
+      // be reported as an empty ticker.
+      if (tickerArg && chainArg) {
+        const alt = otherChainHit
+          ? ` Blue Hood HAS fired ${tickerArg} on ${otherChainHit.chain} (newest ${otherChainHit.serial}) — you may OFFER that as a different question, but do NOT present it as the ${chainArg} answer and do NOT quote its numbers.`
+          : ` Blue Hood has no ${tickerArg} arrow on either desk.`;
+        return {
+          text: `NO ARROW on chain=${chainArg} for ticker=${tickerArg}. Tell the user plainly that Blue Hood has not fired a ${chainArg} arrow for ${tickerArg}.${alt} Do NOT invent an arrow and do NOT answer with the other chain's data.`,
+          result: {
+            kind: "hood_arrow", not_found: true, reason: "no_arrow_on_chain",
+            chain: chainArg, ticker: tickerArg, other_chain: otherChainHit,
+            query: { arrowIdArg, serialArg, tickerArg, chainArg },
+          },
+        };
+      }
       return {
         text: `No arrow found for ${arrowIdArg ? `id=${arrowIdArg}` : serialArg ? `serial=#${serialArg}` : tickerArg ? `ticker=${tickerArg}` : "the given input"}. Do NOT invent one — tell the user in one line that Blue Hood hasn't fired an arrow matching that reference, and suggest they check /hood/inbox.`,
-        result: { kind: "hood_arrow", not_found: true, query: { arrowIdArg, serialArg, tickerArg } },
+        result: { kind: "hood_arrow", not_found: true, query: { arrowIdArg, serialArg, tickerArg, chainArg } },
       };
     }
 
@@ -1385,8 +1388,26 @@ async function callHubTool(
       : arrow.type === "arb"   ? `ARB ${arrow.expected_direction === "up" ? "long dex" : "short dex"}`
       : arrow.type === "flow"  ? `FLOW ${arrow.expected_direction === "up" ? "buy" : "sell"}`
       : "WHALE Δ";
+    // #206 — the three facts the model was answering WITHOUT.
+    // `chain`: it had no way to know arrow #0366 was Robinhood, so a Base
+    //   question got a Robinhood answer with no caveat. It is first in the
+    //   strip because it qualifies every number that follows.
+    // `age_hours` + `status`: a graded arrow is a closed position. Handing over
+    //   only the prices invites the present tense ("drift hiện tại"), which
+    //   turns three-day-old history into a live claim — wrong with real data,
+    //   which is the failure mode a tool call cannot protect against.
+    const arrowChain = chainOf(arrow);
+    const firedMs = Date.parse(arrow.fired_at);
+    const ageH = Number.isFinite(firedMs)
+      ? Math.round(((Date.now() - firedMs) / 3_600_000) * 10) / 10
+      : null;
     const answerHints = [
+      `chain=${arrowChain} (${arrowChain === "base" ? "Base, chainId 8453" : "Robinhood Chain, chainId 4663"}) — say which desk this is; the other desk's numbers are NOT interchangeable`,
       `serial=${arrow.serial} ticker=${arrow.ticker} signal="${signal}"`,
+      `status=${arrow.status} outcome=${arrow.outcome ?? "null"} fired_at=${arrow.fired_at}${ageH !== null ? ` age_hours=${ageH}` : ""}`,
+      arrow.status === "graded"
+        ? `⚠️ GRADED = CLOSED. This arrow is history, not a live signal: describe it in the PAST tense, state its age, and do NOT present it as the current drift.`
+        : "",
       `reference_price=${arrow.reference_price} grading_window_h=${arrow.grading_window_h}`,
       brief?.verdict_note ? `verdict_note="${brief.verdict_note.replace(/"/g, "'").slice(0, 240)}"` : "verdict_note=null",
       brief?.one_line_context ? `context="${brief.one_line_context.replace(/"/g, "'").slice(0, 240)}"` : "context=null",
@@ -1405,6 +1426,14 @@ async function callHubTool(
         arrow,
         card,
         signal,
+        // #206 — denormalised onto the result so the CARD can state them too.
+        // `arrow.chain` is optional on the wire (the ~74 pre-Base rows omit it),
+        // so a renderer reading `arrow.chain` directly would print nothing for
+        // exactly the rows most likely to be misread as Base. Resolved once,
+        // here, through `chainOf` — the same call the answer text uses, so the
+        // badge and the prose cannot disagree.
+        chain: arrowChain,
+        age_hours: ageH,
         deep_link: {
           // Absolute (canonical) URLs — same reasoning as chat-card.ts:
           // the chat message may be persisted/shared, so the link must
@@ -1795,8 +1824,22 @@ async function callHubTool(
     }
 
     const data = await res.json().catch(() => null);
-    // Unwrap nested { result: ... } if present
-    const payload = (data as Record<string, unknown>)?.result ?? data;
+    // Unwrap nested { result: ... } if present — EXCEPT for a JSON-RPC reply.
+    //
+    // Two protocols, one key name. In our x402 envelope `result` means "the
+    // payload is inside me"; in JSON-RPC it means "I am the payload, and here
+    // are my siblings". Unwrapping a JSON-RPC reply therefore threw away every
+    // sibling and handed the model a bare `"0x3094173"` — no network, no
+    // method, no decode. It then converted the hex in its head and reported a
+    // Base block height ~20,000 low (#207, measured in prod 2026-09-06). The
+    // route's own comment claimed `network` was echoed "so the caller (and the
+    // model reading this in chat) can see which network actually answered";
+    // that sentence had never been true.
+    //
+    // `jsonrpc` is the discriminator the spec itself mandates, so this is a
+    // protocol check, not a per-tool special case.
+    const isJsonRpc = !!data && typeof data === "object" && "jsonrpc" in data;
+    const payload = isJsonRpc ? data : ((data as Record<string, unknown>)?.result ?? data);
     const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
     // Surface the actual credit debit so the chat UI can show the real
     // total spend (chat message + tool calls), not just the message cost.
@@ -2709,9 +2752,12 @@ export async function POST(req: NextRequest) {
     SOUL_MD,
     buildBaseSystem({ hasWebSearch, hasTools, toolsUnreachable }),
     buildAgentCapabilities(hasTools),
-    // B20 stays unconditional: it is background knowledge about a token
-    // standard, not a claim about what this request can do.
-    B20_SECTION,
+    // B20 splits on the same `hasTools` flag as everything else: the standard's
+    // FACTS and its PROHIBITIONS go out either way (a model with no tools still
+    // has to answer "what is B20?" correctly, and still must never print a
+    // private key), but the "Use <tool> when the user asks X" dispatch table
+    // only ships when those tools are actually attached.
+    buildB20Section(hasTools),
     skills   ? `## Installed Skills\nThe user has installed these skill packs — use their tools / knowledge when relevant:\n\n${skills}` : "",
     // `&& hasTools` covers the Phase-1-failed rebuild: connectors ride the same
     // tool call, so when it doesn't happen they are as absent as the Hub tools.

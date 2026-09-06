@@ -65,6 +65,12 @@ const WEB = path.resolve(path.dirname(path.resolve(process.argv[1])), "..");
 const read = (p: string) => readFileSync(path.join(WEB, p), "utf8");
 
 const ROUTE    = read("src/app/api/chat/route.ts");
+/** The B20 prompt text moved OUT of route.ts on 2026-09-06 (#205): a `route.ts`
+ *  may only export route handlers, so the prompt could not be unit-tested while
+ *  it lived there. Tool REGISTRATIONS (`name:`/`toolName ===`) stayed in
+ *  route.ts; only the prose moved. Two files, two questions — "can the model
+ *  call it" is answered by ROUTE, "what are we telling the model" by PROMPT. */
+const PROMPT   = read("src/app/api/chat/system-prompt.ts");
 const CARDS    = read("src/app/chat/components/ToolCards.tsx");
 const LAUNCHES = read("src/app/app/launches/LaunchesClient.tsx");
 const REGISTRY = read("src/lib/launches.ts");
@@ -171,7 +177,15 @@ check("B20LaunchCard is still rendered by the dispatcher",
 check("the B20 card still deploys through our own /api/b20 endpoints",
   /["'`]\/api\/b20\/prepare/.test(CARDS) && /["'`]\/api\/b20\/receipt/.test(CARDS));
 check("the prompt names hub_b20_launch as the only deploy path",
-  /hub_b20_launch is the ONLY token-deploy tool/.test(ROUTE));
+  /hub_b20_launch is the ONLY token-deploy tool/.test(PROMPT));
+// …and it must sit in the GATED half. `b20Dispatch()` is only injected when the
+// request carries tools; `b20Knowledge()` always is. Rule 6g names a tool, so in
+// the ungated half it would re-create #205 — a tool-free prompt advertising a
+// tool — which is the bug the file split was made to fix. Checked positionally:
+// 6g must fall after the dispatch header, not before it.
+check("rule 6g lives in the tool-gated half, not the always-on knowledge block",
+  PROMPT.indexOf("hub_b20_launch is the ONLY token-deploy tool")
+    > PROMPT.indexOf("## B20 & chain actions — which tool to call"));
 
 // ── 4. The launch records are evidence and must outlive their writer ─────────
 console.log("\n4. launch history survived the route that produced some of it");

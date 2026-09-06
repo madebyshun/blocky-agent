@@ -16,7 +16,7 @@
  * the mono family locally rather than relying on inherit.
  */
 
-import type { Arrow } from "@/lib/blue-hood/types";
+import { chainOf, type Arrow, type HoodChain } from "@/lib/blue-hood/types";
 import type { ChatCard } from "@/lib/blue-hood/chat-card";
 import Link from "next/link";
 import { useState } from "react";
@@ -34,34 +34,66 @@ const GREEN_TEXT = "#22c55e";
 export interface HoodArrowResult {
   kind: "hood_arrow";
   not_found?: boolean;
+  /** "no_arrow_on_chain" — the ticker exists, this DESK has never fired it.
+   *  A distinct reason because "no NVDA arrow" and "no NVDA arrow on Base" are
+   *  different facts, and the second one is the one the user asked about. */
+  reason?: string;
   arrow?: Arrow;
   card?: ChatCard | null;
   signal?: string;
+  /** Resolved server-side via `chainOf`, so the ~74 rows that predate the Base
+   *  desk render "ROBINHOOD" rather than a blank badge. */
+  chain?: HoodChain;
+  age_hours?: number | null;
+  /** Set when the requested desk is empty but the OTHER one has this ticker.
+   *  Offered as a different question, never silently substituted. */
+  other_chain?: { serial: string; chain: string } | null;
   deep_link?: { inbox: string; board: string; track: string };
-  query?: { arrowIdArg?: string; serialArg?: string; tickerArg?: string };
+  query?: { arrowIdArg?: string; serialArg?: string; tickerArg?: string; chainArg?: string };
 }
+
+const CHAIN_LABEL: Record<HoodChain, string> = { robinhood: "ROBINHOOD 4663", base: "BASE 8453" };
 
 export function HoodArrowCard({ result }: { result: HoodArrowResult }) {
   if (result.not_found) {
+    // #206 — a chain-scoped miss says which desk it searched. The old copy read
+    // "No arrow matching NVDA", which is FALSE when Robinhood has fired NVDA 40
+    // times and only Base is empty — and it was rendered right next to prose
+    // answering a Base question with a Robinhood arrow.
+    const onChain = result.reason === "no_arrow_on_chain" && result.query?.chainArg;
     return (
       <div
         className="rounded border px-4 py-3 font-mono text-[12px]"
         style={{ borderColor: BORDER, backgroundColor: SURFACE, color: MUTED }}
       >
         <div className="mb-1 text-[11px] uppercase" style={{ color: AMBER, letterSpacing: "0.08em" }}>
-          // BLUE HOOD · not found
+          // BLUE HOOD · {onChain ? "no arrow on this desk" : "not found"}
         </div>
-        <div className="text-white">
-          No arrow matching{" "}
-          <span style={{ color: RH_GREEN }}>
-            {result.query?.arrowIdArg
-              ? `id ${result.query.arrowIdArg.slice(0, 8)}…`
-              : result.query?.serialArg
-                ? `#${result.query.serialArg}`
-                : result.query?.tickerArg ?? "your query"}
-          </span>
-          .
-        </div>
+        {onChain ? (
+          <div className="text-white">
+            No <span style={{ color: RH_GREEN }}>{result.query?.tickerArg}</span> arrow on{" "}
+            <span style={{ color: BLUE }}>{result.query?.chainArg === "base" ? "Base (8453)" : "Robinhood Chain (4663)"}</span>.
+          </div>
+        ) : (
+          <div className="text-white">
+            No arrow matching{" "}
+            <span style={{ color: RH_GREEN }}>
+              {result.query?.arrowIdArg
+                ? `id ${result.query.arrowIdArg.slice(0, 8)}…`
+                : result.query?.serialArg
+                  ? `#${result.query.serialArg}`
+                  : result.query?.tickerArg ?? "your query"}
+            </span>
+            .
+          </div>
+        )}
+        {result.other_chain && (
+          <div className="mt-1">
+            The other desk has one:{" "}
+            <span style={{ color: RH_GREEN }}>{result.other_chain.serial}</span> on{" "}
+            <span style={{ color: BLUE }}>{result.other_chain.chain}</span> — a different question, not this answer.
+          </div>
+        )}
         <div className="mt-1">Check <Link href="/hood/inbox" className="underline">/hood/inbox</Link> for every fired arrow.</div>
       </div>
     );
@@ -71,6 +103,11 @@ export function HoodArrowCard({ result }: { result: HoodArrowResult }) {
   if (!a) return null;
   const brief = a.brief;
   const facts = brief?.facts_at_fire;
+  // Prefer the server's resolved value, but fall back through `chainOf` rather
+  // than to a blank: a card that omits the desk is exactly how a Robinhood
+  // arrow got read as Base. Never `a.chain` bare — it is absent on legacy rows.
+  const chain = result.chain ?? chainOf(a);
+  const ageLabel = formatAge(result.age_hours ?? hoursSince(a.fired_at));
   const outcome = (() => {
     if (a.status === "open") return { label: "WATCHING", color: BLUE };
     if (a.outcome === "hit") return { label: "HIT", color: GREEN_TEXT };
@@ -89,12 +126,27 @@ export function HoodArrowCard({ result }: { result: HoodArrowResult }) {
         <div className="flex items-baseline gap-2 min-w-0">
           <span className="text-[11px]" style={{ color: RH_GREEN }}>{a.serial}</span>
           <span className="text-[14px] font-semibold text-white truncate">{a.ticker}</span>
+          {/* #206 — NVDA/META/GOOGL exist on both desks, so ticker alone names
+              nothing. The badge sits next to the ticker it qualifies. */}
+          <span
+            className="rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-wider shrink-0"
+            style={{ color: BLUE, backgroundColor: `${BLUE}18` }}
+            title={`This arrow fired on ${CHAIN_LABEL[chain]} — the other desk's numbers are not interchangeable`}
+          >
+            {CHAIN_LABEL[chain]}
+          </span>
           <span className="text-[10px] uppercase" style={{ color: MUTED, letterSpacing: "0.08em" }}>
             {result.signal ?? a.type}
           </span>
         </div>
+        {/* Age, so a three-day-old graded arrow cannot read as "right now". */}
+        {ageLabel && (
+          <span className="ml-auto text-[10px] shrink-0" style={{ color: MUTED }} title={`fired ${a.fired_at}`}>
+            {ageLabel}
+          </span>
+        )}
         <span
-          className="ml-auto rounded px-2 py-0.5 text-[10px] font-semibold tracking-wider shrink-0"
+          className={`${ageLabel ? "" : "ml-auto "}rounded px-2 py-0.5 text-[10px] font-semibold tracking-wider shrink-0`}
           style={{ color: outcome.color, backgroundColor: `${outcome.color}18` }}
         >
           {outcome.label}
@@ -241,6 +293,21 @@ function ActionsRow({ arrow, deepLink }: { arrow: Arrow; deepLink?: { inbox: str
       )}
     </>
   );
+}
+
+function hoursSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? (Date.now() - t) / 3_600_000 : null;
+}
+
+/** "2h ago" / "3d ago". Null when the timestamp is unreadable — a missing age
+ *  is better than a wrong one, and "just now" is the wrong guess. */
+function formatAge(h: number | null | undefined): string | null {
+  if (h === null || h === undefined || !Number.isFinite(h) || h < 0) return null;
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))}m ago`;
+  if (h < 48) return `${Math.round(h)}h ago`;
+  return `${Math.round(h / 24)}d ago`;
 }
 
 function formatUsd(n: number | null | undefined): string {

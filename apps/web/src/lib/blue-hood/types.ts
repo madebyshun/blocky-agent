@@ -68,6 +68,31 @@ export function chainOf(x: { chain?: HoodChain } | null | undefined): HoodChain 
 }
 
 /**
+ * Does this row belong to the desk the CALLER asked about?
+ *
+ * ⚠️ THE DEFAULT GOES ON THE ROW, NEVER ON THE QUERY. `chainOf` above says an
+ * absent `chain` field means Robinhood — true, because every row written before
+ * the Base desk really is Robinhood. `want === undefined` is a completely
+ * different absence: it means the caller named no chain at all, so BOTH desks
+ * match. Reusing the row default for the query is #206 — Blue Chat resolved
+ * "drift on NVDA on Base" through a bare-ticker scan, the missing chain fell to
+ * `"robinhood"`, and a graded Robinhood arrow was rendered as the live Base
+ * answer with no caveat. It was the third instance of the family (#162, #340,
+ * #161), which is why the two absences now have separate spellings.
+ *
+ * Deliberately NOT a ticker→chain registry lookup. That is the #342 mistake
+ * with the registry swapped: a registry answers "which chain COULD this ticker
+ * be on", and the question is "which chain did this arrow FIRE on". Only the
+ * stored row knows, so this reads the row and nothing else.
+ */
+export function matchesChain(
+  x: { chain?: HoodChain } | null | undefined,
+  want: HoodChain | undefined,
+): boolean {
+  return want === undefined || chainOf(x) === want;
+}
+
+/**
  * Base P1 — the UI identity of a snapshot row. `chainSeg`'s idea (kv-keys.ts),
  * applied to React keys / refs / accordion state instead of KV keys.
  *
