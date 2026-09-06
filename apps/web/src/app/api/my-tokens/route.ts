@@ -32,6 +32,16 @@ export interface MyToken {
   claimed: { token0: string; token1: string; count: number };
   /** true when either claimable side parses to a positive number. */
   hasClaimable: boolean;
+  /**
+   * Which chain these fees live on, straight from Bankr's row. The response is
+   * ALL-CHAINS — the `?chain=` query param is ignored and every row carries its
+   * own `chain` (measured 2026-09-06: 26 base + 7 robinhood). The top-level
+   * `chain` is only an echo/default label, so per-row is the only correct read.
+   * This used to be dropped here, leaving the client to guess the chain from a
+   * local KV launch record that does not cover every fee-bearing token.
+   */
+  chain: "base" | "robinhood" | null;
+  chainId: number | null;
 }
 
 export interface MyTokensResponse {
@@ -88,7 +98,14 @@ export async function GET(req: NextRequest) {
     const claimed = (t.claimed ?? {}) as { token0?: unknown; token1?: unknown; count?: unknown };
     const c0 = String(claimable.token0 ?? "0");
     const c1 = String(claimable.token1 ?? "0");
+    // Unrecognised chain → null, never a guessed default. An address on the
+    // wrong chain is meaningless (CLAUDE.md), so "unknown" beats "probably Base".
+    const chain = t.chain === "robinhood" ? "robinhood" as const
+      : t.chain === "base" ? "base" as const
+      : null;
     return {
+      chain,
+      chainId: chain === "robinhood" ? 4663 : chain === "base" ? 8453 : null,
       tokenAddress: String(t.tokenAddress ?? ""),
       name: String(t.name ?? ""),
       symbol: String(t.symbol ?? ""),
