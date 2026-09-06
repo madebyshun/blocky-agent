@@ -1017,53 +1017,6 @@ function BlueStreamCard({ result }: { result: Record<string, unknown> }) {
   );
 }
 
-// ── GenericCard — fallback for any tool without a specific card ───────────────
-
-const SKIP_KEYS = new Set(["raw", "prompt", "_meta", "model", "tool", "command"]);
-
-function GenericCard({ tool, result }: { tool: string; result: Record<string, unknown> }) {
-  const label = tool.replace(/^hub_/, "").replace(/_/g, " ");
-
-  // Pick the most informative fields to surface
-  const topFields = Object.entries(result)
-    .filter(([k, v]) => !SKIP_KEYS.has(k) && v !== null && v !== undefined && v !== "")
-    .slice(0, 6);
-
-  if (topFields.length === 0) return null;
-
-  return (
-    <Card accentColor="#4FC3F7">
-      <CardHeader accentColor="#4FC3F7">
-        <span className="font-mono text-[11px] font-bold text-slate-300 capitalize">{label}</span>
-      </CardHeader>
-      <CardBody>
-        <div className="grid grid-cols-1 gap-2">
-          {topFields.map(([k, v]) => {
-            const isArray  = Array.isArray(v);
-            const isObject = typeof v === "object" && !isArray;
-            const display  = isArray
-              ? (v as unknown[]).slice(0, 3).map(String).join(" · ")
-              : isObject
-              ? JSON.stringify(v).slice(0, 120)
-              : String(v).slice(0, 200);
-            const isScore  = /score|rating|pct|percent/i.test(k) && typeof v === "number";
-            const key      = k.replace(/_/g, " ");
-            return (
-              <div key={k}>
-                <p className="font-mono text-[9px] text-slate-600 uppercase tracking-wider">{key}</p>
-                {isScore
-                  ? <ScoreBar score={Number(v)} color="#4FC3F7" />
-                  : <p className="font-mono text-[11px] text-slate-300 leading-snug">{display}</p>
-                }
-              </div>
-            );
-          })}
-        </div>
-      </CardBody>
-    </Card>
-  );
-}
-
 // ── Router — pick the right card for a tool ───────────────────────────────────
 
 // ── Portfolio card (live, client-side) ────────────────────────────────────────
@@ -2876,6 +2829,58 @@ export function ToolResultCard({ tool, result }: { tool: string; result: Record<
     case "prepare_yield":     return <MoveToYieldCard  result={r as YieldMoveResult} account={account} />;
     case "prepare_send":      return <SendCard         result={r as SendResult} account={account} />;
     case "prepare_swap":      return <SwapCard         result={r as SwapResult} account={account} />;
-    default:                  return <GenericCard      tool={tool} result={r} />;
+
+    // A tool WITHOUT a case above renders NO card, deliberately.
+    //
+    // This used to fall through to a `GenericCard` that dumped the first six
+    // non-skipped fields of whatever the handler returned. It looked like a
+    // card and carried none of the value of one: no buttons, no `onClick`, no
+    // `href` — a read-only key/value dump, truncated at 200 chars per field
+    // (objects at 120), in whatever order `Object.entries` happened to yield.
+    //
+    // 26 of the ~48 registered tools landed here, so most "cards" in chat were
+    // that dump. `hub_b20_inspect` is the one ShunTr pointed at: a box reading
+    // ADDRESS / NETWORK / ISB20 / INITIALIZED / NAME / SYMBOL, sitting directly
+    // under a paragraph where the model had already written the same six facts
+    // in a sentence. The dump is a strict SUBSET of the prose above it — the
+    // model gets the whole result object, the card got six arbitrary fields —
+    // so it added length and zero information.
+    //
+    // ⚠️ KNOW WHAT THIS COSTS, IN-APP: the ⚡ tool-exec chip is already gone
+    // from the in-app transcript for every tool (ChatMessages.tsx — #139
+    // dropped it for action cards, then it was dropped for all of them). So
+    // for a tool that lands here, this `null` means the in-app message renders
+    // NOTHING but prose. Progress while the tool runs is still the streaming
+    // dots, and the result is in the model's context, so the prose carries it.
+    //
+    // ⚠️ WHAT IS *NOT* LOST — check this before "restoring" a marker here.
+    // The audit trail that distinguishes a tool that RAN from a tool the model
+    // merely narrated is a SEPARATE code path, and it survives untouched:
+    //
+    //   route.ts    emits `tool_start`/`tool_done` ONLY inside the branch that
+    //               actually calls callHubTool()/callMcpConnectorTool() — a
+    //               fabricated tool produces no event at all
+    //   ChatContext builds `toolLogs` from those SSE events (not from text)
+    //   api/chat/share persists toolLogs as {tool, status, ms} — the name and
+    //               duration, NOT the result, so it never needed this card
+    //   share/[id]/page.tsx renders "⚡ Blue Agent · <tool> ✓ 20.0s" and
+    //               imports NOTHING from this file
+    //
+    // MEASURED 2026-09-06 against the live share link that exposed #204: the
+    // page still renders `⚡ … b20 inspect ✓` today, from that path. #204 —
+    // the fake-receipt bug — was caught in a SHARE LOG, and the share log is
+    // exactly what is preserved here. Deleting GenericCard cannot blind it.
+    //
+    // So the honest split: in-app loses the per-tool marker for the tools
+    // without a case; the externally-visible, server-emitted receipt keeps it
+    // for all of them. Don't re-add a card here to prove execution — a card
+    // rendered from the result cannot prove the result is real anyway.
+    //
+    // Adding a tool to chat therefore does NOT require touching this file. If a
+    // tool needs a real card — one with an action the prose cannot perform, i.e.
+    // a button that signs, links out, or mutates state — add an explicit case.
+    // Don't reintroduce a generic renderer: the failure mode isn't a missing
+    // card, it's a card that repeats the answer with less of it.
+    default:                  return null;
   }
 }
