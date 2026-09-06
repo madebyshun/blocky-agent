@@ -12,6 +12,7 @@ import { createConfig as privyCreateConfig, WagmiProvider as PrivyWagmiProvider 
 import { PRIVY_APP_ID, PRIVY_ENABLED, privyClientConfig } from "@/lib/privy/config";
 import { PrivyConnectBridge } from "@/lib/privy/connect-bridge";
 import { PrivyIdentityBridge } from "@/lib/privy/identity-bridge";
+import PrivyWalletActivate from "@/lib/privy/wallet-activate";
 import MiniAppReady from "@/components/MiniAppReady";
 import BaseAppAutoConnect from "@/components/BaseAppAutoConnect";
 import { LanguageProvider } from "@/lib/i18n/context";
@@ -198,6 +199,11 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       <PrivyProvider appId={PRIVY_APP_ID!} config={privyClientConfig}>
         <QueryClientProvider client={queryClient}>
           <PrivyWagmiProvider config={privyConfig}>
+            {/* Attaches the signed-in user's Privy wallet to wagmi when a
+                restored session left it detached. Without it "signed in" and
+                "has a wallet" drift apart and every credit surface reads a
+                logged-in user as a guest — see the header of wallet-activate. */}
+            <PrivyWalletActivate />
             {/* Publishes Privy's connectWallet() to useWallet(). Without it the
                 pickers have no route to an external wallet on this tree. */}
             <PrivyConnectBridge>

@@ -190,6 +190,14 @@ export const PRIVY_WALLET_LIST: { id: WalletListEntry; name: string; icon: strin
 // wallet keep using it — the embedded wallet is an ADD, never a replacement.
 // `@privy-io/wagmi`'s WagmiProvider then syncs that wallet into wagmi's
 // `useAccount()`, so the existing balance / swap / send stack needs no changes.
+//
+// ⚠️ That sync is NOT unconditional, and reading this comment as if it were is
+// what shipped a bug: the package skips its auto-reconnect whenever wagmi's
+// persisted `<connectorId>.disconnected` flag is set, and only a fresh
+// login/connect EVENT clears it — never a restored session. One tap of
+// "Disconnect wallet" therefore detached the embedded wallet permanently, and
+// every credit surface read a signed-in user as a 100-credit guest.
+// `lib/privy/wallet-activate.tsx` re-attaches it; its header has the measurement.
 export const privyClientConfig: PrivyClientConfig = {
   loginMethods: PRIVY_LOGIN_METHODS,
   embeddedWallets: {

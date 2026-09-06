@@ -136,9 +136,14 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
       {/* ── Account ─────────────────────────────────────────────────────── */}
       {section === "account" && (
         <>
+          {/* Subtitle says what the wallet IS here, not what connecting earns:
+              WalletBar's own hint right below already reads "→ Connect any
+              wallet for 500 credits/day — no token needed", and this header
+              used to repeat that same sentence one line above it, minus the
+              number. Two stacked copies of one offer read as a bug. */}
           <PaneHeader
             title="Account"
-            subtitle="Connect any Base wallet for a bigger daily credit allowance — no token needed."
+            subtitle="Your wallet is the identity behind credits, cross-device sync and on-chain actions."
           />
           <WalletBar onWalletChange={onWalletChange} refreshTrigger={walletRefresh} />
 
