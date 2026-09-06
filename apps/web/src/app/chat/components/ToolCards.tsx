@@ -2846,20 +2846,35 @@ export function ToolResultCard({ tool, result }: { tool: string; result: Record<
     // model gets the whole result object, the card got six arbitrary fields —
     // so it added length and zero information.
     //
-    // ⚠️ KNOW WHAT THIS COSTS: the ⚡ tool-exec chip is already gone for every
-    // tool (ChatMessages.tsx — #139 dropped it for action cards, then it was
-    // dropped for all of them, on the reasoning that "a skill speaks through
-    // its result card OR the answer text"). So for a tool that lands here,
-    // this `null` means the message renders NOTHING but prose — no chip, no
-    // card. That is the intended end state, not an oversight: the tool result
-    // is in the model's context, so the answer text carries it, and progress
-    // while the tool runs is still shown by the streaming dots.
+    // ⚠️ KNOW WHAT THIS COSTS, IN-APP: the ⚡ tool-exec chip is already gone
+    // from the in-app transcript for every tool (ChatMessages.tsx — #139
+    // dropped it for action cards, then it was dropped for all of them). So
+    // for a tool that lands here, this `null` means the in-app message renders
+    // NOTHING but prose. Progress while the tool runs is still the streaming
+    // dots, and the result is in the model's context, so the prose carries it.
     //
-    // The consequence to accept: a tool call is no longer independently
-    // visible, so "did it actually run?" can only be answered from the prose.
-    // That is exactly the property #204 hardened elsewhere (chat must not
-    // claim a tool ran when it didn't) — it is enforced server-side on the
-    // receipts, NOT by this card. Don't re-add a card here to prove execution.
+    // ⚠️ WHAT IS *NOT* LOST — check this before "restoring" a marker here.
+    // The audit trail that distinguishes a tool that RAN from a tool the model
+    // merely narrated is a SEPARATE code path, and it survives untouched:
+    //
+    //   route.ts    emits `tool_start`/`tool_done` ONLY inside the branch that
+    //               actually calls callHubTool()/callMcpConnectorTool() — a
+    //               fabricated tool produces no event at all
+    //   ChatContext builds `toolLogs` from those SSE events (not from text)
+    //   api/chat/share persists toolLogs as {tool, status, ms} — the name and
+    //               duration, NOT the result, so it never needed this card
+    //   share/[id]/page.tsx renders "⚡ Blue Agent · <tool> ✓ 20.0s" and
+    //               imports NOTHING from this file
+    //
+    // MEASURED 2026-09-06 against the live share link that exposed #204: the
+    // page still renders `⚡ … b20 inspect ✓` today, from that path. #204 —
+    // the fake-receipt bug — was caught in a SHARE LOG, and the share log is
+    // exactly what is preserved here. Deleting GenericCard cannot blind it.
+    //
+    // So the honest split: in-app loses the per-tool marker for the tools
+    // without a case; the externally-visible, server-emitted receipt keeps it
+    // for all of them. Don't re-add a card here to prove execution — a card
+    // rendered from the result cannot prove the result is real anyway.
     //
     // Adding a tool to chat therefore does NOT require touching this file. If a
     // tool needs a real card — one with an action the prose cannot perform, i.e.
