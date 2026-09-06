@@ -358,6 +358,7 @@ When user asks to send/transfer a B20 token:
 6e. Use robinhood_bridge when the user wants to BRIDGE or MOVE a token (or native ETH) BETWEEN Base (chainId 8453) and Robinhood Chain (chainId 4663) — trigger on ANY of: "bridge X TOKEN to robinhood", "bridge from base to rh", "move 100 USDC to robinhood", "bridge back to base", "send 0.1 ETH from base to robinhood", or similar cross-chain intent between these two chains. Call with { fromChain: "base"|"robinhood", toChain: "base"|"robinhood" (must differ), fromAddress: connected wallet 0x…, token: ERC-20 contract 0x… on fromChain OR "ETH"/"NATIVE" for native ETH, amount: decimal string in whole units ("100", "0.1"), optional recipient (defaults to sender), optional tokenSymbol display hint }. The server fetches a live Relay Protocol quote and returns { to, data, value, chainId } for the source chain — the user's own wallet signs the (optional) approve then the deposit tx, and Relay solvers fill the destination chain (delivery tracked on relay.link). Non-custodial: no server keys, no server signing. NEVER invent a token address — if the user gave only a symbol without a contract, ask for it. NEVER use for same-chain swaps (use robinhood_swap or prepare_swap).
 6f. There is NO DCA / recurring-buy tool. If the user asks to DCA, dollar-cost-average, "buy X every day", or set up any recurring purchase, say plainly that scheduled buys are not available yet and offer a one-off swap via prepare_swap instead. Do NOT describe how a DCA schedule would work as though you could create one, and never quote an allowance, keeper address, fee, or run count.
 6b. RESERVED — no launch tool on Robinhood Chain currently. If the user asks to launch/deploy/create a token on Robinhood, reply that the Virtuals-native launch flow is coming soon (rebuild in progress). Do NOT use hub_b20_launch (Base-only). For "give me a token", "show me tokens", "trending on robinhood", or any BROWSE-style RH query, use blue_stream with chain: "robinhood" — it returns live trending pools + TVL. Never confuse browse ("give me a token") with launch ("create a token").
+6g. hub_b20_launch is the ONLY token-deploy tool that exists. There is NO general-purpose launchpad — no Bankr flow, no meme-coin launcher, no "100B fixed supply", no sponsored gas, no creator-fee split. That path was retired 2026-09-06 because Bankr suspended the account it ran on (403 "Account suspended" on every deploy). If the user asks to launch/create/deploy a plain token ("launch a token called BlueBot", "make me a memecoin"), say plainly that the only launch path today is a B20 token on Base and offer hub_b20_launch — do NOT invent a launchpad, do NOT quote a supply/fee/gas arrangement, and do NOT promise a deploy you cannot perform.
 7. Use hub_b20_inspect when user provides a token address and asks: "is this B20?", "inspect this token", "check pause/policy", "B20 details", totalSupply/supplyCap, or variant (Asset/Stablecoin). Reads REAL on-chain state via multicall — zero LLM. Call with { address: "0x…", network: "mainnet" }.
 8. Use hub_b20_manage when the user wants to MINT, BURN, PAUSE/UNPAUSE, set/update a POLICY, GRANT/REVOKE a ROLE, update the SUPPLY CAP, or update METADATA on an EXISTING B20 token. Trigger on ANY of: "mint", "mint X tokens on [addr]", "burn", "pause", "unpause", "grant role", "revoke role", "set policy", "update cap", "update supply cap", "manage b20", "freeze", "seize". Call with { address: "0x…", network: "mainnet"|"sepolia" } (default mainnet unless the user says sepolia). Opens a wallet-signed control panel that loads the token's live roles and shows ONLY the actions the connected wallet is authorized for; the user signs each action in their own wallet.
 9. Use check_authorization when the user asks whether a SPECIFIC account is allowed by a token's policy — "is 0xABC allowed to receive TOKEN?", "can this wallet send/mint this token?", "这个地址能收到代币吗?", "is alice.base.eth on the allowlist?". Call with { token: "0x…", account: "0x… or basename", scope: "sender"|"receiver"|"executor"|"mint_receiver" (default receiver), network }. Reads live policy state (zero LLM); reply with one short line stating authorized / not authorized — never guess.
@@ -388,23 +389,6 @@ VERIFIED B20 FACTS (the ONLY facts you may state as fact):
 // ─── Hub tool definitions (Anthropic tool format) ─────────────────────────────
 
 const HUB_TOOLS = [
-  {
-    name: "prepare_token_launch",
-    description: "Open the unified token-launch card. If the user hasn't said which chain, the card FIRST shows a Base-vs-Robinhood-Chain picker; picking Base leads to the Bankr launchpad flow (real token on Base, Uniswap V4, 100B fixed supply, gas SPONSORED by Bankr), picking Robinhood Chain leads to the direct-deploy flow (raw ERC-20 contract-creation tx signed by the user's own wallet, chainId 4663). The CARD itself collects every field — token name, ticker, description, logo URL, website, and (Base only) fee recipient — as editable inputs; the user fills them in and clicks Launch/Deploy. \n\nCRITICAL — NEVER INVENT ANYTHING: do NOT make up a token name, ticker, description, logo, or website. Pass through ONLY values the user explicitly typed in THIS request; leave every other field empty so the user fills it in the card. If the user gave no details, call this with NO arguments. \n\nALWAYS A BRAND-NEW TOKEN: ignore any 'Active project' from memory and any token discussed or already deployed earlier; never assume a relaunch and never claim a launch is 'paused' or 'pending'. Only reuse an earlier token if the user explicitly names it now. \n\nDo NOT gather details by asking questions and do NOT mention total supply (fixed at 100B). Fee recipient defaults to BlueAgent when left blank, so you don't need to collect it. \n\nAfter calling, reply with ONE short line telling the user to fill in the card above and hit Launch — never claim the token launched (only the user's Launch click deploys it) and never quote a gas/ETH cost.",
-    input_schema: {
-      type: "object",
-      properties: {
-        tokenName:        { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly typed a token name in this request; otherwise omit. Never invent one." },
-        tokenSymbol:      { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a ticker. Never invent one." },
-        description:      { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a description. Never invent one." },
-        image:            { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a logo image URL. Never invent one." },
-        website:          { type: "string", description: "OPTIONAL — pass ONLY if the user explicitly gave a website URL. Never invent one." },
-        feeRecipientType: { type: "string", enum: ["wallet", "x", "farcaster", "ens"], description: "OPTIONAL — pass ONLY if the user explicitly named where fees go. Left blank, the card defaults fees to BlueAgent." },
-        feeRecipientValue:{ type: "string", description: "OPTIONAL — the handle/address for feeRecipientType (e.g. @username or name.eth). Pass only if the user explicitly named one." },
-      },
-      required: [],
-    },
-  },
   {
     name: "prepare_yield",
     description: "Open the MOVE-TO-YIELD card so the user can supply idle USDC into Aave v3 on Base (earn lending yield) or withdraw it back — NON-custodial, the user SIGNS in their own wallet; Blue Agent never holds keys or funds. Use when the user wants to: 'earn yield', 'put my USDC to work', 'deposit/supply to Aave', 'move idle USDC to yield', 'stake my USDC for interest', OR 'withdraw/pull my USDC out of Aave'. The CARD collects and edits amount, network (Base Sepolia testnet by DEFAULT — safe to test — or Base mainnet), and the action (supply/withdraw); the user reviews and signs.\n\nCRITICAL — NEVER INVENT AN AMOUNT: pass `amount` ONLY if the user explicitly stated a number in THIS request; otherwise omit it and let the card collect it. Pass action='withdraw' only if the user explicitly asked to withdraw/pull out. Network defaults to testnet; pass network='base' ONLY if the user explicitly asked for mainnet / real funds.\n\nThis tool NEVER moves funds by itself — only the user's signature in the card executes anything. After calling, reply with ONE short line telling the user to review and sign in the card above; never claim funds were moved and never quote an APY figure you weren't given.",
@@ -1255,15 +1239,6 @@ async function callHubTool(
 ): Promise<ToolCallResult> {
   // Client-rendered marker tools — no server endpoint. The chat UI reads the
   // result.kind and renders an interactive card.
-  if (toolName === "prepare_token_launch") {
-    // Preview only — the LaunchCard takes an explicit user confirmation before
-    // it POSTs to /api/launch-token. We never deploy from here.
-    return {
-      text: "Token-launch card rendered. The card shows all details — do NOT restate them as a table and do NOT quote any gas/ETH cost (gas is sponsored). Reply with one short line: tell the user to review and hit Launch in the card.",
-      staticReply: "Your token-launch card is ready above — review the details and hit **Launch** when you're set. Gas is sponsored.",
-      result: { kind: "token_launch", ...args },
-    };
-  }
   if (toolName === "prepare_yield") {
     // Marker only — the MoveToYieldCard collects amount/network/action and the
     // user SIGNS approve+supply (or withdraw) in their own wallet. We never
@@ -2222,7 +2197,6 @@ Try asking:
 "build me a token launchpad on Base"
 "is this token safe: 0x..."
 "best APY on Base right now?"
-"launch a token called BlueBot"
 "deploy a B20 stablecoin called vUSD"
 "what's the narrative on Base this week?"
 "analyze this B20 contract: 0x..."

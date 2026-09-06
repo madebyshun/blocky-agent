@@ -16,7 +16,7 @@ const SLASH = [
   { cmd: "/pick",   d: "Token pick signal — an asymmetric setup with a thesis." },
   { cmd: "/scan",   d: "Honeypot / contract safety scan on a token address." },
   { cmd: "/wallet", d: "Full on-chain portfolio breakdown for a wallet." },
-  { cmd: "/launch", d: "Deploy a real token on Base via the Bankr launchpad — opens a form card." },
+  { cmd: "/launch", d: "Deploy a B20 token on Base — opens a form card you sign in your own wallet." },
 ];
 
 export default function BlueChatDoc() {
@@ -102,19 +102,25 @@ export default function BlueChatDoc() {
 
       <H2 id="launch">Launch a token — live</H2>
       <P>
-        Blue Chat can deploy a <strong className="text-slate-200">real token on Base</strong>, not just plan one. Type{" "}
-        <code className="text-slate-300">/launch</code> (or ask &quot;launch a token&quot;) to open a form card — fill in name, ticker,
-        description, logo, and website, then click <strong className="text-slate-200">Launch</strong> to deploy.
+        Blue Chat can deploy a <strong className="text-slate-200">real B20 token on Base</strong>, not just plan one. Ask
+        &quot;launch a B20&quot; to open a form card — name, symbol, variant, and an optional supply cap — then deploy.
+        This is the <strong className="text-slate-200">only</strong> launch path in chat.
       </P>
       <CardGrid cols={2}>
-        <Card title="Bankr launchpad" color="#F59E0B">Deploys via Bankr — Uniswap V4 pool, 100B fixed supply, <strong className="text-slate-200">gas sponsored by Bankr</strong>.</Card>
-        <Card title="You confirm the deploy" color="#34D399">Nothing launches until you click Launch — it&apos;s a real, irreversible on-Base deploy. Returns Basescan, Uniswap & Bankr links.</Card>
-        <Card title="Fee recipient" color="#A78BFA">Trading fees route to a wallet you choose; defaults to BlueAgent if left blank.</Card>
-        <Card title="Showcase feed" color="#4FC3F7" href="/app/launches">Every token launched through Blue Chat appears live at <code className="text-slate-300">/app/launches</code> with market data.</Card>
+        <Card title="Self-hosted, no launchpad" color="#F59E0B">Your wallet signs <code className="text-slate-300">createB20</code> straight against the B20 Factory. No third party sits in the path and no one else can disable it.</Card>
+        <Card title="You sign, you pay gas" color="#34D399">Nothing deploys until you confirm in your own wallet — a real, irreversible deploy. Gas is yours; there is no sponsor.</Card>
+        <Card title="Two variants" color="#A78BFA"><strong className="text-slate-200">asset</strong> (18 decimals) or <strong className="text-slate-200">stablecoin</strong> (6 decimals + currency code). Supply cap optional — there is no fixed supply and no creator-fee split.</Card>
+        <Card title="Pick your network" color="#4FC3F7">Base Sepolia (84532) by default so you can rehearse; switch the card to Base mainnet (8453) for the real thing.</Card>
       </CardGrid>
       <Callout color="#fbbf24" title="Plan before you launch">
         The <strong className="text-slate-200">Launch</strong> Hub tools below (readiness, launch advisor, distribution plan) help you
-        prepare — then <code className="text-slate-300">/launch</code> ships it for real.
+        prepare — then the B20 card ships it for real.
+      </Callout>
+      <Callout color="#94a3b8" title="The Bankr launchpad is gone">
+        A second flow used to deploy through Bankr&apos;s launchpad (100B supply, sponsored gas, creator-fee split). Bankr
+        suspended the account it ran on, so every deploy returned 403; the path was removed on 2026-09-06 rather than left
+        to fail at the confirm step. Tokens it already deployed are real and still on-chain — they stay listed at{" "}
+        <Link href="/app/launches" className="text-[#4FC3F7] underline">/app/launches</Link>.
       </Callout>
 
       <H2 id="hub-tools">Hub tools in chat</H2>

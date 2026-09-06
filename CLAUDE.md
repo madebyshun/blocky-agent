@@ -237,7 +237,22 @@ Five Aeon skills are bundled in `skills/` and available to any command or agent 
 | `aeon-deep-research` | `skills/aeon-deep-research.md` | "DD on X", "build me a memo", "contrarian take" |
 | `aeon-distribute-tokens` | `skills/aeon-distribute-tokens.md` | Weekly $BLUEAGENT rewards payout to leaderboard |
 
-When a user request matches a trigger phrase, load the skill file and follow its output rules. All Aeon skills are **read-to-apply** — no extra setup required except `aeon-distribute-tokens` which needs `BANKR_API_KEY` with Wallet write scope — ⚠️ **assume dead until tested**: that is Bankr's *Wallet* API, a different endpoint from the 403-banned `llm.bankr.bot`, but it authenticates against the same Bankr account, and no code in this repo reads `BANKR_API_KEY` any more. Verify before relying on a payout run.
+When a user request matches a trigger phrase, load the skill file and follow its output rules. All Aeon skills are **read-to-apply** — no extra setup required except `aeon-distribute-tokens`, which needs `BANKR_API_KEY` with Wallet write scope and is 🔴 **DEAD — measured, no longer a guess.**
+
+**MEASURED 2026-09-06** against `api.bankr.bot` with the key present:
+
+```
+POST /token-launches/deploy  → 403
+{"error":"Account suspended","banned":true,"banType":"restricted",
+ "reasonCode":"fraud","message":"This action is disabled while your account is
+ restricted. You can still view your balances and withdraw your funds."}
+```
+
+Identical on `?chain=base` and `?chain=robinhood`. The suspension is on the **ACCOUNT**, not on one hostname — so the old hedge ("a different endpoint from the 403-banned `llm.bankr.bot`, verify before relying on a payout run") resolves in the pessimistic direction: **every Bankr WRITE is banned, including the Wallet API a payout would use.** Do not schedule or promise an `aeon-distribute-tokens` run through Bankr; it will 403 at the transfer.
+
+**READS still work** — same day, `GET /token-launches?limit=3` → `200` with live data, exactly as the 403 body promises ("you can still view"). So `lib/bankr-usage.ts`, `/badge/[type]/[handle]`, `_handlers/b20-tracker.ts`, and the `/api/my-tokens` + `/api/claim-fees` creator-fee path are fine and **must stay** — that last one is how a creator withdraws fees they already earned, and closing it would strand their money. `BANKR_API_KEY` therefore stays SET in Vercel. **Write ≠ read: measure the specific verb before declaring either dead.**
+
+The deploy path that this 403 killed (`/api/launch-token` + the `prepare_token_launch` chat card) was retired 2026-09-06 — see `apps/web/scripts/action-card-inventory-check.ts`, which fails if any of it comes back.
 
 ---
 

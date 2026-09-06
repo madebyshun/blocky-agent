@@ -19,12 +19,16 @@
  *    rule exists to prevent. Now keyed to VIRTUALS_API_KEY, the credential the
  *    gateway actually reads (`_lib/llm.ts:219`).
  *
- *    ⚠️ BANKR_API_KEY itself is NOT dead and must NOT be unset in Vercel. Only
- *    Bankr's *LLM* endpoint is banned; the key is still load-bearing for
- *    `/api/launch-token` (Base + Robinhood token deploys), `/badge/[type]/
- *    [handle]`, and `lib/bankr-usage.ts` — the same user-level-key distinction
- *    CLAUDE.md draws for Bankr's Wallet API. Verified 2026-09-03: it IS set in
- *    production. "Dead for inference" ≠ "dead".
+ *    ⚠️ BANKR_API_KEY is still SET in production (verified 2026-09-03) and is
+ *    still read by `/badge/[type]/[handle]` and `lib/bankr-usage.ts`, both of
+ *    which are READS. Do not unset it without checking those two first.
+ *
+ *    It is no longer read by `/api/launch-token` — that route was deleted
+ *    2026-09-06. MEASURED that day: Bankr's deploy endpoint returns 403
+ *    `{"error":"Account suspended","banned":true,"banType":"restricted",
+ *    "reasonCode":"fraud"}` with the key present. So the suspension is on the
+ *    ACCOUNT, not just on `llm.bankr.bot` — the "dead for inference ≠ dead"
+ *    line above holds only for reads, and only until someone measures them.
  *
  * Note this stays a CONFIGURATION check, not a reachability check — it says a
  * key is present, not that Virtuals answered. Naming it `llmKeyConfigured`
