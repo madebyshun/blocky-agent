@@ -1270,6 +1270,12 @@ type MyToken = {
   claimable: { token0: string; token1: string };
   claimed: { token0: string; token1: string; count: number };
   hasClaimable: boolean;
+  /** Authoritative per-row chain from Bankr's fee data (null = unrecognised).
+   *  Preferred over the local KV launch record, which does not cover every
+   *  fee-bearing token — a Bankr-launched token can have fees here and no row
+   *  in `bluechat:launches` at all. */
+  chain: "base" | "robinhood" | null;
+  chainId: number | null;
 };
 type MyTokensResponse = { ok: boolean; address: string; tokens: MyToken[]; error?: string };
 type ClaimTx = { to: string; data: string; chainId: number; gasEstimate?: string; description?: string };
@@ -1299,6 +1305,9 @@ function MyTokenCard({ t, owner, onClaimed, chain, chainId, onExplore }: {
   const [status, setStatus] = useState<"idle" | "building" | "signing" | "done" | "error">("idle");
   const [msg, setMsg] = useState("");
   const [txHash, setTxHash] = useState("");
+  // Which chain the claim actually settled on — drives the explorer link. RH
+  // tx hashes do not resolve on Basescan, so a fixed host silently 404s.
+  const [txChainId, setTxChainId] = useState(0);
   const [copied, setCopied] = useState(false);
 
   const sym = (t.symbol || t.name || "?").replace(/^\$/, "");
@@ -1324,18 +1333,29 @@ function MyTokenCard({ t, owner, onClaimed, chain, chainId, onExplore }: {
       if (!d.ok || d.transactions.length === 0) {
         setMsg(d.error || "Nothing to claim."); setStatus("error"); return;
       }
-      // Make sure we're on Base before signing.
-      try { await switchChainAsync({ chainId: 8453 }); } catch { /* user may already be on Base */ }
       setStatus("signing");
       let last = "";
+      let lastChain = 0;
+      // Sign each tx on ITS OWN chain. Bankr's build-claim returns the real
+      // chainId per token (measured 2026-09-06: HOODUP → 4663), and creator
+      // fees exist on both Base 8453 and Robinhood 4663. This used to hardcode
+      // 8453 for the switch AND the send, which is why every Robinhood token
+      // showed `claimed.count: 0` while Base showed 4 — the button could not
+      // reach the chain the fees were on. A response can mix chains (multiple
+      // tokenAddresses), so switch inside the loop, not before it.
       for (const tx of d.transactions) {
+        try { await switchChainAsync({ chainId: tx.chainId }); } catch {
+          throw new Error(`Switch your wallet to chain ${tx.chainId} to claim ${sym}`);
+        }
         last = await sendTransactionAsync({
           to: tx.to as `0x${string}`,
           data: tx.data as `0x${string}`,
-          chainId: 8453,
+          chainId: tx.chainId,
         });
+        lastChain = tx.chainId;
       }
       setTxHash(last);
+      setTxChainId(lastChain);
       setStatus("done");
       setMsg("Fees claimed.");
       setTimeout(onClaimed, 2500); // refresh balances after the tx settles
@@ -1405,7 +1425,8 @@ function MyTokenCard({ t, owner, onClaimed, chain, chainId, onExplore }: {
             <span>
               ✓ {msg}{" "}
               {txHash && (
-                <a href={`https://basescan.org/tx/${txHash}`} target="_blank" rel="noopener noreferrer"
+                <a href={`${txChainId === RH_CHAIN_ID ? RH_EXPLORER : "https://basescan.org"}/tx/${txHash}`}
+                  target="_blank" rel="noopener noreferrer"
                   className="underline hover:opacity-80">view tx ↗</a>
               )}
             </span>
@@ -1536,10 +1557,14 @@ function MyTokensView({ launches, onExplore }: {
   return (
     <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       {(tokens ?? []).map((t) => {
+        // Bankr's own row wins; the local launch record is only a fallback for
+        // rows where Bankr sent no chain.
         const meta = chainByAddress.get(t.tokenAddress.toLowerCase());
         return (
           <MyTokenCard key={t.tokenAddress} t={t} owner={address} onClaimed={load}
-            chain={meta?.chain} chainId={meta?.chainId} onExplore={onExplore} />
+            chain={t.chain ?? meta?.chain}
+            chainId={t.chainId ?? meta?.chainId}
+            onExplore={onExplore} />
         );
       })}
     </div>
