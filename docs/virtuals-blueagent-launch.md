@@ -57,9 +57,8 @@ Today BlueAgent already ships:
 · 74 live x402 tools across research, safety, DeFi, launchpad, and DD
 · A hosted MCP server at blueagent.dev/api/mcp (57 curated tools)
 · B20HUB — a Uniswap V4 launchpad for real B20 tokens on Base, with a
-  built-in Base $BLUEAGENT buyback flywheel
-· /app/launches — a unified market feed for Base + Robinhood-chain
-  Virtuals launches, updated live
+  built-in Base $BLUEAGENT buyback flywheel, plus a live feed of its
+  launches at /app/b20hub
 · Robinhood Chain in chat — swap live, bridge + send + token↔token swap
   shipping alongside this launch
 
@@ -142,8 +141,11 @@ bridge". Bottom-right micro chip: "1B supply · LP 🔒 10y · 1% fee".
 - [ ] `@blueagent_` bio + pinned post updated to reference the Robinhood
       leg (once T-day is set).
 - [ ] Telegram community pinned message updated.
-- [ ] `/app/launches` Robinhood tab visually spot-checked so people
-      arriving from the announcement see something real.
+- [ ] Robinhood surface visually spot-checked so people arriving from the
+      announcement see something real. **This is chat now, not a page** —
+      the `/app/launches` market feed (and its Robinhood tab) was removed
+      2026-09-07 with the Bankr launch/fee surface; that URL 301s. Check
+      the swap/bridge/send cards in Blue Chat instead.
 - [ ] `hub_rh_send` shipped in Blue Chat (see task #81) — proves the RH
       chat surface is real before token launch.
 
@@ -219,7 +221,7 @@ Operate on Robinhood without leaving the conversation.
 
 · Route swap-fee revenue → Robinhood $BLUEAGENT buybacks
 · Buyback accrual connects to Base $BLUEAGENT stakers
-· Token detail page in /app/launches
+· A token detail page on blueagent.dev
 · Governance-signal weight for product decisions
 
 7/ Full docs (2-token model, mechanics, chat skills):
@@ -275,10 +277,14 @@ fake.
       `BlueBuyBack` used by B20HUB) — routes creator-share fees into
       Robinhood $BLUEAGENT buybacks.
 - [ ] Wire the buyback contract into the Virtuals fee-claim flow.
-- [ ] Add Robinhood $BLUEAGENT to `apps/web/src/app/api/blue-stream` so
-      it lights up in the Robinhood tab of `/app/launches`.
-- [ ] Ship `/app/launches/robinhood/blueagent` — dedicated token detail
-      page.
+- [ ] Add Robinhood $BLUEAGENT to `apps/web/src/app/api/blue-stream`.
+      ⚠️ Its old display surface — the Robinhood tab of `/app/launches` —
+      no longer exists (removed 2026-09-07). Decide where the data
+      actually renders BEFORE wiring the feed, or this ships a writer with
+      no reader.
+- [ ] Ship a dedicated token detail page. The live pattern to copy is
+      `/app/b20hub/token/[address]` (Base-only today); `/app/launches/…`
+      is gone and is not the route to recreate.
 - [ ] Update Navbar so Robinhood $BLUEAGENT shows a live price ticker
       alongside the Base $BLUEAGENT tile.
 - [ ] Discuss holder perks in the console (e.g. discounted x402 credits

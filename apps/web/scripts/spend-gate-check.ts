@@ -628,25 +628,36 @@ const SIGNER_REQUIREMENTS: Array<[string, (v: View) => boolean, (v: View) => str
 // floor is the count measured when the walk went repo-wide (7). It is a floor
 // and not an equality on purpose — a new spending card must be ALLOWED to land,
 // it just may not land unchecked.
+//
+// LOWERED 7 → 6 on 2026-09-09 (#416). `app/app/launches/LaunchesClient.tsx` was
+// deleted with the rest of the Bankr fee surface: the page called
+// /api/launches, /api/claim-fees, /api/my-tokens and /api/robinhood/explore,
+// all four of which that retirement removes, so the file could not be kept —
+// it had no endpoints left to call. Note what left with it: the fail-open hole
+// #428 patched in that same file is gone too. That is the DEFECT disappearing,
+// not the fix being reverted, and the distinction matters if anyone later
+// wonders where #428 went. Editing this floor is the deliberate act the comment
+// below asks for — the shrink is recorded here rather than passing unremarked.
 check(
   `1.1 the spender detector finds cards (found ${allSpenders.length}: ${allSpenders.join(", ") || "none"})`,
-  allSpenders.length >= 7,
+  allSpenders.length >= 6,
 );
 check(
   `1.2 every spender found is in scope (in scope ${spenders.length}/${allSpenders.length})`,
-  spenders.length >= 7,
+  spenders.length >= 6,
 );
-// The seven files money actually moves through, named so a rename or a deletion
+// The six files money actually moves through, named so a rename or a deletion
 // is visible rather than silently shrinking the set. Full paths relative to
 // `src/`, not basenames: once the walk is repo-wide, `SwapCard.tsx` is
 // ambiguous between the bank and the chat surfaces.
+// (Was seven until #416 retired app/app/launches/LaunchesClient.tsx — see the
+// floor comment above for why removal, not preservation, was the only option.)
 for (const f of [
   "app/chat/components/RobinhoodSendCard.tsx",
   "app/chat/components/RobinhoodSwapCard.tsx",
   "app/chat/components/RobinhoodBridgeCard.tsx",
   "app/chat/components/ToolCards.tsx",
   "app/app/bank/SwapCard.tsx",
-  "app/app/launches/LaunchesClient.tsx",
   "components/blue-hood/ReviewSignPanel.tsx",
 ]) {
   check(`1.3 ${f} is detected as a spender`, spenders.includes(f));
@@ -656,7 +667,12 @@ for (const f of [
 // set — 11 files here sign without reading a balance at all, which is exactly
 // the blind spot that let `ManagePanel.tsx` carry a fail-open cap gate through
 // every sweep that fixed the balance ones.
-check(`1.4 the signer detector finds signing files (found ${signers.length})`, signers.length >= 18);
+// LOWERED 18 → 17 on 2026-09-09 (#416), same single deletion as the Tier A
+// floor above: LaunchesClient was in both sets because a spender signs (1.5).
+// One file left, so both floors drop by exactly one — if a future edit has to
+// move one of these floors and not the other, that asymmetry is worth reading
+// twice, because the tiers are supposed to nest.
+check(`1.4 the signer detector finds signing files (found ${signers.length})`, signers.length >= 17);
 // Tier A ⊂ Tier B, by construction: a spender signs. If this ever breaks, the
 // two predicates have drifted apart and one of them is measuring the wrong
 // thing — better a loud failure than two sets that quietly stop overlapping.

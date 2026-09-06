@@ -4,8 +4,10 @@ import { findWethPools, bestPool } from "@/lib/robinhood/pool";
 // GET /api/robinhood/swap/quote?token=0x…&direction=buy|sell&amount=<decimal>
 //
 // Server-side route that answers "for this token, what pool should we route
-// through and roughly how much do I get out?" — used by the Robinhood Trade
-// modal in /launches. Non-custodial: no keys, no signing, just:
+// through and roughly how much do I get out?" — used by RobinhoodSwapCard in
+// chat. (It also backed the Robinhood Trade modal on /app/launches until that
+// page went out with the Bankr launch/fee surface on 2026-09-07; the chat card
+// is the live caller now.) Non-custodial: no keys, no signing, just:
 //   1. Probe every Uniswap V3 fee tier via factory.getPool() + liquidity read
 //      to find the deepest pool (or return `no_pool` if none exists yet).
 //   2. Ask GeckoTerminal for the token's live USD + WETH-relative price and

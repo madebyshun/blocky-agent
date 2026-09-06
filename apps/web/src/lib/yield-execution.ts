@@ -72,8 +72,11 @@ export const ERC20_ABI = [
   // `decimals` is the ONLY safe source for a token's scale. Anything that turns
   // a human-typed amount into base units (parseUnits) must read it from the
   // token itself — never from a constant, and never from a launch record, which
-  // has no such field to carry it. See the header of the trade modals in
-  // app/launches/LaunchesClient.tsx for the bug this closed.
+  // has no such field to carry it. The bug this closed (PR #414): the launch
+  // trade modals hardcoded `const tokenDecimals = 18` and fed it straight to
+  // parseUnits, so a 6-decimal token would have encoded 1e12× the intended
+  // amount. Those modals were removed with /app/launches on 2026-09-07, but the
+  // rule outlived them — it applies to every new call site.
   { name: "decimals", type: "function", stateMutability: "view",
     inputs: [], outputs: [{ type: "uint8" }] },
 ] as const satisfies Abi;

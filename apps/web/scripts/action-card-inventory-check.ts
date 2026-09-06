@@ -51,8 +51,9 @@
  *      the failure mode of every "assert absence" test.
  *   5. THE EVIDENCE GETTING SWEPT UP. Tokens Bankr deployed are real and still
  *      on-chain. CLAUDE.md: deleting routes does not entitle you to delete the
- *      data behind them. `src/lib/launches.ts` and its two live writers must
- *      survive the cleanup that removed their third writer.
+ *      data behind them. `src/lib/launches.ts` and its writers must survive the
+ *      cleanup that removed their third writer — and the cleanup that removed
+ *      the page which used to display them (2026-09-07, point 8).
  *   6. A SECOND DOOR TO THE SAME DEPLOY. Until 2026-09-08 the chat card had a
  *      Deploy button of its own: it POSTed /api/b20/prepare and had the user
  *      sign `createB20`, while the card's own header comment still said "no API
@@ -78,6 +79,13 @@
  *      sections" while 8 names had actually been copied by hand; a list like that
  *      is stale the moment a tool is added, and it is stale in the silent
  *      direction.
+ *   8. THE FEE PATH OUTLIVING THE PRODUCT. The 2026-09-06 commit retired the
+ *      Bankr DEPLOY but left its money surfaces standing: /api/my-tokens,
+ *      /api/claim-fees, and the /app/launches "My Tokens" tab that called both.
+ *      ShunTr closed that on 2026-09-07 by deciding the claim happens in
+ *      Bankr's own UI, so the whole apparatus came out. This is the exact shape
+ *      CLAUDE.md warns about — "a payment path must never outlive the product
+ *      it sells" — so it gets a test, not just a commit message.
  *
  * Source-reading, not network: these are properties of the text we ship.
  *
@@ -97,13 +105,16 @@ const ROUTE    = read("src/app/api/chat/route.ts");
  *  call it" is answered by ROUTE, "what are we telling the model" by PROMPT. */
 const PROMPT   = read("src/app/api/chat/system-prompt.ts");
 const CARDS    = read("src/app/chat/components/ToolCards.tsx");
-const LAUNCHES = read("src/app/app/launches/LaunchesClient.tsx");
 const REGISTRY = read("src/lib/launches.ts");
 const DOCS     = read("src/app/docs/blue-chat/page.tsx");
 const LAUNCHPG = read("src/app/launch/page.tsx");
 /** The deploy surface itself. Read here so the "chat no longer signs" assertion
  *  can be paired with "something still does" — see point 6 in the header. */
 const B20PAGE  = read("src/app/app/b20/B20Client.tsx");
+/** The /app/launches page is GONE (2026-09-07) — this file used to read it and
+ *  assert things about its contents. Its middleware redirect is what stands in
+ *  its place, so that is what we read now. */
+const MIDDLEWARE = read("src/middleware.ts");
 
 let failures = 0;
 /** Counted, never hardcoded — a hand-maintained total goes stale the first time
@@ -158,14 +169,31 @@ check("chat has no prepare_token_launch marker handler",
   !/toolName === "prepare_token_launch"/.test(ROUTE));
 check("no dispatcher case renders a TokenLaunchCard",
   !/case "prepare_token_launch"/.test(CARDS) && !/TokenLaunchCard/.test(CARDS));
-check("the /app/launches Bankr modal is gone",
-  !/LaunchModal/.test(LAUNCHES));
+check("the /app/launches page that hosted the Bankr modal is gone entirely",
+  !existsSync(path.join(WEB, "src/app/app/launches")));
 
 // Nothing may POST to the dead endpoint from any surface.
-for (const [label, src] of [["chat route", ROUTE], ["tool cards", CARDS],
-                            ["launches page", LAUNCHES]] as const) {
+for (const [label, src] of [["chat route", ROUTE], ["tool cards", CARDS]] as const) {
   check(`${label} makes no call to /api/launch-token`,
     !/["'`]\/api\/launch-token/.test(src));
+}
+
+// ── 2c. The MONEY surfaces went with it ──────────────────────────────────────
+// The 2026-09-06 commit took the deploy but left the fee/claim apparatus live —
+// two routes proxying Bankr, and a tab that built and sent claim calldata. That
+// is a payment path outliving its product, which CLAUDE.md forbids outright.
+// ShunTr decided 2026-09-07 that claiming happens in Bankr's own UI, so it came
+// out. These assert it does not creep back.
+console.log("\n2c. no creator-fee claim path proxying Bankr survives");
+
+for (const dir of ["src/app/api/my-tokens", "src/app/api/claim-fees"] as const) {
+  check(`${dir} is gone`, !existsSync(path.join(WEB, dir)));
+}
+// The upstream endpoints themselves, in case someone re-adds a caller anywhere.
+const BANKR_FEE_UPSTREAM = /doppler\/creator-fees|doppler\/build-claim/;
+for (const [label, src] of [["chat route", ROUTE], ["tool cards", CARDS]] as const) {
+  check(`${label} does not call Bankr's creator-fee endpoints`,
+    !BANKR_FEE_UPSTREAM.test(src));
 }
 
 // ── 2b. …including the surfaces that only ADVERTISE it ───────────────────────
@@ -180,7 +208,7 @@ console.log("\n2b. no surface still advertises the launchpad's terms");
 // supply, pool, gas or fee promise stated as something we still do.
 const BANKR_TERMS = /gas sponsored by bankr|sponsored by bankr|100B fixed supply|57% creator fee/i;
 for (const [label, src] of [["blue-chat docs", DOCS], ["/launch page", LAUNCHPG],
-                            ["tool cards", CARDS], ["launches page", LAUNCHES]] as const) {
+                            ["tool cards", CARDS]] as const) {
   const offending = (src.match(BANKR_TERMS) ?? [])[0];
   check(`${label} does not quote launchpad terms as live`, !offending,
     offending ? `found "${offending}"` : "");
@@ -335,28 +363,56 @@ check("/app/b20 still gates on the on-chain activation read before signing",
 console.log("\n4. launch history survived the route that produced some of it");
 
 check("src/lib/launches.ts still exists", existsSync(path.join(WEB, "src/lib/launches.ts")));
-check("both surviving writers still record launches",
+check("the writers still exist to record launches",
   existsSync(path.join(WEB, "src/app/api/robinhood/receipt/route.ts"))
   && existsSync(path.join(WEB, "src/app/api/b20hub/register/route.ts")));
 check("recordLaunch is still exported for them", /export async function recordLaunch/.test(REGISTRY));
+// MEASURED 2026-09-07: only /api/b20hub/register has a caller in src/ —
+// /api/robinhood/receipt has none. The header must not call it "live", because
+// "two live writers" is the sentence that would let the next reader conclude
+// the data is fresher than it is.
+check("the registry does not claim two LIVE writers it cannot show",
+  !/TWO writers today, both self-hosted and both alive/.test(REGISTRY));
 // The rows Bankr wrote carry no `source` field, so they cannot be told apart
 // from the live ones. The header must keep saying so — a future reader that
 // assumes every row has a live writer is the way this data gets "cleaned up".
 check("the registry warns that legacy rows are unattributable",
   /NOT distinguishable/.test(REGISTRY) && /no `source`/.test(REGISTRY));
-check("the /app/launches showcase still lists them",
-  existsSync(path.join(WEB, "src/app/app/launches/LaunchesClient.tsx")));
+// The showcase that used to list them is GONE (it existed to sell the Bankr fee
+// claim). Deleting a page must not delete the data, so the assertion flips:
+// the page is absent AND a reader still exists. Without the second half this
+// would go green if the registry were deleted outright.
+check("the /app/launches showcase is gone",
+  !existsSync(path.join(WEB, "src/app/app/launches")));
+check("a reader still renders launch records after it",
+  existsSync(path.join(WEB, "src/app/api/b20hub/tokens/route.ts"))
+  && existsSync(path.join(WEB, "src/app/app/b20hub/FeedGrid.tsx")));
+// …and B20HUB's OWN creator-fee claim is not Bankr's and must not be swept up
+// with it: it is self-hosted, permissionless, and pays an on-chain 80/15/5.
+check("B20HUB's self-hosted fee claim survived the Bankr fee removal",
+  existsSync(path.join(WEB, "src/app/app/b20hub/claim/ClaimClient.tsx")));
 
 // ── 5. Every published URL still resolves ────────────────────────────────────
-console.log("\n5. the advertised /launch URL still goes somewhere real");
+console.log("\n5. the advertised URLs still go somewhere real");
 
 // It used to redirect to chat, because chat carried the launch tool. It no
 // longer does, so sending /launch there would land the user on a surface whose
 // only honest answer is "I can't". The redirect follows the capability.
 check("/launch is kept as a redirect, not deleted into a 404",
   existsSync(path.join(WEB, "src/app/launch/page.tsx")));
+// Target is /app/b20, NOT /app/chat. This branch was cut before #430 removed
+// chat's second deploy entrance, so its version of this assertion still named
+// chat — a surface whose only honest answer is now "I can't". Keeping the
+// branch's line would have re-pointed the check at the retired door.
 check("/launch points at the surface that can actually deploy",
   /redirect\("\/app\/b20"\)/.test(LAUNCHPG));
+// /app/launches was linked from the public docs page and the B20HUB runbook, so
+// it is in the wild the way Blue Feed's share links were. Deleting the files is
+// only half the retirement; the 301 is the other half.
+check("/launches 301s instead of 404ing after the page was deleted",
+  /pathname === "\/app\/launches"/.test(MIDDLEWARE));
+check("the docs no longer link the deleted showcase",
+  !/href="\/app\/launches"/.test(DOCS));
 
 console.log(`\n${failures ? "FAIL" : "PASS"} — ${checks - failures}/${checks} checks passed`);
 if (failures) process.exit(1);

@@ -1,9 +1,14 @@
 // Thin server-side client for Robinhood Chain's Blockscout instance (REST API
 // v2 — confirmed live at robinhoodchain.blockscout.com/api/v2 and
 // explorer.testnet.chain.robinhood.com/api/v2, same shape on both networks).
-// Read-only — no wallet/signing involved. Used to power the "Explore" panel
-// on /app/launches so users can see real holders/transfers for a Robinhood
-// direct-deploy token without leaving the app.
+// Read-only — no wallet/signing involved.
+//
+// It used to power an "Explore" panel on /app/launches via /api/robinhood/explore;
+// both went out with the Bankr launch/fee surface on 2026-09-07. This module did
+// NOT go with them — it has four live importers that never touched that page:
+// /api/chat (address balances), lib/wallet/rh-holdings + stock-holdings (the
+// wallet's Robinhood Chain column), and the rh-rwa-verify x402 handler
+// (contract-creator lookup for the impostor gate).
 
 const EXPLORER_BASE = {
   mainnet: "https://robinhoodchain.blockscout.com",

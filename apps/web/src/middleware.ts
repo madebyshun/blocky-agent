@@ -29,16 +29,19 @@ const APP_SEGMENTS = new Set([
   "b20",
   // `bank` removed 2026-07-24 — BlueAgent Relaunch ("onchain Agent OS"
   // positioning) hides Blue Bank. Bank + /pay/[address] now hard-redirect to /chat
-  // via ARCHIVED_REDIRECTS below (b20 and launches stay accessible via
-  // direct URL because task #78 B20HUB is still WIP; only their nav entry
-  // was removed in AppShell.tsx).
+  // via ARCHIVED_REDIRECTS below (b20 stays accessible via direct URL because
+  // task #78 B20HUB is still WIP; only its nav entry was removed in
+  // AppShell.tsx).
   "chat",
   "dashboard",
   // `feed` removed 2026-09-02 — Blue Feed retired. Its pages are deleted and
   // /feed + /app/feed now 301 to /chat via archivedRedirect above.
   "hood",
   "hub",
-  "launches",
+  // `launches` removed 2026-09-07 — the Bankr launch/fee surface was retired.
+  // The page's own reason to exist was the Bankr creator-fee claim; its launch
+  // records live on in KV and are served to /app/b20hub via /api/b20hub/tokens.
+  // /launches + /app/launches now 301 to /chat via archivedRedirect above.
   // AgentOS Control pages (2026-08) — promoted from Blue Chat tabs to
   // first-class /app pages, each backed by REAL data (installed skills, the
   // connector store, the wallet's crons, the credit ledger, CREDIT_PACKS).
@@ -134,7 +137,13 @@ function archivedRedirect(pathname: string, search: string): NextResponse | null
   const isFeed =
     pathname === "/feed" || pathname.startsWith("/feed/") ||
     pathname === "/app/feed" || pathname.startsWith("/app/feed/");
-  if (!isBank && !isPay && !isFeed) return null;
+  // Launches joined 2026-09-07 (Bankr launch/fee retirement). It was linked
+  // from the public /docs/blue-chat page and from the B20HUB deploy runbook,
+  // so those URLs are in the wild the same way Feed's share links were.
+  const isLaunches =
+    pathname === "/launches" || pathname.startsWith("/launches/") ||
+    pathname === "/app/launches" || pathname.startsWith("/app/launches/");
+  if (!isBank && !isPay && !isFeed && !isLaunches) return null;
   return NextResponse.redirect(
     `https://${APP_HOST}/chat${search}`,
     { status: 301 },

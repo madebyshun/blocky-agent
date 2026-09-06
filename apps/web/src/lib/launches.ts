@@ -1,25 +1,33 @@
 /**
  * Blue Agent — Token Launch registry.
  *
- * Every token deployed through Blue Agent is recorded here so the public
- * /app/launches showcase has a durable list of its own. Stored in KV (Upstash
- * in prod, in-memory in dev) as a single capped, newest-first array under
- * `LAUNCHES_KEY`.
+ * Every token deployed through Blue Agent is recorded here. Stored in KV
+ * (Upstash in prod, in-memory in dev) as a single capped, newest-first array
+ * under `LAUNCHES_KEY`.
  *
- * TWO writers today, both self-hosted and both alive:
- *   • /api/robinhood/receipt — direct ERC-20 deploy on Robinhood Chain (4663)
- *   • /api/b20hub/register   — B20 launch on Base (8453)
+ * WRITERS. `/api/b20hub/register` (B20 launch on Base, 8453) is the one writer
+ * with a live caller — /app/b20hub/launch. `/api/robinhood/receipt` (direct
+ * ERC-20 deploy on Robinhood Chain, 4663) still exists but MEASURED 2026-09-07
+ * it has ZERO callers anywhere in src/: the RH launch card that used to POST to
+ * it is gone. Treat it as dormant, not live; whether it gets a caller back or
+ * gets retired is ShunTr's call, and until then nothing new lands on 4663.
  *
  * A THIRD writer, /api/launch-token (Bankr's launchpad), was deleted 2026-09-06
- * after Bankr suspended the account — 403 on every deploy. Its RECORDS stay:
- * they are evidence of tokens that really were deployed and really do exist
- * on-chain, and CLAUDE.md is explicit that retiring a route does not entitle
- * anyone to delete the data behind it.
+ * after Bankr suspended the account — 403 on every deploy.
  *
- * ⚠️ Those rows are NOT distinguishable from the others — there is no `source`
- * field, and adding one now would not backfill history. Do not write a reader
- * that assumes every record has a live writer behind it, and do not "clean up"
- * rows you cannot attribute.
+ * READERS. `/api/b20hub/tokens` (feeds /app/b20hub) and `lib/public-stats.ts`
+ * (counts on /stats). Note that b20hub's reader filters to the `0xb200…`
+ * prefix on Base, so the Bankr-era and Robinhood rows are stored but NOT
+ * displayed anywhere. That is deliberate as of 2026-09-07: the surface that
+ * showed them (/app/launches) existed to sell a Bankr creator-fee claim, and
+ * went out with it. The ROWS stay — they are evidence of tokens that really
+ * were deployed and really do exist on-chain, and CLAUDE.md is explicit that
+ * retiring a route does not entitle anyone to delete the data behind it.
+ *
+ * ⚠️ Bankr-era rows are NOT distinguishable from the others: a record carries
+ * no `source` field, and adding one now would not backfill history. Do not
+ * write a reader that assumes every record has a live writer behind it, and do
+ * not "clean up" rows you cannot attribute.
  */
 import { kvGet, kvSet } from "./kv";
 
