@@ -698,7 +698,9 @@ Use this ONLY for:
 
 Supported networks (EVM mainnets, verified against Venice's own catalog 2026-09-05): base, robinhood, ethereum, arbitrum, optimism, polygon, avalanche, bsc, blast, linea, zksync.
 Default to "base" for Base-related queries. "robinhood" is Robinhood Chain (4663), the product's second live chain.
-Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-testnet, polygon-amoy, avalanche-fuji, etc.`,
+Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-testnet, polygon-amoy, avalanche-fuji, etc.
+
+⚠️ NEVER CONVERT HEX YOURSELF. The reply carries a \`decoded\` object holding the same numbers already converted on the server — \`decoded.value.decimal\` for a single quantity (block height, balance, gas), \`decoded.fields.<name>.decimal\` inside a block/tx/receipt, plus \`.ether\` for wei, \`.gwei\` for gas prices and \`.iso\` for timestamps. Quote those verbatim. Doing the base-16 arithmetic in your head produces a plausible, wrong number — measured: a Base block height reported ~20,000 blocks low. If \`decoded\` is missing for a value, say you cannot read it rather than converting the hex.`,
     input_schema: {
       type: "object",
       properties: {
@@ -1848,8 +1850,22 @@ async function callHubTool(
     }
 
     const data = await res.json().catch(() => null);
-    // Unwrap nested { result: ... } if present
-    const payload = (data as Record<string, unknown>)?.result ?? data;
+    // Unwrap nested { result: ... } if present — EXCEPT for a JSON-RPC reply.
+    //
+    // Two protocols, one key name. In our x402 envelope `result` means "the
+    // payload is inside me"; in JSON-RPC it means "I am the payload, and here
+    // are my siblings". Unwrapping a JSON-RPC reply therefore threw away every
+    // sibling and handed the model a bare `"0x3094173"` — no network, no
+    // method, no decode. It then converted the hex in its head and reported a
+    // Base block height ~20,000 low (#207, measured in prod 2026-09-06). The
+    // route's own comment claimed `network` was echoed "so the caller (and the
+    // model reading this in chat) can see which network actually answered";
+    // that sentence had never been true.
+    //
+    // `jsonrpc` is the discriminator the spec itself mandates, so this is a
+    // protocol check, not a per-tool special case.
+    const isJsonRpc = !!data && typeof data === "object" && "jsonrpc" in data;
+    const payload = isJsonRpc ? data : ((data as Record<string, unknown>)?.result ?? data);
     const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
     // Surface the actual credit debit so the chat UI can show the real
     // total spend (chat message + tool calls), not just the message cost.

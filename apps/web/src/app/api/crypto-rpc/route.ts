@@ -47,6 +47,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { decodeRpcResult } from "./decode";
 
 export const runtime = "nodejs";
 // Budget: catalog fetch (5s, cold only) + one RPC call (12s). A 401 retry costs
@@ -195,11 +196,21 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const data = await res.json();
+      const data = await res.json() as { result?: unknown };
       // `network` is echoed so the caller (and the model reading this in chat)
       // can see which network actually answered after alias resolution, rather
       // than assuming the one it asked for.
-      return NextResponse.json({ ...data, network: resolved });
+      //
+      // ⚠ That echo was DEAD until 2026-09-06 (#207): the chat relay unwrapped
+      // `{ result }` and handed the model the bare hex string, dropping every
+      // sibling key including this one. Fixed in api/chat/route.ts — a JSON-RPC
+      // reply is no longer mistaken for an x402 envelope.
+      //
+      // `decoded` carries the SERVER's hex→decimal arithmetic. See ./decode.ts:
+      // the model was converting `0x3094173` in its head and reporting a Base
+      // height ~20,000 blocks low, which is indistinguishable from a real one.
+      const decoded = decodeRpcResult(method, data?.result);
+      return NextResponse.json({ ...data, network: resolved, ...(decoded ? { decoded } : {}) });
     } catch (e) {
       return NextResponse.json(
         { error: `RPC request failed: ${(e as Error).message}`, network: resolved },
