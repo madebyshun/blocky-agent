@@ -43,7 +43,25 @@
  *   3. `multiplier()` and `isPaused(TRANSFER)` readable;
  *   4. a real Aerodrome pool — liquidity AND 24h volume printed, plus a 72h
  *      hourly-candle check for zero-volume / flat-OHLC hours (the BABA test);
- *   5. `readBaseStockQuote()` returns `can_fire: true`.
+ *   5. `readBaseStockQuote()` returns `can_fire: true`;
+ *   6. a `saneBand` you can DEFEND — see below.
+ *
+ * ── Why a ticker can pass every gate and still be refused ─────────────────────
+ * `saneBand` is the one field that cannot be derived from chain state, because
+ * its job is to disagree with chain state when chain state is broken. Anchoring
+ * it on the oracle alone would be circular: the feed would be certifying itself.
+ * So the band is only meaningful when a HUMAN can check the anchor against an
+ * independent public quote.
+ *
+ * That is a real bar, and SPCX (SpaceX) fails it: SpaceX is not publicly
+ * traded, so no independent reference price exists for anyone — us or a user
+ * auditing the track record. Its band would be unfalsifiable by construction.
+ * SPCX was therefore DEFERRED on 2026-09-06 despite passing every measurable
+ * gate with room to spare ($165,042 liquidity, $1,592,131 24h volume — the
+ * second-deepest flow of the six candidates, 71/71 live candles). This is not a
+ * quality judgement about the token; it is an admission that we cannot build
+ * the safety net that every other row gets. Do not "fix" this by anchoring
+ * SPCX's band to its own feed.
  *
  * ⚠️ Symbol-matching is actively dangerous here, not merely sloppy. Base carries
  * live counterfeits using the exact `<TICKER>c` symbol: "TSLAc" at
@@ -67,6 +85,35 @@ export interface BaseStock {
   chainlinkFeed: Address;
   /** Feed heartbeat in seconds — used for the staleness flag on the oracle read. */
   chainlinkHeartbeat: number;
+  /**
+   * Plausible USD share-price range. A quote outside it is treated as BROKEN,
+   * not as news: `readBaseStockQuote` returns `can_fire:false` with
+   * `suppressed_reason:"price_out_of_band"` rather than grading drift off it.
+   *
+   * ⚠️ This is a MAGNITUDE-BREAK detector, not a volatility detector. It exists
+   * to catch a decimals misread, a multiplier misapplication, or a drained /
+   * manipulated pool — failures that land 10²–10⁸ away from the truth. It is
+   * deliberately NOT tuned to catch a subtle mispricing; that is what the
+   * impostor, multiplier and drift gates are for. Set the band too tight and it
+   * silently suppresses real arrows, which looks like "no signal" instead of
+   * like a bug — strictly worse than missing an exotic break.
+   *
+   * Construction (see `admittedAt` for the anchor date): `[anchor/4, anchor*4]`
+   * around the oracle share price measured at admission, rounded outward. The
+   * 4× envelope sits in the empty gap between the two populations — real equity
+   * movement stays inside it for years, while the SMALLEST realistic break (a
+   * 10² decimals error) is 25× outside it. Widen a band when a real move
+   * approaches an edge; never widen one to make a failing read pass.
+   */
+  saneBand: { lo: number; hi: number };
+  /**
+   * ISO date this ticker entered the allowlist. Written so #152 can cut the
+   * drift sample by cohort — a row admitted mid-window has fewer observation
+   * hours than one present since the desk opened, and averaging the two without
+   * saying so understates the newer ticker. This is a provenance field: it
+   * records when WE started grading the ticker, not when the token deployed.
+   */
+  admittedAt: string;
 }
 
 /**
@@ -83,6 +130,9 @@ export const BASE_STOCKS: readonly BaseStock[] = [
     symbol: "NVDAc",
     chainlinkFeed: "0x04689a41629776563E6822F76f2e57D148d28513",
     chainlinkHeartbeat: 86400,
+    // Band anchor: oracle share price $229.96, read 2026-09-06.
+    saneBand: { lo: 55, hi: 950 },
+    admittedAt: "2026-08-23",
   },
   {
     ticker: "META",
@@ -91,6 +141,9 @@ export const BASE_STOCKS: readonly BaseStock[] = [
     symbol: "METAc",
     chainlinkFeed: "0x6526aE6797A76123638b863AeE4dD27Ba4E4b27D",
     chainlinkHeartbeat: 86400,
+    // Band anchor: oracle share price $615.23, read 2026-09-06.
+    saneBand: { lo: 150, hi: 2500 },
+    admittedAt: "2026-08-23",
   },
   {
     ticker: "GOOGL",
@@ -99,6 +152,9 @@ export const BASE_STOCKS: readonly BaseStock[] = [
     symbol: "GOOGLc",
     chainlinkFeed: "0x5bF49E0ffA937CE2FfF033c739aD7C634c4D34F2",
     chainlinkHeartbeat: 86400,
+    // Band anchor: oracle share price $338.71, read 2026-09-06.
+    saneBand: { lo: 80, hi: 1400 },
+    admittedAt: "2026-08-23",
   },
   {
     // Added 2026-08-24. Pool evidence at admission (Aerodrome slipstream
@@ -115,6 +171,9 @@ export const BASE_STOCKS: readonly BaseStock[] = [
     symbol: "AAPLc",
     chainlinkFeed: "0x787f13dEa48Db0897CbCDD985de77809D837F988",
     chainlinkHeartbeat: 86400,
+    // Band anchor: oracle share price $320.08, read 2026-09-06.
+    saneBand: { lo: 80, hi: 1300 },
+    admittedAt: "2026-08-24",
   },
 ] as const;
 

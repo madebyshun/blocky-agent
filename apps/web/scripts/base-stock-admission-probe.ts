@@ -29,6 +29,15 @@
  *     --ticker TSLA --name "Tesla, Inc." \
  *     --token 0x… --feed 0x… [--skip-candles]
  *
+ * ── ⚠️ RUN THIS DURING US MARKET HOURS ───────────────────────────────────────
+ * Coinbase's Chainlink equity feeds stop ticking when the market closes, so
+ * roughly 48h after Friday's last print EVERY Base ticker reads `is_stale` and
+ * every oracle-side gate goes dark — admitted tickers included. The probe now
+ * detects this (`marketIsClosed`) and downgrades staleness to INCONCLUSIVE
+ * rather than FAIL, but INCONCLUSIVE still blocks admission, so a weekend run
+ * can confirm the POOL gates and nothing else. Settle the oracle gates on a
+ * weekday. See `marketIsClosed` for the measurement that established this.
+ *
  * Exits 0 only if every evaluated ticker PASSES. Prints the exact
  * `ticker · token · feed · pool · liquidity · volume 24h · PASS/FAIL` table the
  * checkpoint asks for before anything is written to the registry.
@@ -45,7 +54,23 @@
  */
 import { readBaseStockQuote } from "@/lib/base-stocks/b20-quote";
 import { BASE_STOCKS, type BaseStock } from "@/lib/base-stocks/registry";
+import { clientForSource, BASE_PRICE_SOURCE } from "@/lib/robinhood/rwa-price";
 import type { Address } from "viem";
+
+/** Minimal AggregatorV3 read — only `updatedAt` is needed, for `marketIsClosed`. */
+const AGGREGATOR_MINI_ABI = [
+  {
+    name: "latestRoundData", type: "function", stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "roundId", type: "uint80" },
+      { name: "answer", type: "int256" },
+      { name: "startedAt", type: "uint256" },
+      { name: "updatedAt", type: "uint256" },
+      { name: "answeredInRound", type: "uint80" },
+    ],
+  },
+] as const;
 
 // ── Admission floors ─────────────────────────────────────────────────────────
 // ⚠️ These are a HUMAN ADMISSION BAR, deliberately distinct from the engine's
@@ -125,6 +150,53 @@ async function gtFetch(url: string, tries = 4): Promise<unknown | null> {
 }
 
 /**
+ * Is the US equity market closed right now, judged from the feeds themselves?
+ *
+ * ⚠️ THIS EXISTS BECAUSE THE STALENESS GATE OTHERWISE MEASURES THE CLOCK, NOT
+ * THE TICKER. Coinbase's Chainlink equity feeds do NOT tick while the market is
+ * closed, so ~48h after Friday's last print every Base ticker reads `is_stale`
+ * — including ones that have been live on the desk for weeks.
+ *
+ * MEASURED 2026-09-06 (Sunday, 18:55 UTC): all ten admitted + candidate feeds
+ * last ticked on Friday 2026-09-04. The only thing separating "stale" from
+ * "fresh" was what time that Friday each one happened to stop — GOOGL at 14:24
+ * (52.5h, STALE), MSTR at 21:29 (45.4h, fresh), with the whole desk inside a
+ * 3-hour window of also flipping. On that run the probe reported NVDA and GOOGL
+ * — two tickers admitted weeks earlier — as FAILures, which is exactly the
+ * false statement the three-valued verdict was introduced to prevent.
+ *
+ * So: read the peer set. If even the FRESHEST admitted feed has not ticked
+ * within one heartbeat, nothing is publishing and staleness carries no
+ * ticker-specific information → INCONCLUSIVE. If peers are fresh and this one
+ * is stale, that IS a fact about the ticker → FAIL. Returns null if the peer
+ * set can't be read, which is itself INCONCLUSIVE.
+ */
+async function marketIsClosed(): Promise<{ closed: boolean; freshestAgeS: number } | null> {
+  const client = clientForSource(BASE_PRICE_SOURCE);
+  const now = Math.floor(Date.now() / 1000);
+  const ages: number[] = [];
+  for (const s of BASE_STOCKS) {
+    try {
+      const r = (await client.readContract({
+        address: s.chainlinkFeed,
+        abi: AGGREGATOR_MINI_ABI,
+        functionName: "latestRoundData",
+      })) as readonly [bigint, bigint, bigint, bigint, bigint];
+      ages.push(now - Number(r[3]));
+    } catch {
+      /* one unreadable peer is fine — we only need the freshest */
+    }
+  }
+  if (ages.length === 0) return null;
+  const freshestAgeS = Math.min(...ages);
+  // Heartbeat is 86400s on every Coinbase equity feed; take the max in the set
+  // so a future feed with a slower cadence widens the window rather than
+  // producing a spurious "market open".
+  const heartbeat = Math.max(...BASE_STOCKS.map((s) => s.chainlinkHeartbeat));
+  return { closed: freshestAgeS > heartbeat, freshestAgeS };
+}
+
+/**
  * Does the indexer know of ANY pool for this token? Used only to tell a genuine
  * "no market exists" (a FAIL — the TSLAc/AMZNc case) apart from "the quote read
  * happened to be rate-limited" (INCONCLUSIVE). Returns null if unreachable.
@@ -172,7 +244,10 @@ async function candleCheck(
   return { candles: rows.length, dead, flat };
 }
 
-async function runGate(stock: BaseStock, opts: { candles: boolean }): Promise<GateResult> {
+async function runGate(
+  stock: BaseStock,
+  opts: { candles: boolean; marketClosed: { closed: boolean; freshestAgeS: number } | null },
+): Promise<GateResult> {
   const reasons: string[] = []; // measured shortfalls  → FAIL
   const unknowns: string[] = []; // unmeasurable        → INCONCLUSIVE
   const q = await readBaseStockQuote(stock);
@@ -185,7 +260,26 @@ async function runGate(stock: BaseStock, opts: { candles: boolean }): Promise<Ga
   if (!q.multiplier_ok) reasons.push("multiplier() unreadable or <= 0");
   if (q.paused) reasons.push("token reports isPaused(TRANSFER) == true");
   if (!q.sequencer_ok) reasons.push("Base sequencer down or inside grace window");
-  if (q.feed_is_stale) reasons.push(`Chainlink feed stale (age ${q.feed_age_seconds}s)`);
+
+  // Staleness — attribute it before scoring it (see `marketIsClosed`). A stale
+  // feed while the whole desk is stale is the calendar, not the ticker.
+  const marketClosed = opts.marketClosed;
+  if (q.feed_is_stale) {
+    const age = `age ${q.feed_age_seconds}s`;
+    if (marketClosed === null) {
+      unknowns.push(`Chainlink feed stale (${age}) but peer feeds unreadable — cannot attribute`);
+    } else if (marketClosed.closed) {
+      unknowns.push(
+        `Chainlink feed stale (${age}) — but the market is CLOSED (freshest peer feed is ` +
+          `${(marketClosed.freshestAgeS / 3600).toFixed(1)}h old), so this says nothing about the ticker. Re-run during market hours.`,
+      );
+    } else {
+      reasons.push(
+        `Chainlink feed stale (${age}) while peers are fresh ` +
+          `(${(marketClosed.freshestAgeS / 3600).toFixed(1)}h) — ticker-specific`,
+      );
+    }
+  }
   if (q.share_price_usd === null) reasons.push("no multiplier-adjusted share price");
 
   // 4. THE DECIDING GATE — a real Aerodrome market, liquidity AND volume.
@@ -219,8 +313,17 @@ async function runGate(stock: BaseStock, opts: { candles: boolean }): Promise<Ga
   // 5. can_fire — the exact predicate the poller/grader gate on. If the DEX leg
   //    was merely unreachable, `can_fire:false` is a symptom of OUR read, not of
   //    the token, so it must not be recorded as a measured failure.
+  //    Likewise a `feed_stale` suppression during a market close is the calendar
+  //    (see above) — recording it as a measured failure would double-count the
+  //    clock and hand back a FAIL for a ticker we simply cannot judge yet.
   if (!q.can_fire && !dexUnavailable) {
-    reasons.push(`can_fire == false (${q.suppressed_reason ?? "unknown"})`);
+    const staleWhileClosed =
+      q.suppressed_reason === "feed_stale" && marketClosed !== null && marketClosed.closed;
+    if (staleWhileClosed) {
+      unknowns.push("can_fire == false (feed_stale) — market closed, not a ticker property");
+    } else {
+      reasons.push(`can_fire == false (${q.suppressed_reason ?? "unknown"})`);
+    }
   }
 
   // 6. The BABA test — needs the hourly series, not a snapshot.
@@ -268,19 +371,50 @@ async function runGate(stock: BaseStock, opts: { candles: boolean }): Promise<Ga
   };
 }
 
+/** Every flag this probe understands. Anything else is a typo, and a typo here
+ *  is dangerous: an unrecognised `--ticker` silently drops the script into
+ *  health-check mode, printing the four INCUMBENTS under a header the operator
+ *  read as their candidate. So unknown keys are a hard exit, not a warning. */
+const KNOWN_FLAGS = new Set([
+  "ticker", "token", "feed", "name", "heartbeat", "skip-candles",
+]);
+
+/**
+ * Accepts BOTH `--key value` and `--key=value`. The `=` form used to fall
+ * through the `startsWith("--")` check and register a flag literally named
+ * `ticker=MSTR`, so `args.ticker` stayed undefined and the probe ran the wrong
+ * mode without a word of complaint (hit for real, 2026-09-06).
+ */
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const out: Record<string, string | boolean> = {};
+  const unknown: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith("--")) continue;
-    const key = a.slice(2);
+    const body = a.slice(2);
+    const eq = body.indexOf("=");
+    if (eq !== -1) {
+      const key = body.slice(0, eq);
+      if (!KNOWN_FLAGS.has(key)) unknown.push(key);
+      out[key] = body.slice(eq + 1);
+      continue;
+    }
+    if (!KNOWN_FLAGS.has(body)) unknown.push(body);
     const next = argv[i + 1];
     if (next && !next.startsWith("--")) {
-      out[key] = next;
+      out[body] = next;
       i++;
     } else {
-      out[key] = true;
+      out[body] = true;
     }
+  }
+  if (unknown.length > 0) {
+    console.error(
+      `unknown flag(s): ${unknown.map((u) => `--${u}`).join(", ")}\n` +
+        `known flags: ${[...KNOWN_FLAGS].map((k) => `--${k}`).join(", ")}\n` +
+        "Refusing to run: a mistyped flag silently changes which tickers are probed.",
+    );
+    process.exit(1);
   }
   return out;
 }
@@ -312,6 +446,13 @@ async function main() {
         symbol: `${ticker}c`,
         chainlinkFeed: feed as Address,
         chainlinkHeartbeat: args.heartbeat ? Number(args.heartbeat) : 86400,
+        // A candidate has no band yet — that is the point. Run wide open so the
+        // OTHER gates are what decide, then print a PROPOSED band from the
+        // measured price for a human to check against a public quote. The band
+        // must never be derived and adopted in the same automated breath: its
+        // whole job is to disagree with the feed when the feed is broken.
+        saneBand: { lo: 0, hi: Number.POSITIVE_INFINITY },
+        admittedAt: new Date().toISOString().slice(0, 10),
       },
     ];
     mode = `CANDIDATE ${ticker}`;
@@ -323,13 +464,31 @@ async function main() {
   console.log(`\nBase B20 admission gate — ${mode}`);
   console.log(
     `floors: liquidity ≥ ${usd(MIN_LIQUIDITY_USD)} · 24h volume ≥ ${usd(MIN_VOLUME_24H_USD)}` +
-      `${withCandles ? ` · ${CANDLE_HOURS}h candle scan` : " · candle scan SKIPPED"}\n`,
+      `${withCandles ? ` · ${CANDLE_HOURS}h candle scan` : " · candle scan SKIPPED"}`,
   );
+
+  // Attribute feed staleness BEFORE grading any ticker on it.
+  const marketClosed = await marketIsClosed();
+  if (marketClosed === null) {
+    console.log("market      ? peer feeds unreadable — staleness cannot be attributed");
+  } else if (marketClosed.closed) {
+    console.log(
+      `market      CLOSED — freshest peer feed is ${(marketClosed.freshestAgeS / 3600).toFixed(1)}h old.\n` +
+        "            Feed staleness is the calendar, not the ticker → INCONCLUSIVE, not FAIL.\n" +
+        "            Re-run during US market hours to settle the oracle gates.",
+    );
+  } else {
+    console.log(
+      `market      OPEN — freshest peer feed is ${(marketClosed.freshestAgeS / 3600).toFixed(1)}h old; ` +
+        "staleness is ticker-specific.",
+    );
+  }
+  console.log("");
 
   const results: GateResult[] = [];
   for (const [i, s] of subjects.entries()) {
     if (i > 0) await sleep(TICKER_STAGGER_MS); // don't 429 ourselves into a false FAIL
-    const r = await runGate(s, { candles: withCandles });
+    const r = await runGate(s, { candles: withCandles, marketClosed });
     results.push(r);
 
     console.log(`─── ${r.ticker} ${"─".repeat(Math.max(0, 56 - r.ticker.length))}`);
@@ -345,6 +504,23 @@ async function main() {
     if (r.candles !== null) {
       console.log(
         `  candles     ${r.candles}h scanned · ${r.deadHours} zero-volume · ${r.flatHours} flat-close`,
+      );
+    }
+    // A candidate needs a `saneBand` before it can be written to the registry,
+    // and the band must be checked by a human against an INDEPENDENT public
+    // quote — the feed cannot certify itself. Propose, never adopt.
+    if (args.ticker && r.sharePrice !== null && r.sharePrice > 0) {
+      const lo = r.sharePrice / 4;
+      const hi = r.sharePrice * 4;
+      console.log(
+        `  band        proposed saneBand ≈ { lo: ${Math.floor(lo)}, hi: ${Math.ceil(hi)} }  ` +
+          `(anchor $${r.sharePrice.toFixed(2)} ÷/× 4)`,
+      );
+      console.log(
+        `              ⚠️ CHECK $${r.sharePrice.toFixed(2)} against a public quote for ${r.ticker} before adopting.`,
+      );
+      console.log(
+        "              If the ticker has no public listing, it cannot get a defensible band — defer it.",
       );
     }
     console.log(`  >> ${r.verdict}`);
@@ -390,8 +566,13 @@ async function main() {
   }
   if (unclear.length > 0) {
     console.log(`\n⚠️  ${unclear.length}/${results.length} INCONCLUSIVE: ${unclear.map((f) => f.ticker).join(", ")}`);
-    console.log("   NOT a finding about these tickers — the evidence could not be read");
-    console.log("   (usually a GeckoTerminal 429). Re-run before concluding anything.");
+    console.log("   NOT a finding about these tickers — the evidence could not be read.");
+    console.log("   Two common causes, and they need DIFFERENT re-runs:");
+    console.log("     • market CLOSED (see banner) → the oracle simply isn't ticking;");
+    console.log("       re-run during US market hours. Waiting minutes will not help.");
+    console.log("     • GeckoTerminal 429 → the pool evidence was rate-limited;");
+    console.log("       re-run in a few minutes.");
+    console.log("   Read the ? lines above to see which one you hit.");
   }
   // 1 = a real measured failure · 2 = evidence incomplete. Both block admission.
   process.exit(failed.length > 0 ? 1 : 2);

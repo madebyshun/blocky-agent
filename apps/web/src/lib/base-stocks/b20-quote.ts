@@ -27,6 +27,18 @@
  *   • multiplier— unreadable or ≤ 0 → hazard block (see above).
  *   • pause     — isPaused(TRANSFER) true (or unreadable) → suppress.
  *   • staleness — Chainlink `is_stale` (older than 2× heartbeat) → suppress.
+ *                 ⚠️ Coinbase equity feeds DO NOT tick while US markets are
+ *                 closed, so every Base ticker goes stale ~48h after Friday's
+ *                 last print and stays stale until Monday's open. Suppressing
+ *                 there is CORRECT — you cannot grade drift against a frozen
+ *                 oracle — but it means a weekend read says nothing about a
+ *                 ticker's quality. Measured 2026-09-06 (Sun): all 10 admitted
+ *                 + candidate feeds last ticked Fri 2026-09-04, spread only by
+ *                 what time that day they stopped. Do not read a weekend
+ *                 `feed_stale` as evidence against a ticker (see the admission
+ *                 probe, which classifies it INCONCLUSIVE rather than FAIL).
+ *   • sane band — oracle or DEX price outside the registry's per-ticker
+ *                 `saneBand` → the read is broken, not newsworthy → suppress.
  *   • dex       — no DEX spot → drift is undefined → can't fire (but oracle
  *                 share price is still returned for display).
  *
@@ -216,6 +228,9 @@ export type BaseStockQuote = {
   feed_updated_at: number | null;
   feed_age_seconds: number | null;
   feed_is_stale: boolean;
+  /** false ⟹ oracle and/or DEX price fell outside the registry `saneBand`, i.e.
+   *  the read is BROKEN rather than newsworthy. Suppresses the arrow. */
+  price_in_band: boolean;
 
   // ── DEX side ──
   dex_price_usd: number | null;
@@ -303,6 +318,23 @@ export async function readBaseStockQuote(
   const paused = tok.paused !== false; // true OR unreadable(null) ⟹ blocked
   const feed_is_stale = feed?.is_stale ?? true;
 
+  // Sanity band — a magnitude break, not a market move. Deliberately checked on
+  // BOTH legs: a decimals/multiplier fault corrupts the oracle, while a drained
+  // or manipulated pool corrupts the DEX, and either one alone is enough to
+  // poison an arrow. A null price is NOT out of band — that is "cannot assess",
+  // already handled by its own reason below.
+  const band = stock.saneBand;
+  const outOfBand = (p: number | null) => p !== null && (p < band.lo || p > band.hi);
+  const share_out_of_band = outOfBand(share_price_usd);
+  const dex_out_of_band = outOfBand(dex_price_usd);
+  const price_in_band = !share_out_of_band && !dex_out_of_band;
+  if (!price_in_band) {
+    console.error(
+      `[base-stocks] ${stock.ticker} price outside sane band ` +
+        `[${band.lo}, ${band.hi}]: oracle=${share_price_usd} dex=${dex_price_usd} — refusing to fire`,
+    );
+  }
+
   // Primary suppression reason — ordered most-fundamental first.
   let suppressed_reason: string | null = null;
   if (!impostor_ok) suppressed_reason = "impostor_gate";
@@ -313,6 +345,7 @@ export async function readBaseStockQuote(
   else if (paused) suppressed_reason = tok.paused === null ? "pause_unreadable" : "paused";
   else if (dex_price_usd === null) suppressed_reason = "dex_unavailable";
   else if (share_price_usd === null) suppressed_reason = "share_price_unavailable";
+  else if (!price_in_band) suppressed_reason = "price_out_of_band";
 
   const can_fire = suppressed_reason === null && drift_pct !== null;
 
@@ -329,6 +362,7 @@ export async function readBaseStockQuote(
     feed_updated_at: feed?.updated_at ?? null,
     feed_age_seconds: feed?.age_seconds ?? null,
     feed_is_stale,
+    price_in_band,
 
     dex_price_usd,
     dex_pool_address: dex?.pool_address ?? null,
