@@ -94,7 +94,13 @@ export default function TokenTable({ address, onQuickSell }: {
     fetch(`/api/wallet/holdings?address=${address}&network=${network}`)
       .then(r => r.json())
       .then((d: HoldingsResp) => { if (!off) setData(d); })
-      .catch(() => { if (!off) setData({ holdings: [], source: "rpc", partial: false, error: "load failed" }); })
+      // `partial: true`, NOT false. This path knows nothing at all — no list was
+      // obtained — and `partial: false` is the literal claim "this is the
+      // complete set of tokens you hold", which is the one thing a failed fetch
+      // cannot support. `error` is what the render actually keys off, but a
+      // reader who only checks `partial` must not be able to conclude
+      // completeness from a request that never returned.
+      .catch(() => { if (!off) setData({ holdings: [], source: "rpc", partial: true, error: "load failed" }); })
       .finally(() => { if (!off) setLoading(false); });
     return () => { off = true; };
   }, [address, network]);
@@ -108,6 +114,50 @@ export default function TokenTable({ address, onQuickSell }: {
   const totalUsd  = holdings.reduce((a, h) => a + (countsTowardTotal(h.trust) ? (h.usdValue ?? 0) : 0), 0);
   const nFlagged  = holdings.filter(h => h.trust === "impostor").length;
   const explorer  = data?.explorer ?? "https://basescan.org";
+  const addressUrl = data?.addressUrl ?? `${explorer}/address/${address}`;
+
+  // ── How complete is this list? ──────────────────────────────────────────────
+  //
+  // THREE states, not two. The old code had rows-or-"No tokens … yet", and
+  // computed its honesty note as `partial && holdings.length > 0` — which
+  // suppressed the caveat in the ONE case where it changes what the screen
+  // means: a degraded read that came back empty.
+  //
+  // MEASURED 2026-09-07 against production, on a real connected address:
+  //   GET /api/wallet/holdings?address=0x2266…608E&network=base
+  //   → {"holdings":[], "source":"rpc", "partial":true, …}
+  // Moralis had not answered, so the route probed a curated-majors list only
+  // (lib/wallet/holdings.ts:129) and said so in the payload. This table dropped
+  // that and rendered "No tokens on Base yet" — stating as fact about the
+  // user's wallet something the read could not establish.
+  //
+  // `error` is consulted as well as `partial`, because two other paths produce
+  // a response that is NOT a complete read while carrying `partial: false`:
+  // the route's own catch (api/wallet/holdings/route.ts:39) and its invalid-
+  // address guard (:24). Deriving the state from everything the response
+  // carries means neither of those, nor a future regression in either, can turn
+  // "we could not check" back into "you hold nothing".
+  //
+  // This mirrors the sibling table, which already gets it right — see
+  // RhTokenTable.tsx:63 and its "this is not an empty portfolio" banner. The
+  // two chains disagreeing about how to report an outage was itself the bug.
+  const readFailed  = !!data?.error;
+  const readPartial = !!data?.partial;
+  // ONE derivation, read in two places below. `listComplete` is the only thing
+  // that licenses either of the screen's two unqualified assertions: "you have
+  // no tokens" (the empty branch) and a bare dollar total (the header). Every
+  // other state is "unknown", which is a different sentence and must look like
+  // one. Deriving it once means the header and the body can never disagree
+  // about whether the read succeeded.
+  const listComplete = !readFailed && !readPartial;
+
+  // `data === null` here means the effect has not run yet — the address exists
+  // (guarded above) and the only other writer of `null` is the !address reset.
+  // Without this, the first paint has loading=false and data=null, which lands
+  // on the empty branch and flashes "No tokens on Base yet" before the request
+  // has even been made.
+  const pending  = loading || data === null;
+  const showRows = holdings.length > 0;
 
   return (
     <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 mb-3">
@@ -118,23 +168,61 @@ export default function TokenTable({ address, onQuickSell }: {
           <span className="font-mono text-[9px] px-1.5 py-0.5 rounded text-[#4FC3F7]"
             style={{ border: "1px solid #4FC3F730", background: "#4FC3F710" }}>{chainLabel}</span>
         </div>
-        {holdings.length > 0 && (
-          <span className="font-mono text-[10px] text-slate-400">{fmtUsd(totalUsd)}</span>
+        {showRows && (
+          // On a degraded read this is the sum of the rows we could see, not the
+          // value of the wallet — the same list that needs a caveat underneath
+          // cannot produce an uncaveated total. "≥" is the entire claim being
+          // made: the true figure cannot be lower than this, and we do not know
+          // how much higher.
+          <span className="font-mono text-[10px] text-slate-400 tabular-nums"
+            title={listComplete ? undefined : "Partial read — at least this much; the full token list was not available"}>
+            {listComplete ? "" : "≥ "}{fmtUsd(totalUsd)}
+          </span>
         )}
       </div>
 
-      {/* Column head */}
-      <div className={`grid ${gridCls} gap-3 px-1 pb-1.5 font-mono text-[9px] text-slate-600 border-b border-[#1A1A2E]`}>
-        <span>Token</span>
-        <span className="text-right">Balance</span>
-        <span className="text-right">Value</span>
-        {showSell && <span className="text-right">Sell</span>}
-      </div>
+      {/* Column head — only over something it actually heads. The loading line
+          keeps it (unchanged appearance while the request is in flight); the
+          two "unknown" banners below do not, because column titles over a
+          "could not read" notice render as a table that failed rather than as
+          the sentence it is. */}
+      {(pending || showRows) && (
+        <div className={`grid ${gridCls} gap-3 px-1 pb-1.5 font-mono text-[9px] text-slate-600 border-b border-[#1A1A2E]`}>
+          <span>Token</span>
+          <span className="text-right">Balance</span>
+          <span className="text-right">Value</span>
+          {showSell && <span className="text-right">Sell</span>}
+        </div>
+      )}
 
-      {/* Rows */}
-      {loading ? (
+      {/* Rows — or, when there are none, WHICH of the three no-row states it is.
+          "empty", "we only checked part of it" and "we could not check" are
+          three different facts about the user's wallet and only one of them is
+          about the wallet at all. */}
+      {pending ? (
         <div className="py-6 text-center font-mono text-[10px] text-slate-600">loading portfolio…</div>
-      ) : holdings.length === 0 ? (
+      ) : !showRows && readFailed ? (
+        <div className="mt-2 rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+          style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
+          {chainLabel} holdings could not be read. What this wallet holds there is unknown —
+          this is not an empty portfolio.{" "}
+          <a href={addressUrl} target="_blank" rel="noopener noreferrer"
+            className="underline hover:text-amber-400">check on the explorer ↗</a>
+        </div>
+      ) : !showRows && readPartial ? (
+        // The measured production case (see the note above): Moralis was
+        // unavailable, so only the curated majors list was probed. Finding
+        // nothing in a list of majors is not the same as holding nothing.
+        <div className="mt-2 rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+          style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
+          Only major tokens could be checked — the full token list needs Moralis, which did not
+          answer. Anything else in this wallet is unknown, not absent.{" "}
+          <a href={addressUrl} target="_blank" rel="noopener noreferrer"
+            className="underline hover:text-amber-400">full list on the explorer ↗</a>
+        </div>
+      ) : !showRows ? (
+        // Reached only when listComplete — a complete read that found nothing.
+        // This is the one branch entitled to speak about the wallet itself.
         <div className="py-6 text-center font-mono text-[10px] text-slate-600">No tokens on {chainLabel} yet</div>
       ) : (
         <div className="divide-y divide-[#1A1A2E]">
@@ -189,10 +277,23 @@ export default function TokenTable({ address, onQuickSell }: {
         </div>
       )}
 
-      {/* Partial / source note — honest about a degraded read */}
-      {data?.partial && holdings.length > 0 && (
-        <div className="mt-2 font-mono text-[9px] text-amber-500/80">
-          Showing majors only — full token list needs Moralis.
+      {/* Partial / source note — the SAME caveat as the two banners above, in the
+          form it takes when there are rows for it to qualify.
+          The `showRows` conjunct here is the exact inverse of the bug this file
+          fixes. The old code was `data?.partial && holdings.length > 0`, and the
+          row count there SUPPRESSED the caveat entirely when the degraded read
+          came back empty — leaving "No tokens on Base yet" standing unqualified,
+          which is the case where the caveat mattered most. Here the count only
+          ROUTES the caveat: no rows means it is not a footnote, it is the whole
+          message, and the empty branch above says it in full. Removing this
+          conjunct would print the caveat twice on one screen. */}
+      {showRows && !listComplete && (
+        <div className="mt-2 font-mono text-[9px] text-amber-500/80 leading-relaxed">
+          {readFailed
+            ? "This list is incomplete — part of the read failed. Other tokens may be held here."
+            : "Showing majors only — the full token list needs Moralis. Other tokens may be held here."}{" "}
+          <a href={addressUrl} target="_blank" rel="noopener noreferrer"
+            className="underline hover:text-amber-400">full list on the explorer ↗</a>
         </div>
       )}
 
