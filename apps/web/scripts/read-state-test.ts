@@ -266,5 +266,32 @@ const fabricated = /ethBal\s*==\s*null\s*\?\s*\d/.exec(bank);
 ok("BankClient does not substitute a number for an unread ETH balance",
    fabricated === null, fabricated ? fabricated[0] : "");
 
+// ── The re-collapse that happened one level DOWN, in the JSX ────────────────
+//
+// The derivation above was already correct when this shipped: the missions
+// if-chain deliberately pushes nothing on pending/failed/partial. The list then
+// arrived at a slot that rendered "✓ All good — no actions needed" for ANY
+// empty list, turning that deliberate silence back into a green all-clear over
+// a wallet whose balance had failed to load.
+//
+// Worth a guard of its own precisely BECAUSE the derivation was innocent. The
+// other three assertions here watch the inputs; this one watches the last step,
+// where an honest `[]` can still be rendered as a claim. Proximity rather than
+// mere presence: `state === "complete"` already appears in this file (the score
+// gates on it), so an existence check would pass on the broken version.
+const allClear = bank.indexOf("All good");
+ok("BankClient does not render an all-clear it did not measure",
+   allClear === -1 ||
+     /balanceRead\.state\s*===\s*"complete"/.test(bank.slice(Math.max(0, allClear - 400), allClear)),
+   allClear === -1 ? "" : "no `state === \"complete\"` gate within 400 chars before it");
+
+// A read whose four states are distinguished and whose failed branch offers no
+// way out is a dead end — the page said "we couldn't read your balance" and
+// nothing on it would try again. The chat system prompt is the evidence that
+// this was an omission and not a decision: it instructs the model to "offer to
+// retry" a retry the UI did not have.
+ok("BankClient offers a way out of a failed read",
+   /function\s+retryBalance/.test(bank) && /<RetryRead/.test(bank));
+
 console.log(`\n${failures === 0 ? "ALL GREEN" : "FAILURES"} — ${checks - failures}/${checks} checks passed`);
 process.exit(failures === 0 ? 0 : 1);
