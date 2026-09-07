@@ -207,28 +207,64 @@ ok("CONTROL the four states are all reachable",
 ok("CONTROL all five bodies are reachable",
    new Set(TABLE.map(t => resolveRead(t.sig).body)).size === 5);
 
-// ── 3. THE TABLES CONSUME IT ────────────────────────────────────────────────
+// ── 3. THE SCREENS CONSUME IT ───────────────────────────────────────────────
 //
-// A shared derivation that nothing imports is a fourth copy waiting to happen —
+// A shared derivation that nothing imports is a fifth copy waiting to happen —
 // the module would sit there being correct while the screens went on being
 // wrong, which is the state this whole change exists to end.
+//
+// FOUR files, not three. `BankClient.tsx` was found immediately after the three
+// tables landed: same question, a fourth hand-rolled answer, and the only one
+// gating a SCORE. It read `const balancesKnown = walletUsdc != null` — one
+// boolean for four outcomes — so an errored USDC read rendered "Reading…"
+// forever and a partial read was graded as if complete. It is in this loop so
+// that "the tables were fixed" can never again be mistaken for "the page was".
 //
 // Limits, stated so nobody trusts this further than it goes: matching source
 // text catches a copy that is written the way the old ones were, and misses one
 // written differently. The unit table above is the real guard on the logic;
 // this is the guard on the wiring.
-console.log("\nthe three tables consume the module");
+console.log("\nthe four screens consume the module");
 const BANK = path.resolve(path.dirname(path.resolve(process.argv[1])), "../src/app/app/bank");
-for (const file of ["TokenTable.tsx", "RhTokenTable.tsx", "StockTable.tsx"]) {
+for (const file of ["TokenTable.tsx", "RhTokenTable.tsx", "StockTable.tsx", "BankClient.tsx"]) {
   const src = readFileSync(path.join(BANK, file), "utf8");
   ok(`${file} imports the shared derivation`,
      /from\s+"@\/lib\/wallet\/read-state"/.test(src) || /from\s+".*\/read-state"/.test(src));
   ok(`${file} routes its body through the verdict`, /\bbody\s*===\s*"/.test(src));
-  // The exact ternary shape all three used to route the body with. Its return
-  // would mean the question is being answered locally again.
+  // The exact ternary shape all three tables used to route the body with. Its
+  // return would mean the question is being answered locally again.
   const inlined = /(holdings|legs)\.length === 0 \?/.exec(src);
   ok(`${file} has no inline empty-branch`, inlined === null, inlined ? inlined[0] : "");
 }
+
+// BankClient's own defect had a different shape from the tables', so it needs
+// its own assertions. `balancesKnown` is named literally: it is the identifier
+// the bug shipped under, and re-declaring it is the most likely way the
+// collapse comes back.
+//
+// COMMENTS ARE STRIPPED FIRST, and that is load-bearing rather than tidiness:
+// this repo's convention is to quote the deleted line in the comment that
+// replaces it, so BankClient contains both `const balancesKnown = walletUsdc
+// != null;` and `ethBal == null ? 50` as PROSE. Matching raw source failed on
+// its own explanation — a guard that punishes a file for documenting its fix
+// teaches the next author to delete the documentation. The strip is naive
+// (it would also blank a `//` inside a string literal); harmless here, since
+// neither pattern below can be manufactured by truncating a URL.
+console.log("\nBankClient does not re-collapse the four states");
+const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+const bank = stripComments(readFileSync(path.join(BANK, "BankClient.tsx"), "utf8"));
+const redeclared = /\b(?:const|let|var)\s+balancesKnown\b/.exec(bank);
+ok("BankClient has no `balancesKnown` boolean", redeclared === null, redeclared ? redeclared[0] : "");
+// The score is a claim about the user's WHOLE position, so it requires a read
+// that covered all of it. `state === "complete"` is the only signal that says
+// so; `body === "rows"` is true of a partial read too.
+ok("BankClient gates its score on a COMPLETE read",
+   /balanceRead\.state\s*===\s*"complete"/.test(bank));
+// The measurement it used to fabricate: `ethBal == null ? 50 : …` invented a
+// middling grade from an absent balance and gave it 35% of the weight.
+const fabricated = /ethBal\s*==\s*null\s*\?\s*\d/.exec(bank);
+ok("BankClient does not substitute a number for an unread ETH balance",
+   fabricated === null, fabricated ? fabricated[0] : "");
 
 console.log(`\n${failures === 0 ? "ALL GREEN" : "FAILURES"} — ${checks - failures}/${checks} checks passed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -13,6 +13,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useAccount, useReadContract, useBalance, useSwitchChain } from "wagmi";
+import { resolveRead } from "@/lib/wallet/read-state";
 import { useWalletDisconnect } from "@/lib/walletSession";
 import { useWallet } from "@/hooks/useWallet";
 import PrivyLoginButton from "@/components/PrivyLoginButton";
@@ -295,23 +296,30 @@ export default function BankPage() {
   }
 
   // ── Live on-chain reads ──────────────────────────────────────────────────
-  const { data: walletRaw } = useReadContract({
+  //
+  // The whole query object is kept, not just `.data`. Every one of these returns
+  // status / isError / isPending / isLoading alongside the value, and this file
+  // used to destructure `{ data }` and drop the rest — which is how four
+  // distinct read outcomes arrived here and got collapsed into one boolean 60
+  // lines down. See the `balanceRead` block below.
+  const usdcQ = useReadContract({
     address: net.stable, abi: ERC20_ABI, functionName: "balanceOf",
     args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct },
   });
-  const { data: ethRaw } = useBalance({ address: acct, chainId, query: { enabled: !!acct } });
+  const ethQ = useBalance({ address: acct, chainId, query: { enabled: !!acct } });
   // Balance reads only. The Aave `getReserveData` call that fed the supply-APY
   // display is gone with the display — a rate the user cannot act on is not
   // worth an RPC round-trip on every render of the wallet.
-  const { data: aaveRaw } = useReadContract({
+  const aaveQ = useReadContract({
     address: earnNet?.aUsdc, abi: ERC20_ABI, functionName: "balanceOf",
     args: acct ? [acct] : undefined, chainId, query: { enabled: !!acct && !!earnNet },
   });
-  const { data: morphoRaw } = useReadContract({
+  const morphoQ = useReadContract({
     address: morphoVnet?.target, abi: ERC4626_ABI, functionName: "maxWithdraw",
     args: acct ? [acct] : undefined, chainId,
     query: { enabled: !!acct && !!morphoVnet },
   });
+  const walletRaw = usdcQ.data, ethRaw = ethQ.data, aaveRaw = aaveQ.data, morphoRaw = morphoQ.data;
 
   const walletUsdc = walletRaw != null ? Number(formatUnits(walletRaw as bigint, net.stableDecimals)) : null;
   const ethBal     = ethRaw ? Number(formatUnits(ethRaw.value, ethRaw.decimals)) : null;
@@ -354,13 +362,56 @@ export default function BankPage() {
     return () => { off = true; };
   }, [acct, network, txReload]);
 
-  // Have the balance reads actually RESOLVED? `walletUsdc` is null while the
-  // contract read is in flight or has failed, and `?? 0` above erases that
-  // distinction — so `total === 0` conflates "you hold nothing" with "we have
-  // not looked yet". Anything that makes a CLAIM about the user's position
-  // (the health score, the mission summary) has to gate on this, not on
-  // `total`, or a slow RPC gets rendered as a fact about their money.
-  const balancesKnown = walletUsdc != null;
+  // ── How much of the balance did we actually READ? ────────────────────────
+  //
+  // Four states, one derivation — `lib/wallet/read-state.ts`, the same module
+  // the three holdings tables use. This file was the FOURTH hand-rolled copy of
+  // that question and the only one gating a *score*. It read:
+  //
+  //     const balancesKnown = walletUsdc != null;
+  //
+  // One boolean where there are four answers. The comment that used to sit here
+  // even NAMED the distinction — "null while the contract read is in flight or
+  // has failed" — and then discarded it, so:
+  //
+  //   · a FAILED USDC read rendered "Reading…" forever, with no path out of the
+  //     spinner. Identical to the bug fixed in RhTokenTable, one folder over.
+  //   · a PARTIAL read (Aave or Morpho short) was graded as if complete, and its
+  //     dollar total printed as a flat figure rather than the floor it is.
+  //
+  // The signals were never missing. wagmi hands back status/isError/isPending on
+  // every query above; all three destructures took only `.data`.
+  //
+  // A leg that does not APPLY on this chain (no Aave market, no Morpho vault) is
+  // not an unread leg — it is not a leg at all. `enabled: false` leaves a query
+  // permanently `isPending`, so counting one would pin the page to "Reading…"
+  // on every chain that lacks a venue.
+  const legs = [
+    { applies: !!acct,                 q: usdcQ },
+    { applies: !!acct && !!earnNet,    q: aaveQ },
+    { applies: !!acct && !!morphoVnet, q: morphoQ },
+  ].filter(l => l.applies);
+
+  // This wallet's "rows" are its FUNDED positions — the things there are to
+  // show. A real count rather than a 0/1 flag, because each leg holds
+  // independently and `resolveRead` uses it to decide whether a degraded read
+  // still has something to display (qualify it) or nothing (say so plainly).
+  const fundedLegs = [walletUsdc, aavePos, morphoPos].filter(v => v != null && v > 0).length;
+
+  const balanceRead = resolveRead({
+    loading:  legs.some(l => l.q.isLoading),
+    received: legs.length > 0 && legs.every(l => !l.q.isPending),
+    // USDC is the PRIMARY leg: `total` is denominated in it and every claim this
+    // page makes rests on it. Without it nothing is known — strictly weaker than
+    // "we got some", which is why `failed` outranks `partial` in the module.
+    failed:   usdcQ.isError,
+    // Any leg short of success makes `total` a FLOOR — the user holds at least
+    // this much, possibly more. Rendered with "≥", never as a flat figure.
+    partial:  legs.some(l => l.q.isError),
+    rowCount: fundedLegs,
+  });
+  // "≥" wherever a total is printed from a read that did not cover everything.
+  const floor = balanceRead.totalIsFloor ? "≥ " : "";
 
   // Stats from real wallet history (this calendar month)
   const netFlowMonth      = txData?.stats?.netFlowUsdcMonth ?? 0;
@@ -435,7 +486,10 @@ export default function BankPage() {
           // the ladder and the most degraded of them (it omitted even `fname`),
           // so the assistant addressed by hex a user the page had just greeted by
           // name. One derivation, every consumer.
-          system: `You are BlueAgent Wallet assistant. User: ${displayName}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · Supplied, withdraw-only: $${usd(inYield)}. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Help with balances, sending and receiving on Base, and withdrawing supplied funds. Do not recommend yield strategies or quote APYs — this wallet no longer offers them.`,
+          // `balanceForPrompt` carries the READ STATE, not just the numbers —
+          // see its definition. This interpolated `$${usd(total)}` directly,
+          // which is "$0.00" for any read that had not landed or had failed.
+          system: `You are BlueAgent Wallet assistant. User: ${displayName}. ${balanceForPrompt} Answer concisely in 2-3 sentences. Help with balances, sending and receiving on Base, and withdrawing supplied funds. Never state a balance that is marked UNKNOWN or NOT YET READ above, and never describe an unread balance as zero or empty. Do not recommend yield strategies or quote APYs — this wallet no longer offers them.`,
           model: "fast",
         }),
       });
@@ -546,6 +600,31 @@ export default function BankPage() {
   // `inYield > 0`: those must not assert $0.00 from a read that never landed.
   const noPositions = aavePos != null && morphoPos != null && inYield === 0;
 
+  // ── What the chat assistant is told about the balance ────────────────────
+  //
+  // The prompt is the FIFTH consumer of this read and the one with the least
+  // supervision: the user never sees the string, and an LLM handed
+  // "Balance: $0.00" will state it back as fact in a confident sentence. On a
+  // pending or failed read `total` is the number 0 (`(walletUsdc ?? 0) + …`),
+  // so the assistant was being told the wallet was empty by a page that had
+  // not managed to read it — and then asked to "help with balances".
+  //
+  // Every other consumer got a dash or a banner; this one got the number,
+  // because a template literal has nowhere to put a caveat unless one is
+  // written. So it is written. The instruction is explicit rather than implied
+  // by an em-dash, since the model is the one thing here that will happily
+  // interpolate around a missing value.
+  const balanceForPrompt =
+    balanceRead.body === "pending"
+      ? "Balance: NOT YET READ (request still in flight)."
+      : balanceRead.body === "failed"
+        ? `Balance: UNKNOWN — the ${net.short} balance read failed. Do not state or imply any amount, and do not say the wallet is empty; say the balance could not be read and offer to retry.`
+        : `Balance: ${floor}$${usd(total)} · USDC: ${walletUsdc == null ? "UNREAD" : `$${usd(walletUsdc)}`} · Supplied, withdraw-only: $${usd(inYield)}. ETH: ${ethBal?.toFixed(4) ?? "UNREAD"}.${
+            balanceRead.totalIsFloor
+              ? " NOTE: part of this wallet could not be read, so these are LOWER BOUNDS. Say 'at least' and never present them as the full balance."
+              : ""
+          }`;
+
   // What the connected account IS — read off the live connector + on-chain
   // bytecode, never asserted. Called here (above the early return) because it
   // is a hook; it returns a fully "unknown" identity when nothing is connected.
@@ -627,9 +706,13 @@ export default function BankPage() {
   // failing grade. CLAUDE.md: missing data is "unknown", never an inferred
   // negative score.
   //
-  // `balancesKnown` guards the loading case too — during the RPC round-trip a
+  // `balanceRead` guards the loading case too — during the RPC round-trip a
   // funded wallet also looks empty, and it must not flash a grade it is about
-  // to contradict.
+  // to contradict. It now guards two MORE cases that the old `balancesKnown`
+  // boolean could not express: a read that FAILED, and one that came back
+  // short. A grade is a claim about the user's whole position, so it requires a
+  // COMPLETE read — a partial one would grade a wallet against a picture known
+  // to be missing part of it.
   //
   // The heaviest term used to be `yieldScore` — 40% of the grade, keyed on what
   // fraction of the balance was supplied into Aave/Morpho, floor 20 for anyone
@@ -638,16 +721,26 @@ export default function BankPage() {
   // now permanently fails and none of them can fix. A score has to be about
   // something the user can act on, so it is gone and the surviving three
   // dimensions are reweighted to sum to 1 rather than silently rescaled.
-  const scoreReady     = balancesKnown && total > 0;
   // Diversification degrades honestly when ETH has no price: "holds ETH at all"
   // is still knowable from the balance, only the ">5% of portfolio" tier needs
   // a price. Previously both tiers were decided by a constant.
   const divScore       = ethUsd != null && pricedTotal > 0 && ethUsd / pricedTotal > 0.05 ? 88
                        : (ethBal ?? 0) > 0 ? 65 : 45;
-  const gasScore       = ethBal == null ? 50 : ethBal > 0.05 ? 95 : ethBal > 0.01 ? 80 : ethBal > 0.005 ? 60 : 20;
+  // `null`, not 50, when the ETH balance never arrived. This read
+  // `ethBal == null ? 50 : …` — a middling grade invented out of an absent
+  // measurement and then given 35% of the weight, with a second 40% flowing
+  // through `divScore`'s ETH tiers. Three quarters of the score could be
+  // fabricated from a failed `useBalance` and it still printed a letter grade.
+  // CLAUDE.md: missing data is "unknown", never an inferred value.
+  const gasScore: number | null =
+    ethBal == null ? null : ethBal > 0.05 ? 95 : ethBal > 0.01 ? 80 : ethBal > 0.005 ? 60 : 20;
   const actScore       = transferCountMonth > 10 ? 90 : transferCountMonth > 5 ? 75 : transferCountMonth > 1 ? 55 : 20;
+  // COMPLETE, not merely "known" — see the note above. `gasScore != null` folds
+  // in the ETH leg, which is not part of `total` and so is deliberately not one
+  // of `balanceRead`'s legs, but which three quarters of this grade rests on.
+  const scoreReady     = balanceRead.state === "complete" && total > 0 && gasScore != null;
   const portfolioScore: number | null =
-    scoreReady ? Math.round(divScore * 0.4 + gasScore * 0.35 + actScore * 0.25) : null;
+    scoreReady && gasScore != null ? Math.round(divScore * 0.4 + gasScore * 0.35 + actScore * 0.25) : null;
   const scoreGrade     = portfolioScore == null ? null : portfolioScore >= 85 ? "A" : portfolioScore >= 70 ? "B" : portfolioScore >= 55 ? "C" : "D";
   // Slate, not red, when there is no score — colour is a claim too.
   const scoreColor     = portfolioScore == null ? "#475569"
@@ -656,13 +749,14 @@ export default function BankPage() {
   // ── Mission Control items ─────────────────────────────────────────────────
   interface MC { priority: "high"|"warn"|"good"|"info"; icon: string; text: string; action?: string; onAction?: () => void; color: string }
   const allMissions: MC[] = [];
-  // `!balancesKnown` deliberately produces NO missions rather than the
-  // "add USDC" one: a mission is advice about the user's position, and we have
-  // not read it yet. An empty list for one RPC round-trip beats telling a
-  // funded wallet it is empty.
-  if (!balancesKnown) {
-    /* nothing to advise until the balance read lands */
-  } else if (total === 0) {
+  // A mission is ADVICE ABOUT THE USER'S POSITION, so it needs a position that
+  // was actually read. Three of the five bodies produce none: not read yet, not
+  // read at all, and read but short — the last of which used to fall through to
+  // the `total === 0` branch and tell someone to fund a wallet whose balance we
+  // had just failed to fetch. An empty list beats a confident wrong instruction.
+  if (balanceRead.body === "pending" || balanceRead.body === "failed" || balanceRead.body === "partial") {
+    /* nothing to advise until the balance read lands, in full */
+  } else if (balanceRead.body === "empty") {
     allMissions.push({ priority: "info", icon: "💡", text: `Add USDC to fund your wallet on ${net.short}`, action: "Add cash", onAction: addCash, color: "#F59E0B" });
   } else {
     // The two missions that used to sit here — "$X idle, earn ~$Y/mo" and
@@ -701,11 +795,27 @@ export default function BankPage() {
   // connect a wallet they were looking at the address of, right beside a
   // "Disconnect" button. Same defect family as the score above: a balance of
   // zero was read as a statement about the connection.
+  //
+  // The SECOND branch is the one that was live in production: `!balancesKnown`
+  // where `balancesKnown === walletUsdc != null`. A USDC read that ERRORED
+  // leaves `walletUsdc` null forever, so the line read "Reading your balances…"
+  // for as long as the page stayed open — a spinner sentence describing a
+  // request that had already finished, and failed. Nothing retried, nothing
+  // said so. Now `pending` and `failed` are different sentences because they
+  // are different facts, and neither is `empty`.
   const missionSummary =
-    !balancesKnown ? "Reading your balances…" :
-    total === 0 ? `Wallet connected · add USDC on ${net.short} to get started.` :
-    inYield > 0 ? `$${usd(walletUsdc)} liquid · $${usd(inYield)} supplied` :
-    `$${usd(walletUsdc)} USDC on ${net.short}`;
+    balanceRead.body === "pending" ? "Reading your balances…" :
+    balanceRead.body === "failed"  ? `Couldn't read your balance on ${net.short} — unknown, not zero.` :
+    balanceRead.body === "partial" ? `Part of your position on ${net.short} could not be read — unknown, not empty.` :
+    balanceRead.body === "empty"   ? `Wallet connected · add USDC on ${net.short} to get started.` :
+    // `body === "rows"`: something is funded. `rowCount > 0` outranks `failed`
+    // in the module, so this branch is reachable with the USDC leg itself
+    // errored and a supplied position still read — hence the liquid figure is
+    // named only when it is known, rather than rendering "$—" as if that were
+    // an amount. `floor` marks the total as a lower bound either way.
+    walletUsdc == null ? `${floor}$${usd(inYield)} supplied · liquid balance unread` :
+    inYield > 0 ? `${floor}$${usd(walletUsdc)} liquid · $${usd(inYield)} supplied` :
+    `${floor}$${usd(walletUsdc)} USDC on ${net.short}`;
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
@@ -1028,8 +1138,40 @@ export default function BankPage() {
                   while the wallet sold yield; the rows below still itemise a
                   supplied position when there is one, so "USDC" covers it. */}
               <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">USDC</div>
-              {/* White — same reason as the sidebar figure above. */}
-              <div className="font-mono text-[28px] font-bold text-white">${usd(walletState.balance)}</div>
+              {/* White, not the accent — colour is decoration on a figure the
+                  eye already finds; the three semantic colours are reserved
+                  for claims. (This used to read "same reason as the sidebar
+                  figure above"; that figure was the duplicate deleted in the
+                  dedupe pass, and this is now the only balance on the page.)
+                  ── and the single most important consumer of `balanceRead`.
+                  `walletState.balance` is `(walletUsdc ?? 0) + inYield`, so a
+                  read still in flight — or one that FAILED — arrives here as
+                  the number 0 and used to render "$0.00" at 28px: the largest,
+                  most confident thing on the page, asserting a balance nobody
+                  had measured. A dash is not a worse number, it is the absence
+                  of a claim; "$0.00" is a claim, and `canAssertEmpty` is the
+                  only thing that licenses it. Between them sits the floor: a
+                  read that covered part of the wallet knows a LOWER BOUND, and
+                  says so with "≥" rather than passing it off as the total. */}
+              <div className="font-mono text-[28px] font-bold text-white">
+                {balanceRead.body === "rows"  ? `${floor}$${usd(walletState.balance)}`
+                  : balanceRead.body === "empty" ? `$${usd(0)}`
+                  : "—"}
+              </div>
+              {/* Why the figure above is a dash, or carries a "≥". Never both
+                  with the rows below — this is a caption on the total, and the
+                  rows are individually gated on their own positive balances. */}
+              {balanceRead.body === "pending" ? (
+                <div className="font-mono text-[9px] text-slate-600 mt-1">reading {net.short}…</div>
+              ) : balanceRead.body === "failed" ? (
+                <div className="font-mono text-[9px] text-amber-500/80 mt-1 leading-relaxed">
+                  Couldn&apos;t read your USDC balance on {net.short}. Unknown — not zero.
+                </div>
+              ) : balanceRead.totalIsFloor ? (
+                <div className="font-mono text-[9px] text-amber-500/80 mt-1 leading-relaxed">
+                  Part of this wallet could not be read — it holds at least this much.
+                </div>
+              ) : null}
               <div className="flex flex-col gap-1.5 mt-3">
                 {(walletUsdc ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
@@ -1130,10 +1272,26 @@ export default function BankPage() {
                 <div className="font-mono text-[32px] font-bold leading-none" style={{ color: scoreColor }}>
                   {portfolioScore ?? "—"}
                 </div>
+                {/* WHY there is no score, in the caller's own words. This was
+                    `balancesKnown ? "No data yet" : "Reading…"` — two labels for
+                    five outcomes, and the one that shipped was the wrong one:
+                    an errored USDC read left `balancesKnown` false forever, so
+                    a failed read displayed "Reading…" indefinitely. "No data
+                    yet" was no better on a failed read — it reads as a fact
+                    about the wallet ("nothing here") rather than about our
+                    read ("we didn't get it"). Each branch below names which
+                    input is missing, so the absence is attributable. */}
                 <div className="font-mono text-[13px] text-slate-500 mb-1">
-                  {portfolioScore == null
-                    ? (balancesKnown ? "No data yet" : "Reading…")
-                    : `/100 · ${scoreGrade}`}
+                  {portfolioScore != null ? `/100 · ${scoreGrade}`
+                    /* `!!acct &&` for the same reason the legs are filtered by
+                       `applies`: a disabled wagmi query is permanently
+                       `isPending`, so an unguarded read of it would pin this to
+                       "Reading…" rather than describe anything. */
+                    : balanceRead.body === "pending" || (!!acct && ethQ.isPending) ? "Reading…"
+                    : balanceRead.body === "failed"   ? "Balance unread"
+                    : balanceRead.state === "partial" ? "Partial read"
+                    : ethBal == null                  ? "Gas balance unread"
+                    : "No data yet"}
                 </div>
               </div>
               {/* Every chip below is DERIVED. `identity` comes from the live
@@ -1302,8 +1460,25 @@ export default function BankPage() {
                     on a wallet holding dust ETH and no stables the card said
                     "No assets yet" and then drew "Stablecoin 0%" underneath.
                     Everything empty-able now hangs off `holdsAssets`, and the
-                    bar is INSIDE this branch so it cannot escape again. */}
-                {holdsAssets ? (
+                    bar is INSIDE this branch so it cannot escape again.
+
+                    But `holdsAssets` answers "is there anything to chart", not
+                    "did we manage to look" — it is derived from `pricedTotal`,
+                    which is `(walletUsdc ?? 0) + inYield + …`, so an unread
+                    balance reaches it as the number 0 and this card printed
+                    "No assets yet" over a request that had failed. Same
+                    sentence as the balance card's "$0.00", same cause, and the
+                    module says only `canAssertEmpty` licenses it.
+
+                    The branch order below is `resolveRead`'s own precedence,
+                    deliberately: pending → rows → failed → partial → empty.
+                    `holdsAssets` sits in the "rows" slot rather than
+                    `body === "rows"` because it counts a leg this read does
+                    not — a wallet holding only ETH has zero funded USDC legs
+                    and is still not empty. */}
+                {balanceRead.body === "pending" ? (
+                  <div className="font-mono text-[10px] text-slate-600">reading {net.short}…</div>
+                ) : holdsAssets ? (
                   <>
                   <div className="flex items-center gap-4">
                     <div className="w-20 h-20 shrink-0">
@@ -1337,6 +1512,14 @@ export default function BankPage() {
                           {ethBal?.toFixed(4)} ETH — price unavailable, not charted
                         </div>
                       )}
+                      {/* The other reason a slice can be too small: not an
+                          unpriced leg, an unread one. Same caveat as the "≥"
+                          on the balance card, in the shape it takes here. */}
+                      {balanceRead.totalIsFloor && (
+                        <div className="font-mono text-[9px] text-amber-500/80">
+                          Part of the wallet was not read — slices are lower bounds
+                        </div>
+                      )}
                       <div className="font-mono text-[8px] text-slate-700 pt-1">ETH counted as gas reserve</div>
                       {walletState.gasSavedUsd != null && (
                         <div className="font-mono text-[9px] text-[#34D399]">~${walletState.gasSavedUsd} saved vs mainnet</div>
@@ -1365,7 +1548,22 @@ export default function BankPage() {
                     </div>
                   )}
                   </>
+                ) : balanceRead.body === "failed" ? (
+                  <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+                    style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
+                    Your balance on {net.short} could not be read. The allocation is unknown —
+                    this is not an empty wallet.
+                  </div>
+                ) : balanceRead.body === "partial" ? (
+                  <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+                    style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
+                    Nothing was found in the part that could be read, but part of this wallet was
+                    not read at all. Incomplete, not empty.
+                  </div>
                 ) : (
+                  // The one branch that ASSERTS something about the user, and
+                  // it is now reached only from a complete read that found
+                  // nothing — `resolveRead`'s `canAssertEmpty`.
                   <div className="font-mono text-[10px] text-slate-600">No assets yet</div>
                 )}
               </div>
