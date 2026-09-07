@@ -10,13 +10,18 @@
 // wallet holds — and the explorers are not interchangeable either, which is why
 // each row links through its own leg's explorer.
 //
-// Three states are distinguished on purpose: holdings, "you hold none", and
-// "we could not check". The last one is a leg the chain didn't answer for —
-// rendering it as an empty portfolio is how a user concludes their position
-// vanished.
+// Four states are distinguished, per leg, via lib/wallet/read-state.ts: still
+// reading, "we could not check", "we could only check part of it", and "you
+// hold none". Only the last is a statement about the user. This file used to
+// distinguish two of the four — it never read `leg.unread` at all, the field
+// whose own doc comment says "the leg is incomplete by exactly this many
+// tokens — never treat as zero" — so a leg with five failed balance reads and
+// no holdings rendered "No Base stock tokens · 12 checked", asserting both the
+// absence and a scan count larger than what had actually been read.
 
 import { useEffect, useState } from "react";
 import type { StockPortfolio, StockLeg, StockHolding } from "@/lib/wallet/stock-holdings";
+import { resolveRead } from "@/lib/wallet/read-state";
 
 const fmtUsd = (n: number | null | undefined) =>
   n == null
@@ -67,6 +72,28 @@ function Leg({ leg }: { leg: StockLeg }) {
   const priced = leg.holdings.filter(h => h.valueUsd != null);
   const total = priced.reduce((a, h) => a + (h.valueUsd ?? 0), 0);
 
+  // A leg is its own read — the two venues fail independently, which is the
+  // whole reason they render as two labelled groups. `loading`/`received` are
+  // fixed here because a leg only exists once the parent's fetch resolved; the
+  // parent owns those two signals and passes the resolved legs down.
+  //
+  // `unread` is the signal this file had been ignoring. It is NOT the same as
+  // `status: "unavailable"`: the chain answered, we walked the registry, and N
+  // individual balance calls failed. The list is short by exactly N, so the leg
+  // is `partial` — never `complete`, and with no holdings never `empty`.
+  //
+  // NOT fed in: unpriced holdings. That is a different axis — the LIST is
+  // complete, a PRICE is missing — and the header already says "· N unpriced"
+  // next to a total that excludes them. Folding it in here would put a "could
+  // not read your holdings" banner over holdings that were read perfectly well.
+  const read = resolveRead({
+    loading:  false,
+    received: true,
+    failed:   leg.status === "unavailable",
+    partial:  leg.unread > 0,
+    rowCount: leg.holdings.length,
+  });
+
   return (
     <div className="mb-3 last:mb-0">
       <div className="flex items-center justify-between mb-1.5">
@@ -76,10 +103,13 @@ function Leg({ leg }: { leg: StockLeg }) {
           <span className="font-mono text-[8px] text-slate-600">{leg.chainId}</span>
         </div>
         {/* Only totals what it could actually price — an unpriced holding is
-            excluded from the sum and said so, never counted as $0. */}
+            excluded from the sum and said so, never counted as $0. The "≥" is
+            the OTHER caveat: rows that were never read at all cannot be in this
+            sum either, and unlike the unpriced ones they cannot be counted. */}
         {priced.length > 0 && (
-          <span className="font-mono text-[10px] text-slate-400 tabular-nums">
-            {fmtUsd(total)}
+          <span className="font-mono text-[10px] text-slate-400 tabular-nums"
+            title={read.totalIsFloor ? `${leg.unread} balance read(s) failed — at least this much` : undefined}>
+            {read.totalIsFloor ? "≥ " : ""}{fmtUsd(total)}
             {priced.length < leg.holdings.length && (
               <span className="text-slate-600"> · {leg.holdings.length - priced.length} unpriced</span>
             )}
@@ -87,12 +117,26 @@ function Leg({ leg }: { leg: StockLeg }) {
         )}
       </div>
 
-      {leg.status === "unavailable" ? (
+      {read.body === "failed" ? (
         <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
           style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
           {leg.note ?? "Could not reach this chain."} Your holdings are unknown here — this is not an empty portfolio.
         </div>
-      ) : leg.holdings.length === 0 ? (
+      ) : read.body === "partial" ? (
+        // NEW state, and the one this file was getting wrong: the chain
+        // answered but some balance reads did not, and nothing was found in
+        // what did. That is not "you hold no stock tokens here". `leg.note`
+        // already carries the count — it was being rendered UNDERNEATH the
+        // sentence it contradicts.
+        <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+          style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
+          {leg.note ?? `${leg.unread} balance read(s) failed.`} Nothing was found in the rest —
+          but this leg is incomplete, not empty.
+        </div>
+      ) : read.body === "empty" ? (
+        // Only from a complete leg, so `scanned` is now a count of rows that
+        // were actually read. It used to print here on a partial leg too, where
+        // it overstated the work by exactly `leg.unread`.
         <div className="py-3 text-center font-mono text-[9px] text-slate-600">
           No {leg.label} stock tokens · {leg.scanned} checked
         </div>
@@ -104,7 +148,10 @@ function Leg({ leg }: { leg: StockLeg }) {
         </div>
       )}
 
-      {leg.status === "ok" && leg.note && (
+      {/* The same caveat as the partial banner, in the shape it takes when
+          there are rows to qualify — `footnote` is true only in that case, so
+          the two can never both be on screen. */}
+      {read.footnote && leg.note && (
         <div className="mt-1.5 font-mono text-[9px] text-amber-500/80">{leg.note}</div>
       )}
     </div>
@@ -132,6 +179,19 @@ export default function StockTable({ address }: { address?: `0x${string}` }) {
   const legs = data?.legs ?? [];
   const anyHeld = legs.some(l => l.holdings.length > 0);
 
+  // The OUTER read: did we get a portfolio at all? Its rows are the legs, not
+  // the holdings — each leg then resolves its own state inside <Leg>. `partial`
+  // is structurally false here because a portfolio is either returned or not;
+  // partialness lives one level down, per venue, where the two chains fail
+  // independently.
+  const read = resolveRead({
+    loading,
+    received: data !== null,
+    failed:   !!data?.error,
+    partial:  false,
+    rowCount: legs.length,
+  });
+
   return (
     <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 mb-3">
       <div className="flex items-center justify-between mb-3">
@@ -139,14 +199,20 @@ export default function StockTable({ address }: { address?: `0x${string}` }) {
         <span className="font-mono text-[8px] text-slate-600">tokenized equities</span>
       </div>
 
-      {loading ? (
+      {read.body === "pending" ? (
         <div className="py-6 text-center font-mono text-[10px] text-slate-600">reading both chains…</div>
-      ) : data?.error ? (
+      ) : read.body === "failed" ? (
         <div className="py-6 text-center font-mono text-[10px] text-amber-500/80">
-          Couldn&apos;t load stock holdings — {data.error}
+          Couldn&apos;t load stock holdings — {data?.error}
         </div>
-      ) : legs.length === 0 ? (
-        <div className="py-6 text-center font-mono text-[10px] text-slate-600">No data</div>
+      ) : read.body === "empty" || read.body === "partial" ? (
+        // Zero legs from a read that did not error. `readStockHoldings` always
+        // returns both venues, so this is unreachable today — kept, and worded
+        // as a gap in OUR answer rather than as a fact about the wallet,
+        // because "No data" read as if the user held nothing.
+        <div className="py-6 text-center font-mono text-[10px] text-slate-600">
+          No venues were checked — this says nothing about what you hold.
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-[1fr_auto_5.5rem] gap-3 px-1 pb-1.5 font-mono text-[9px] text-slate-600 border-b border-[#1A1A2E] mb-2">
