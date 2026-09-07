@@ -22,10 +22,11 @@ import { useWorkspaceSync, WORKSPACE_HYDRATED_EVENT, type UseWorkspaceSync } fro
 import { useScheduleSync, type UseScheduleSync } from "./use-schedule-sync";
 import { useSiweSignIn } from "./use-siwe-signin";
 import {
-  creditCost, deductCredits, addCredits,
+  creditCost, deductCredits, addCredits, getTierInfo,
   getNextRefresh, refreshCreditsIfNeeded, getDailyCr, GUEST_DAILY,
   setCredits as setCreditsLS,
 } from "@/lib/credits";
+import { useWallet } from "@/hooks/useWallet";
 import {
   buildMemoryContext, updateMemoryAfterChat,
   addChunk, recentChunks,
@@ -88,9 +89,8 @@ interface ChatContextValue {
   cost:           number;
   outOfCredits:   boolean;
   walletReady:    boolean;
-  onWalletChange: (addr: string | undefined, tier: TierInfo) => void;
   setCredits:     (n: number) => void;
-  walletRefresh:  number;          // increment to force WalletBar balance re-fetch
+  walletRefresh:  number;          // increment to force a credit-balance re-fetch
   triggerWalletRefresh: () => void;
 
   // Web search
@@ -117,12 +117,12 @@ interface ChatContextValue {
 
 // Pre-connection default holderTier. Token-free: no balance, no discount.
 // The "Guest" label surfaces whenever no wallet is connected; a connected
-// wallet overrides this via onWalletChange → getTierInfo ("Member").
+// wallet gets `getTierInfo()` ("Member") instead.
 //
 // `dailyCr` is GUEST_DAILY, not a literal: it used to be a hardcoded 500 — the
-// MEMBER allowance — so between mount and the first `onWalletChange` the
-// composer footer (`holderTier.dailyCr` in ChatInput) told a guest they had
-// "500 cr/day" while the balance beside it counted down from 100.
+// MEMBER allowance — so before the wallet resolved, the composer footer
+// (`holderTier.dailyCr` in ChatInput) told a guest they had "500 cr/day" while
+// the balance beside it counted down from 100.
 const GUEST_TIER: TierInfo = {
   tier: "Guest", blueBalance: 0, dailyCr: GUEST_DAILY, discount: 0, color: "#4FC3F7",
 };
@@ -139,12 +139,36 @@ const ChatCtx = createContext<ChatContextValue | null>(null);
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   // ── Wallet / credits ──────────────────────────────────────────────────────
-  const [walletAddr,    setWalletAddr]    = useState<string | undefined>();
-  const [holderTier,    setHolderTier]    = useState<TierInfo>(GUEST_TIER);
+  //
+  // READ WAGMI DIRECTLY. This used to be `useState` fed by an `onWalletChange`
+  // callback that only a mounted `<WalletBar>` could fire, which made the
+  // context a COPY of wagmi's address rather than a view of it — and a copy has
+  // to be kept up to date by whoever happens to be on screen. Two components
+  // existed solely to do that (`ChatClient`'s and `PanelHost`'s hidden
+  // "detector" WalletBars), and every connect/disconnect that did NOT pass
+  // through one of them left the copy stale: the wallet page's own Disconnect
+  // button, and Privy's `setActiveWallet()` restoring an embedded wallet on a
+  // returning session. The symptom was always the same shape — chat still
+  // believes you are signed in (or still believes you are a guest) while the
+  // wallet UI shows the opposite.
+  //
+  // `useWallet()` wraps `useAccount()`, so `walletAddr` is now the same value
+  // every other surface reads. It cannot drift, because there is nothing left
+  // to drift from.
+  const { address, isConnected, isReady: walletReady } = useWallet();
+  const walletAddr = isConnected ? address : undefined;
+
+  // Tier is a pure function of "is there an address": `getTierInfo()` ignores
+  // its argument entirely since the token-free move (it returns a constant
+  // Member row), and `fetchBlueBalance()` is a stub that returns 0 without a
+  // network call. So the old callback carried exactly one bit of information —
+  // the address — and everything else it passed was already derivable here.
+  const holderTier = useMemo<TierInfo>(
+    () => (walletAddr ? getTierInfo(0) : GUEST_TIER),
+    [walletAddr],
+  );
+
   const [credits,       setCredits]       = useState(0);
-  // walletReady: true once wallet detection has completed (even if no wallet found)
-  // Prevents "out of credits" flash before we know the user's real balance
-  const [walletReady,   setWalletReady]   = useState(false);
   const [countdown,     setCountdown]     = useState("");
   const [buyOpen,       setBuyOpen]       = useState(false);
   const [walletRefresh, setWalletRefresh] = useState(0);
@@ -194,12 +218,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
   }, [walletAddr]);
-
-  const onWalletChange = useCallback((addr: string | undefined, tier: TierInfo) => {
-    setWalletAddr(addr);
-    setHolderTier(tier);
-    setWalletReady(true); // wallet detection completed — safe to evaluate outOfCredits
-  }, []);
 
   // ── Tasks ─────────────────────────────────────────────────────────────────
   const [tasks,        setTasksState]  = useState<ChatTask[]>([]);
@@ -945,7 +963,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     sidebarTab, setSidebarTab,
     buyOpen, setBuyOpen,
     walletAddr, holderTier, credits, countdown, isUnlimited, daily, cost, outOfCredits,
-    walletReady, onWalletChange, setCredits, walletRefresh, triggerWalletRefresh,
+    walletReady, setCredits, walletRefresh, triggerWalletRefresh,
     webSearch, setWebSearch, pendingFiles, setPendingFiles,
     cmdMenu, setCmdMenu, cmdFilter, setCmdFilter,
     sync,

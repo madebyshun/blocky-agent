@@ -67,7 +67,7 @@ function walletSubtitle(name: string): string {
  * as an empty menu, with no error to explain it).
  */
 export function useWallet() {
-  const { address, isConnected, chainId } = useAccount();
+  const { address, isConnected, chainId, status } = useAccount();
   const { connectors, connect, isPending } = useConnect();
   const disconnect = useWalletDisconnect();
   const { name: basename } = useBasename(address);
@@ -135,10 +135,19 @@ export function useWallet() {
 
   const label = basename ?? (address ? shortAddr(address) : undefined);
 
+  // wagmi settles to "connected" | "disconnected" once it has finished restoring
+  // a persisted session; until then it is "connecting"/"reconnecting". Callers
+  // that gate a *number* on the wallet (credits, allowances) must wait for that,
+  // or they render a guest allowance for the split second before the reconnect
+  // lands and it reads as "my credits reset".
+  const isReady = status !== "connecting" && status !== "reconnecting";
+
   return {
     address,
     isConnected: isConnected && !!address,
     chainId,
+    status,
+    isReady,      // wagmi has finished deciding — `address` is now trustworthy
     basename,
     label,        // Basename if present, else short 0x… (undefined when no wallet)
     wallets,      // wallet rows with icon + subtitle; call `w.select()` to connect
