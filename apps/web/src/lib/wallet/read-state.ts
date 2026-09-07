@@ -123,6 +123,82 @@ export function readState(s: ReadSignals): ReadState {
 }
 
 /**
+ * ─── The same question asked by a screen that SPENDS ────────────────────────
+ *
+ * Everything above answers "what may this table claim". A card that signs a
+ * transaction asks a narrower and more expensive question: "may I let this
+ * user commit funds against a balance I am not sure I read?"
+ *
+ * MEASURED 2026-09-07 in the three Robinhood action cards (send, swap,
+ * bridge), which move real funds on chain 4663 and all three got it wrong in
+ * the SAME direction. Each destructured only `data` from wagmi, so an
+ * unreadable balance and a balance still in flight were one value — `null` —
+ * and each then wrote its guard as:
+ *
+ *     const overBalance = balance != null && amount > balance;
+ *
+ * which is FAIL-OPEN. When the read failed, the guard evaluated to false and
+ * the card enabled its confirm button, sending the user to sign and pay gas
+ * for a transaction that cannot succeed — the exact outcome the balance read
+ * was added to prevent, per its own comment in the file.
+ *
+ * The gate therefore has THREE outcomes, not two, and the third is the point:
+ *
+ *   ok            the balance was read and the amount fits.
+ *   insufficient  the balance was read and the amount does not fit.
+ *   unverified    the balance was NOT read. Not a statement about the funds.
+ *
+ * `unverified` is fail-CLOSED. "We could not check" is not "go ahead": the
+ * cheapest correct move is to stop and offer to read again, because the
+ * alternative spends gas to learn what a retry would have told us for free.
+ * Any caller rendering `unverified` owes the user a retry — a gate with no way
+ * out is just a broken card, which is the dead end this module already exists
+ * to argue against.
+ *
+ * `reading` is separate from `unverified` for the same reason `pending` is
+ * separate from `failed` above: a spinner is a promise that an answer is
+ * coming, and showing one over a read that already failed is a promise the
+ * card cannot keep.
+ */
+export type SpendGate = "reading" | "unverified" | "insufficient" | "ok";
+
+export interface SpendSignals {
+  /** A balance request is in flight. */
+  loading: boolean;
+  /** A balance response has arrived at least once. */
+  received: boolean;
+  /**
+   * The balance could not be established. Include EVERY input the amount
+   * comparison depends on — notably the token's `decimals`, without which a
+   * balance is a number at an unknown scale rather than a quantity. A read
+   * that returns a raw integer and guesses the exponent has not read anything.
+   */
+  failed: boolean;
+  /**
+   * The amount is KNOWN to exceed the balance. Callers must compute this from
+   * a balance they actually have; `null > x` is false in JS, which is how the
+   * fail-open bug wrote itself in three files.
+   */
+  over: boolean;
+}
+
+/**
+ * Signals → the one gate. Reuses `readState` rather than re-deriving
+ * precedence, so a spend screen and a holdings table can never disagree about
+ * what "we don't know" means.
+ *
+ * `partial` is not an input: there is no partial answer to "can this user
+ * afford it". A balance short by an unknown amount cannot bound a spend in
+ * either direction, so anything less than a complete read is `unverified`.
+ */
+export function resolveSpend(s: SpendSignals): SpendGate {
+  const state = readState({ ...s, partial: false, rowCount: 0 });
+  if (state === "pending") return "reading";
+  if (state !== "complete") return "unverified";
+  return s.over ? "insufficient" : "ok";
+}
+
+/**
  * Signals → everything the body needs, derived once.
  *
  * Note the order inside: rows beat the failed/partial banners. A degraded read
