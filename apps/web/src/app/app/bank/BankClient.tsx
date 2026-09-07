@@ -354,9 +354,6 @@ export default function BankPage() {
     return () => { off = true; };
   }, [acct, network, txReload]);
 
-  const inYield = (aavePos ?? 0) + (morphoPos ?? 0);
-  const total   = (walletUsdc ?? 0) + inYield;
-
   // Have the balance reads actually RESOLVED? `walletUsdc` is null while the
   // contract read is in flight or has failed, and `?? 0` above erases that
   // distinction — so `total === 0` conflates "you hold nothing" with "we have
@@ -364,15 +361,6 @@ export default function BankPage() {
   // (the health score, the mission summary) has to gate on this, not on
   // `total`, or a slow RPC gets rendered as a fact about their money.
   const balancesKnown = walletUsdc != null;
-
-  // Same trap, but with money on the other side of it. `inYield` collapses
-  // "the read has not resolved" into 0, and the withdraw path is gated on
-  // `inYield > 0` — so an RPC that fails and stays null would hide the ONLY
-  // exit from a user who really does have USDC supplied. Anything that gates
-  // the exit must ask "is it positively known to be zero", not "is it zero".
-  // Cosmetic gates (widgets that print a dollar figure) stay on `inYield > 0`:
-  // those must not assert $0.00 from a read that never landed.
-  const noPositions = aavePos != null && morphoPos != null && inYield === 0;
 
   // Stats from real wallet history (this calendar month)
   const netFlowMonth      = txData?.stats?.netFlowUsdcMonth ?? 0;
@@ -527,6 +515,36 @@ export default function BankPage() {
     ethUsdPrice,
     gasSavedUsd,
   }), [walletUsdc, aavePos, morphoPos, ethBal, netFlowMonth, transferCountMonth, ethUsdPrice, gasSavedUsd]);
+
+  // ── The wallet's totals — ONE definition, this one ────────────────────────
+  //
+  // These were `const inYield = (aavePos ?? 0) + (morphoPos ?? 0)` and
+  // `const total = (walletUsdc ?? 0) + inYield`, sitting ~160 lines above.
+  // `buildWalletState` computes byte-identical expressions (wallet-state.ts:24-25),
+  // so the page carried two independent definitions of "what this wallet holds"
+  // and rendered BOTH: the chat system prompt read `total`, the balance headings
+  // read `walletState.balance`. They agree today only because the two
+  // expressions happen to match character for character.
+  //
+  // KEPT: the module. It is shared, unit-testable, and already the source for
+  // `ethUsd` / `pricedTotal` / `ethUnpriced` / `holdsAssets` — four values that
+  // were collapsed into it for exactly this reason (see the note above
+  // `portfolioData`). Leaving `total` and `inYield` behind meant that earlier
+  // dedupe took four of six copies and the survivors kept breeding, which is why
+  // the reason is written here instead of only in a commit message.
+  //
+  // DELETED: the local pair. Aliased rather than renamed at ~20 call sites so
+  // the diff stays a dedupe rather than a rename, and so any future third copy
+  // has to walk past this comment to get written.
+  const { balance: total, inYield } = walletState;
+
+  // `inYield` collapses "the read has not resolved" into 0, and the withdraw
+  // path is gated on `inYield > 0` — so an RPC that fails and stays null would
+  // hide the ONLY exit from a user who really does have USDC supplied. Anything
+  // that gates the exit must ask "is it positively known to be zero", not "is it
+  // zero". Cosmetic gates (widgets that print a dollar figure) stay on
+  // `inYield > 0`: those must not assert $0.00 from a read that never landed.
+  const noPositions = aavePos != null && morphoPos != null && inYield === 0;
 
   // What the connected account IS — read off the live connector + on-chain
   // bytecode, never asserted. Called here (above the early return) because it
@@ -692,6 +710,41 @@ export default function BankPage() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
 
+  // ── The header trust strip — WHERE am I and WHOSE keys are these ──────────
+  //
+  // This row used to carry four chips: Non-custodial · {network} ·
+  // {connectionLabel} · Passkey. The last two are gone, and the split is the
+  // point: there are two different questions on this page and they had been
+  // interleaved across two rows that each answered half of each.
+  //
+  //   header (here)      → where am I, whose keys           — never scrolls
+  //   health-card chips  → what KIND of account is this      — captioned, wraps
+  //
+  // `connectionLabel` and `passkey` are read off `useWalletIdentity`, which
+  // returns three facts about the account: connector family, smart-vs-EOA, and
+  // passkey. The health card renders all three together; this row rendered two
+  // of the three, so the header could say "Coinbase Wallet · Passkey" while
+  // never saying whether the account is a smart wallet or an EOA — two thirds
+  // of a derivation, which is a worse artifact than either the whole or none.
+  //
+  // KEPT here: the two that are NOT about the account. `net.short` is about the
+  // chain (and is the one chip that can warn — it was the literal "Base" while
+  // the app defaulted to Sepolia, directly above the receive QR). "Non-custodial"
+  // is about THIS APP, which holds no key and no fund; it is the answer to the
+  // question a stranger asks first, so it belongs beside the address in a bar
+  // that never scrolls away.
+  //
+  // KEPT on the health card: the account triple, intact. It is the complete set
+  // and it is the only row that has room for it.
+  //
+  // One array, two renderings — the chips at `sm` and up, and the `sm:hidden`
+  // line under the greeting. Those two are complementary by construction, so
+  // the same claim is never on screen twice.
+  const trustChips: { label: string; warn: boolean }[] = [
+    { label: "Non-custodial", warn: false },
+    { label: net.short,       warn: isTestnet },
+  ];
+
   return (
     <div className="flex h-full w-full bg-[#050508] text-slate-200 overflow-hidden">
 
@@ -703,61 +756,43 @@ export default function BankPage() {
           <p className="font-mono text-[11px] text-[#4FC3F7] tracking-widest">// WALLET</p>
         </div>
 
-        {/* 2. Net Worth widget */}
-        <div className="m-3 rounded-xl border border-[#1A1A2E] bg-gradient-to-b from-[#0d1117] to-[#0a0a0f] p-3.5">
-          {/* Was "NET WORTH", over a number that is stablecoins only. A wallet
-              holding ETH and no USDC read "NET WORTH $0.00" while the card
-              below it charted that same ETH — the heading claiming a total it
-              never computed. The caption already said "USDC + yield"; the
-              heading says it now, and the caption carries the ETH it excludes. */}
-          {/* "USDC + YIELD" while the wallet sold yield; plain "USDC" now. The
-              figure itself is unchanged — it still includes a supplied position
-              if one exists, which is why the caption below names it. */}
-          <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-0.5">USDC</div>
-          {/* White, not green. Green is this app's "good / up" colour — it means
-              a gain in the mission list, a paid order, an incoming ledger row.
-              On a bare balance it is a direction claim over data the app keeps
-              no baseline for: there is no yesterday's balance to be up against.
-              A balance is neither good nor bad, it is just what you have. */}
-          <div className="font-mono text-[22px] font-bold text-white">${usd(walletState.balance)}</div>
-          <div className="font-mono text-[9px] text-slate-600 mt-0.5">
-            {net.short}
-            {walletState.inYield > 0 ? ` · incl. $${usd(walletState.inYield)} supplied` : ""}
-            {ethBal != null && ethBal > 0 ? ` · ${ethBal.toFixed(4)} ETH held separately` : ""}
-          </div>
-          {/* A 30-day Morpho APY sparkline used to close this card. It was
-              MARKET data drawn inside the user's balance widget — never their
-              balance history, which this app does not keep — and it survived an
-              earlier fix that only recoloured and relabelled it. The honest
-              version of a chart you cannot draw is no chart. */}
-        </div>
+        {/* 2 + 3. The USDC widget and the SUPPLIED card were here.
+            ─────────────────────────────────────────────────────────────────
+            Both rendered numbers the Section-1 balance card renders again, on
+            the same screen at the same moment: `walletState.balance` at 22px
+            here and 28px there, `walletState.inYield` in this caption, in the
+            SUPPLIED card, AND as the aUSDC/Morpho rows there. One derivation,
+            four renderings, two of which were inside this aside.
 
-        {/* 3. Supplied position — only for a wallet that HAS one. It used to
-            render at $0.00 with a "Deploy →" button underneath, which made an
-            empty widget the loudest pitch on the page for the one feature this
-            phase withdraws. Nothing supplied, nothing to say.
+            KEPT: the balance card (Section 1). Three reasons, in order of
+            weight —
+              1. It is the only copy with the BREAKDOWN. The itemised USDC /
+                 aUSDC / Morpho / ETH rows and the low-gas warning live there
+                 because a previous release deliberately merged them in when it
+                 deleted the Section-2 WALLET card (see the note above Section
+                 2). Keeping this widget instead would re-open that.
+              2. This aside is `hidden md:flex` — it does not exist below `md`,
+                 so it can never be the canonical answer for a phone. The card
+                 renders at every breakpoint.
+              3. The card sits beside ACTIONS, so the number and the buttons
+                 that change it are adjacent.
 
-            Headed "EARNING" over a "best X% APY" caption, where X was the top
-            pool on DefiLlama rather than the pool the money is in. The heading
-            is now what we can actually read from chain — a balance — and the
-            only control on it is the way out. */}
-        {walletState.inYield > 0 && (
-          <div className="mx-3 mb-3 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3">
-            <div className="font-mono text-[9px] text-slate-500 tracking-wide mb-1">SUPPLIED</div>
-            <div className="font-mono text-[18px] font-bold text-[#4FC3F7]">${usd(walletState.inYield)}</div>
-            <div className="font-mono text-[9px] text-slate-600 mt-0.5">
-              Aave · Morpho on Base
-            </div>
-            <button onClick={() => openAction("withdraw")}
-              className="w-full font-mono text-[10px] font-bold mt-2 py-1.5 rounded-lg"
-              style={{ background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
-              ↩︎ Withdraw
-            </button>
-          </div>
-        )}
+            DELETED: these two. The reason is written here rather than only in
+            the commit because the Section-2 delete recorded its reasoning and
+            still left this copy standing — the survivor bred. Anyone tempted
+            to put a balance back in the sidebar has to delete this paragraph
+            first.
 
-        {/* 4. BlueAgent mini chat */}
-        <div className="mx-3 mb-3">
+            The Withdraw exit is NOT lost with the SUPPLIED card — it was a
+            shortcut, not the path. Verified before deleting: `TABS` still
+            carries the Withdraw tab whenever `noPositions` is false, the
+            Positions panel's PositionRow rows both `setPanel("withdraw")`, and
+            the `inYield > 0` mission keeps a one-click "Withdraw" that is
+            always inside `topMissions` (its branch pushes at most three). */}
+
+        {/* 4. BlueAgent mini chat — `mt-3` because the deleted widget above
+            carried the top margin for everything under the header. */}
+        <div className="mx-3 mt-3 mb-3">
           <div className="font-mono text-[9px] text-slate-600 mb-1.5">ASK BLUEAGENT</div>
           <div className="flex gap-1.5">
             <input
@@ -901,27 +936,28 @@ export default function BankPage() {
               <p className="font-mono text-[13px] text-white">
                 Good {greeting}, <span className="text-[#4FC3F7]">{displayName}</span>
               </p>
-              <p className="font-mono text-[9px] text-slate-600 truncate">{net.short} · Non-custodial · You hold the keys</p>
+              {/* The same `trustChips`, and `sm:hidden` against the row's
+                  `hidden sm:flex` — complementary, so exactly one of the two is
+                  ever on screen. It used to be the literal string
+                  "{net.short} · Non-custodial · You hold the keys", which put
+                  BOTH of those claims twice inside one 56px bar at `sm` and up.
+                  Worse, this copy was always plain grey while the chip beside it
+                  turns amber on testnet: the header said "Sepolia" calmly and
+                  "Sepolia" alarmingly, 200px apart, and the calm one was wrong.
+                  It carries the warn colour now, because below `sm` it is the
+                  only carrier.
+
+                  "You hold the keys" went with it. It is not a fourth claim —
+                  it is "Non-custodial" restated in plain English, and a synonym
+                  is still a copy. */}
+              <p className="font-mono text-[9px] truncate sm:hidden"
+                style={{ color: trustChips.some(c => c.warn) ? "#F59E0B" : "#475569" }}>
+                {trustChips.map(c => c.label).join(" · ")}
+              </p>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-            {/* Every chip here reads live state.
-                - The network chip was the literal "Base" while the app
-                  defaulted to Sepolia — the single most misleading pixel on the
-                  page, because it sat directly above the receive QR.
-                - "Passkey" was hardcoded in this row TOO (a fourth copy of the
-                  same defect, alongside the two on the health card), so it
-                  showed for MetaMask users who have no passkey. It is now the
-                  name of the connector actually connected, and the passkey chip
-                  appears only when the derivation can affirm one.
-                - "Non-custodial" stays constant legitimately: it describes THIS
-                  APP, which holds no key and no fund, not the wallet. */}
-            {[
-              { label: "Non-custodial",            warn: false },
-              { label: net.short,                  warn: isTestnet },
-              { label: identity.connectionLabel,   warn: false },
-              ...(identity.passkey === "yes" ? [{ label: "Passkey", warn: false }] : []),
-            ].map(c => (
+            {trustChips.map(c => (
               <span key={c.label} className="font-mono text-[9px] px-2 py-1 rounded-md"
                 style={c.warn
                   ? { color: "#F59E0B", border: "1px solid #F59E0B40", background: "#F59E0B10" }
@@ -1105,7 +1141,12 @@ export default function BankPage() {
                   Basename chip from the ENS/Basename lookup. The two that used
                   to be `active={true}` — "Smart Wallet" and "Passkey" — were
                   true only for Coinbase Smart Wallet users and were shown to
-                  everyone, so a MetaMask EOA was told it had a passkey. */}
+                  everyone, so a MetaMask EOA was told it had a passkey.
+
+                  This is now the ONLY place the account triple is rendered —
+                  the header carried `connectionLabel` and the passkey too, and
+                  it kept the two that are about the account while dropping the
+                  one (`accountLabel`) that completes them. See `trustChips`. */}
               <div className="flex flex-wrap gap-1.5 mb-3">
                 <IdentityChip label={identity.connectionLabel} active={identity.family !== "unknown"} color="#4FC3F7" />
                 <IdentityChip label={identity.accountLabel} active={identity.accountKind === "smart"} color="#4FC3F7" />
@@ -1114,13 +1155,31 @@ export default function BankPage() {
                     of five, carrying no meaning the other four don't. The
                     palette is one primary plus three semantic colours (green
                     good / amber warn / red danger); a fifth hue used once is
-                    decoration pretending to be a category. */}
-                <IdentityChip label={name ?? fname ?? "No Basename"} active={!!(name ?? fname)} color="#4FC3F7" />
-                {/* The one honest constant here: non-custodial is a property of
-                    THIS APP (it never holds a key or a fund), not of whichever
-                    wallet connected — so unlike the chips above it cannot drift
-                    away from a per-user truth it was never reading. */}
-                <IdentityChip label="Non-custodial" active={true} color="#34D399" />
+                    decoration pretending to be a category.
+
+                    KEPT despite the greeting above already printing a Basename
+                    when there is one, because it is not the same claim: the
+                    greeting answers "what do we call you" and this answers "does
+                    this account have a Basename", which is a checklist item next
+                    to Smart Wallet and Passkey and is the only one that renders
+                    a NEGATIVE ("No Basename") the greeting can never say.
+
+                    `?? fname` is gone though, and that is the price of keeping
+                    it. A Farcaster username is not a Basename. With `fname`
+                    accepted, someone with `@shun` on Farcaster and no Basename
+                    saw a lit chip reading `@shun` in the slot whose unlit text
+                    is "No Basename" — the chip asserting a Basename that does
+                    not exist. Exactly the defect the passkey chip had two
+                    paragraphs up. They still get greeted by name: `displayName`
+                    splices `fname` in at the `source === "address"` rung. */}
+                <IdentityChip label={name ?? "No Basename"} active={!!name} color="#4FC3F7" />
+                {/* "Non-custodial" was a sixth chip here. It is a CONSTANT in a
+                    row of five per-user derivations — its own note used to say
+                    so ("unlike the chips above it cannot drift away from a
+                    per-user truth it was never reading"), which is the argument
+                    for moving it, not for keeping it here. It now appears once,
+                    in the header trust strip, where it sits beside the address
+                    and answers the question a stranger asks first. */}
               </div>
               {/* Share is hidden, not disabled, while there is no score.
                   Sharing a fabricated grade propagates the fabrication OUTSIDE
