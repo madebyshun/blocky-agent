@@ -22,6 +22,7 @@
 import { useEffect, useState } from "react";
 import type { RhHoldingsResult } from "@/lib/wallet/rh-holdings";
 import { TRUST_BADGE } from "@/lib/wallet/token-trust";
+import { resolveRead } from "@/lib/wallet/read-state";
 
 const fmtUsd = (n?: number | null) =>
   n == null
@@ -38,7 +39,12 @@ function fmtAmount(s: string): string {
 }
 
 export default function RhTokenTable({ address }: { address?: `0x${string}` }) {
-  const [data, setData] = useState<RhHoldingsResult | null>(null);
+  // `null` = the request has not resolved. `"threw"` = it resolved with nothing
+  // at all. Two distinct facts that both used to be stored as `null`, which
+  // made "we never asked" and "we asked and got nothing back" the same value —
+  // and left the spinner as the only thing a thrown fetch could render once
+  // completeness was derived from whether a response had arrived.
+  const [data, setData] = useState<RhHoldingsResult | "threw" | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -49,18 +55,43 @@ export default function RhTokenTable({ address }: { address?: `0x${string}` }) {
       .then(r => r.json())
       .then((d: RhHoldingsResult) => { if (!off) setData(d); })
       // A failed fetch is "we could not check", never an empty portfolio.
-      .catch(() => { if (!off) setData(null); })
+      .catch(() => { if (!off) setData("threw"); })
       .finally(() => { if (!off) setLoading(false); });
     return () => { off = true; };
   }, [address]);
 
   if (!address) return null;
 
-  const holdings = data?.holdings ?? [];
+  const resp = data === "threw" ? null : data;
+  const holdings = resp?.holdings ?? [];
   const nFlagged = holdings.filter(h => h.trust === "impostor").length;
-  // `data === null` covers a thrown fetch; the route itself always answers with
-  // a status, so both paths land on the same honest banner.
-  const unavailable = !loading && (data === null || data.status !== "ok");
+
+  // ── How complete is this list? ──────────────────────────────────────────────
+  //
+  // Shared with the Base table and the stock table — see lib/wallet/read-state.ts
+  // for why the derivation is not written here, and scripts/read-state-test.ts
+  // for the guard that keeps it out.
+  //
+  // This file was the one that inspired the module's honesty and still got the
+  // narrower question wrong: it had TWO states, so it treated its own payload's
+  // two partial signals as decoration. Both are wired in now:
+  //
+  //   nativeUnread  Blockscout answered for the ERC-20 list but not for native
+  //                 ETH. WITH ROWS that was a footnote and fine. With ZERO rows
+  //                 the screen said "No tokens on Robinhood Chain" over a read
+  //                 that had not looked at ETH — the same defect this table's
+  //                 banner exists to prevent, one field over.
+  //   truncated     The paging walk hit RH_MAX_TOKEN_PAGES. The list is short by
+  //                 an unknown amount, and the header was rendering `totalUsd`
+  //                 as a flat figure directly above a note admitting the list is
+  //                 incomplete. It is a floor; it now renders as one.
+  const read = resolveRead({
+    loading,
+    received: data !== null,
+    failed:   resp === null || resp.status !== "ok",
+    partial:  !!resp && resp.status === "ok" && (resp.nativeUnread || resp.truncated),
+    rowCount: holdings.length,
+  });
 
   return (
     <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 mb-3">
@@ -72,14 +103,20 @@ export default function RhTokenTable({ address }: { address?: `0x${string}` }) {
             style={{ border: "1px solid #4FC3F730", background: "#4FC3F710" }}>Robinhood Chain</span>
           <span className="font-mono text-[8px] text-slate-600">4663</span>
         </div>
-        {holdings.length > 0 && data?.status === "ok" && (
-          <span className="font-mono text-[10px] text-slate-400 tabular-nums">{fmtUsd(data.totalUsd)}</span>
+        {read.body === "rows" && resp?.status === "ok" && (
+          // "≥" when the list is short — a total computed from a truncated walk
+          // is a lower bound, and printing it bare put a confident figure
+          // directly above the note saying the list is incomplete.
+          <span className="font-mono text-[10px] text-slate-400 tabular-nums"
+            title={read.totalIsFloor ? "Partial read — at least this much; the full token list was not available" : undefined}>
+            {read.totalIsFloor ? "≥ " : ""}{fmtUsd(resp.totalUsd)}
+          </span>
         )}
       </div>
 
-      {loading ? (
+      {read.body === "pending" ? (
         <div className="py-6 text-center font-mono text-[10px] text-slate-600">reading Robinhood Chain…</div>
-      ) : unavailable ? (
+      ) : read.body === "failed" ? (
         // The one state this table exists to be able to say. An RH holder seeing
         // an empty list would conclude their tokens are gone.
         <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
@@ -87,7 +124,18 @@ export default function RhTokenTable({ address }: { address?: `0x${string}` }) {
           Robinhood Chain explorer did not answer. Your holdings there are unknown — this is
           not an empty portfolio.
         </div>
-      ) : holdings.length === 0 ? (
+      ) : read.body === "partial" ? (
+        // NEW state. Only reachable via `nativeUnread` with no ERC-20 rows —
+        // `truncated` implies rows by construction. Previously this rendered as
+        // "No tokens on Robinhood Chain" with an amber footnote underneath
+        // contradicting it; now the read says what it did and did not cover,
+        // once.
+        <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+          style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
+          No ERC-20 tokens found, but the native ETH balance could not be read. This is a
+          partial answer, not an empty portfolio.
+        </div>
+      ) : read.body === "empty" ? (
         <div className="py-6 text-center font-mono text-[10px] text-slate-600">No tokens on Robinhood Chain</div>
       ) : (
         <>
@@ -135,8 +183,14 @@ export default function RhTokenTable({ address }: { address?: `0x${string}` }) {
         </>
       )}
 
-      {/* Notes — each one says a thing the rows above cannot. */}
-      {data?.status === "ok" && data.nativeUnread && (
+      {/* Notes — each one says a thing the rows above cannot.
+
+          The two completeness notes are gated on `read.footnote`, which is
+          "there are rows AND the read was incomplete". Without it they would
+          print underneath the partial BANNER as well, saying the same thing
+          twice on one screen — the caveat has two shapes and exactly one of
+          them is live at a time. */}
+      {read.footnote && resp?.status === "ok" && resp.nativeUnread && (
         <div className="mt-2 font-mono text-[9px] text-amber-500/80">
           Native ETH balance could not be read — this list is short by up to one row.
         </div>
@@ -145,10 +199,10 @@ export default function RhTokenTable({ address }: { address?: `0x${string}` }) {
           and the walk stopped at the cap. Says "the list is short" and NOT "the
           total is wrong", because those are different claims and only the first
           one is true — see RH_MAX_TOKEN_PAGES for the measurement. */}
-      {data?.status === "ok" && data.truncated && (
+      {read.footnote && resp?.status === "ok" && resp.truncated && (
         <div className="mt-2 font-mono text-[9px] text-slate-600 leading-relaxed">
           This address holds more tokens than shown. These are the highest-valued ones —{" "}
-          <a href={`${data.explorer}/address/${address}?tab=tokens`}
+          <a href={`${resp.explorer}/address/${address}?tab=tokens`}
             target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-400">
             full list on Blockscout ↗
           </a>
@@ -160,9 +214,14 @@ export default function RhTokenTable({ address }: { address?: `0x${string}` }) {
           Robinhood-issued token at a different contract address. Not counted in the total.
         </div>
       )}
-      {data?.status === "ok" && data.equitiesHidden > 0 && (
+      {/* NOT gated on `footnote`: this is not a completeness caveat. Rows were
+          deliberately withheld because StockTable renders them, and that is
+          worth saying most of all when the list above is empty — otherwise a
+          holder of nothing but tokenized equities reads "No tokens on Robinhood
+          Chain" with no explanation of where they went. */}
+      {resp?.status === "ok" && resp.equitiesHidden > 0 && (
         <div className="mt-2 font-mono text-[9px] text-slate-600 leading-relaxed">
-          {data.equitiesHidden} tokenized {data.equitiesHidden > 1 ? "equities are" : "equity is"} held
+          {resp.equitiesHidden} tokenized {resp.equitiesHidden > 1 ? "equities are" : "equity is"} held
           here too — shown in Stocks below, not counted twice.
         </div>
       )}
