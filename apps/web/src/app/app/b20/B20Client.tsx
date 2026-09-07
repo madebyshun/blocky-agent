@@ -1309,22 +1309,52 @@ export default function B20Client({ initialAddress = "", initialNetwork = "mainn
   // Connected wallet — fed to the scanner so it can run the per-wallet admin check.
   const { address: scanWallet } = useAccount();
 
-  // Beryl badge (client-only to avoid hydration mismatch)
-  const [berylLabel, setBerylLabel] = useState<{ active: boolean; text: string } | null>(null);
+  // B20 status badge — reads the ActivationRegistry, does NOT consult a clock.
+  //
+  // This used to derive its text from `Date.now() >= new Date("2026-06-25T18:00Z")`
+  // and hardcode "Active on Sepolia". Both were assertions the browser cannot
+  // make. What actually gates a deploy is `isActivated(featureId)` on the
+  // registry at 0x8453…0001, which the Launch panel two hundred lines below has
+  // been reading all along to enable its Deploy button — so the page already
+  // held the true answer and the badge printed a different one derived from a
+  // constant.
+  //
+  // It happened to agree on mainnet today (measured: both flags true), and that
+  // is exactly the problem — correct by coincidence. The registry can flip in
+  // either direction without a deploy of ours, and per activation.ts the flip
+  // can land ~1h AFTER the hardfork, so the timestamp was never the same event
+  // it claimed to report. On Sepolia the old code never checked at all.
+  //
+  // Three states now, and "unknown" is a real one: a failed RPC read must not
+  // render as either "live" or "not live". Same rule as the Launch gate, which
+  // treats ok:false as unknown and declines to block.
+  const [b20Status, setB20Status] = useState<{ tone: "live" | "off" | "unknown"; text: string } | null>(null);
   useEffect(() => {
-    const BERYL_TS = new Date("2026-06-25T18:00:00Z").getTime();
-    const now = Date.now();
-    if (network === "sepolia") {
-      setBerylLabel({ active: true, text: "Active on Sepolia" });
-    } else if (now >= BERYL_TS) {
-      setBerylLabel({ active: true, text: "Beryl live on Mainnet" });
-    } else {
-      const diff  = BERYL_TS - now;
-      const hours = Math.floor(diff / 3_600_000);
-      const mins  = Math.floor((diff % 3_600_000) / 60_000);
-      setBerylLabel({ active: false, text: `Mainnet in ${hours}h ${mins}m` });
-    }
+    let cancelled = false;
+    setB20Status(null);
+    const where = network === "sepolia" ? "Base Sepolia" : "Base";
+    runB20Activation(network)
+      .then(a => {
+        if (cancelled) return;
+        if (!a.ok) {
+          setB20Status({ tone: "unknown", text: `B20 status unknown on ${where}` });
+        } else if (a.asset && a.stablecoin) {
+          setB20Status({ tone: "live", text: `B20 live on ${where}` });
+        } else if (a.asset || a.stablecoin) {
+          // Partial activation is information a clock could never produce: one
+          // variant deploys, the other reverts. Name the one that works.
+          setB20Status({ tone: "live", text: `B20 live on ${where} — ${a.asset ? "asset" : "stablecoin"} only` });
+        } else {
+          setB20Status({ tone: "off", text: `B20 not activated on ${where}` });
+        }
+      })
+      .catch(() => { if (!cancelled) setB20Status({ tone: "unknown", text: `B20 status unknown on ${where}` }); });
+    return () => { cancelled = true; };
   }, [network]);
+
+  // Amber reads as "pending"; slate reads as "we did not get an answer". The
+  // distinction is the whole point of the unknown state, so it gets its own.
+  const B20_TONE = { live: "#22C55E", off: "#F59E0B", unknown: "#64748B" } as const;
 
   // Register mobile contextual nav
   useEffect(() => {
@@ -1712,15 +1742,14 @@ export default function B20Client({ initialAddress = "", initialNetwork = "mainn
         </nav>
 
         {/* Beryl status */}
-        {berylLabel && (
+        {b20Status && (
           <div className="px-5 py-2 border-t border-[#1A1A2E] shrink-0">
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full shrink-0"
-                style={{ background: berylLabel.active ? "#22C55E" : "#F59E0B",
-                         boxShadow:  berylLabel.active ? "0 0 4px #22C55E80" : "0 0 4px #F59E0B80" }} />
-              <span className="font-mono text-[9px]"
-                style={{ color: berylLabel.active ? "#22C55E" : "#F59E0B" }}>
-                {berylLabel.text}
+                style={{ background: B20_TONE[b20Status.tone],
+                         boxShadow:  `0 0 4px ${B20_TONE[b20Status.tone]}80` }} />
+              <span className="font-mono text-[9px]" style={{ color: B20_TONE[b20Status.tone] }}>
+                {b20Status.text}
               </span>
             </div>
           </div>
@@ -1864,15 +1893,14 @@ export default function B20Client({ initialAddress = "", initialNetwork = "mainn
               </>
             )}
 
-            {/* Beryl badge on right */}
-            {berylLabel && (
+            {/* B20 activation badge on right — same registry read as the sidebar */}
+            {b20Status && (
               <div className="ml-auto flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{ background: berylLabel.active ? "#22C55E" : "#F59E0B",
-                           boxShadow:  berylLabel.active ? "0 0 4px #22C55E80" : "0 0 4px #F59E0B80" }} />
-                <span className="font-mono text-[9px]"
-                  style={{ color: berylLabel.active ? "#22C55E" : "#F59E0B" }}>
-                  {berylLabel.text}
+                  style={{ background: B20_TONE[b20Status.tone],
+                           boxShadow:  `0 0 4px ${B20_TONE[b20Status.tone]}80` }} />
+                <span className="font-mono text-[9px]" style={{ color: B20_TONE[b20Status.tone] }}>
+                  {b20Status.text}
                 </span>
               </div>
             )}
