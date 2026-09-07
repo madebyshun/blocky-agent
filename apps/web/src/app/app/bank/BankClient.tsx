@@ -45,6 +45,11 @@ import RhTokenTable from "./RhTokenTable";
 import StockTable from "./StockTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
 import { useWalletIdentity } from "@/lib/wallet/identity";
+// WHO is signed in, as opposed to WHAT wallet is attached — see the note at the
+// `who` derivation below for why this page needs both and why they are not the
+// same import.
+import { resolveIdentity } from "@/lib/identity/account-identity";
+import { usePrivyIdentity } from "@/lib/privy/identity-bridge";
 import { buildWalletState } from "@/lib/state";
 
 const usd = (n: number | null | undefined) =>
@@ -99,6 +104,46 @@ export default function BankPage() {
       .catch(() => null);
   }, [acct, name]);
   const disconnect = useWalletDisconnect();
+
+  // ── Who is this? ───────────────────────────────────────────────────────────
+  //
+  // TWO different things on this page are called "identity" and they answer
+  // different questions. `identity` (further down, `useWalletIdentity`) is about
+  // the WALLET — connector family, smart account, passkey. `who` is about the
+  // PERSON. Keeping the names apart is the point; conflating them is how a
+  // greeting ends up addressing someone by their connector.
+  //
+  // The ladder is `resolveIdentity`, imported unchanged from
+  // lib/identity/account-identity.ts and shared with the account menu in the app
+  // shell and with /signup. That is the fix: this page had its own local ladder
+  // (`name ?? fname ?? shortAddr`) with NO social rung at all, so a user who
+  // signed in with Google — and who is greeted by name in the menu directly
+  // above this header — was greeted here as `0x2266…608E`, an identifier they
+  // have never seen and did not choose. One ladder means the two places agree by
+  // construction rather than by two copies happening to be edited together.
+  //
+  // `usePrivyIdentity()` is a plain `useContext` and returns `null` on the
+  // Privy-off tree, so this is safe to call unconditionally on both trees.
+  const privy = usePrivyIdentity();
+  const who = resolveIdentity({
+    social: privy?.social ?? null,
+    basename: name ?? null,
+    address: acct ?? null,
+    shortAddress: acct ? shortAddr(acct) : null,
+  });
+  // `fname` is spliced in HERE rather than passed to `resolveIdentity` as the
+  // basename. It is a Farcaster username resolved from the address via Pinata
+  // (the effect above) — a real name, but `resolveIdentity` stamps a `source` on
+  // what it returns, and handing it a Farcaster name through the `basename` slot
+  // would label its provenance as a Basename. It keeps the rank the old local
+  // ladder gave it: below a Basename, above a bare address. `source ===
+  // "address"` is precisely "the ladder found nothing better than 0x…", which is
+  // the only case fname improves on.
+  // Total (`string`, never null) so no consumer has to re-guess a fallback —
+  // that re-guessing is how four different ladders got here in the first place.
+  // The trailing `shortAddr` is `resolveIdentity`'s own last rung repeated for
+  // the nothing-connected case, and matches what the old local ladder ended on.
+  const displayName = (who.source === "address" ? (fname ?? who.displayName) : who.displayName) ?? shortAddr(acct);
 
   // ── Network ──────────────────────────────────────────────────────────────
   // Base MAINNET is the default and must stay that way. This used to default to
@@ -398,7 +443,11 @@ export default function BankPage() {
           // entrance closed there is no rate to state at all, and the old
           // "Focus on Base DeFi" steer pointed answers at a product this page
           // no longer sells.
-          system: `You are BlueAgent Wallet assistant. User: ${name ?? shortAddr(acct)}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · Supplied, withdraw-only: $${usd(inYield)}. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Help with balances, sending and receiving on Base, and withdrawing supplied funds. Do not recommend yield strategies or quote APYs — this wallet no longer offers them.`,
+          // Same `displayName` the header greets with — this was a FOURTH copy of
+          // the ladder and the most degraded of them (it omitted even `fname`),
+          // so the assistant addressed by hex a user the page had just greeted by
+          // name. One derivation, every consumer.
+          system: `You are BlueAgent Wallet assistant. User: ${displayName}. Balance: $${usd(total)} · USDC: $${usd(walletUsdc)} · Supplied, withdraw-only: $${usd(inYield)}. ETH: ${ethBal?.toFixed(4) ?? "—"}. Answer concisely in 2-3 sentences. Help with balances, sending and receiving on Base, and withdrawing supplied funds. Do not recommend yield strategies or quote APYs — this wallet no longer offers them.`,
           model: "fast",
         }),
       });
@@ -806,7 +855,15 @@ export default function BankPage() {
               never claim a leg the page is not reading. On testnet both are
               absent (no B20 or RWA testnet twin), so this is too. */}
           {!isTestnet && (
-            <a href={`${WALLET_CHAINS.robinhood.explorer}/address/${acct}`}
+            // `?tab=tokens`, not the bare address page. The subtitle under this
+            // row promises "tokens · tokenized stocks", and Blockscout's default
+            // address view is the TRANSACTION list — so the link answered a
+            // question it had not been asked, and an RH holder following it saw
+            // transfers where they were told they would see holdings.
+            // Same URL RhTokenTable.tsx:151 already builds for its "full list on
+            // Blockscout" escape hatch; this row was the one place that dropped
+            // the tab and landed somewhere else.
+            <a href={`${WALLET_CHAINS.robinhood.explorer}/address/${acct}?tab=tokens`}
               target="_blank" rel="noopener noreferrer"
               className="block mt-1.5 font-mono text-[10px] py-1.5 px-2 rounded-md border border-[#1A1A2E] hover:border-[#4FC3F730] transition-colors">
               <div className="flex items-center gap-1.5 text-slate-400">
@@ -822,7 +879,7 @@ export default function BankPage() {
 
         {/* 8. Account chip */}
         <div className="px-4 py-3 border-t border-[#1A1A2E]">
-          <div className="font-mono text-[11px] text-slate-300 truncate">{name ?? fname ?? shortAddr(acct)}</div>
+          <div className="font-mono text-[11px] text-slate-300 truncate">{displayName}</div>
           <div className="flex items-center gap-2 mt-0.5">
             <a href={`${net.explorer}/address/${acct}`} target="_blank" rel="noopener noreferrer"
               className="font-mono text-[9px] text-slate-600 hover:text-[#4FC3F7]">{net.explorerName} ↗</a>
@@ -842,7 +899,7 @@ export default function BankPage() {
             <Identicon address={acct} />
             <div className="min-w-0">
               <p className="font-mono text-[13px] text-white">
-                Good {greeting}, <span className="text-[#4FC3F7]">{name ?? fname ?? shortAddr(acct)}</span>
+                Good {greeting}, <span className="text-[#4FC3F7]">{displayName}</span>
               </p>
               <p className="font-mono text-[9px] text-slate-600 truncate">{net.short} · Non-custodial · You hold the keys</p>
             </div>
