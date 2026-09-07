@@ -13,8 +13,9 @@ import {
 } from "wagmi";
 import { isAddress } from "viem";
 import { ConnectButton } from "@/components/ConnectModal";
-import { TokenGlyph, AddrGlyph, ConfirmPreview, resolveQuantity, UnverifiedBalance } from "./ConfirmCardParts";
-import { useSpendableBalance } from "./useSpendableBalance";
+import { TokenGlyph, AddrGlyph, ConfirmPreview, resolveQuantity } from "./ConfirmCardParts";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
+import { useSpendableBalance } from "@/lib/wallet/useSpendableBalance";
 import { resolveSpend } from "@/lib/wallet/read-state";
 
 const RH_CHAIN_ID = 4663;

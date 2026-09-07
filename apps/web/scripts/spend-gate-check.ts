@@ -33,17 +33,37 @@
  * be obsolete the day a fourth card lands, and its author would never know.
  * So nothing here is hand-listed:
  *
- *   THE FILE SET IS DERIVED. A "spender" is any chat component that both reads
- *   a balance and signs a transaction — `useSendTransaction`/`useWriteContract`
- *   together with a balance read. That is the SHAPE of the bug, not a name, so
- *   a fourth card cannot dodge the guard by being called something else.
+ *   THE FILE SET IS DERIVED, over ALL of `src/`. A "spender" is any file that
+ *   both reads a balance and signs a transaction — `useSendTransaction`/
+ *   `useWriteContract` together with a balance read. That is the SHAPE of the
+ *   bug, not a name, so a fourth card cannot dodge the guard by being called
+ *   something else.
+ *
+ *   The first version of this file scanned `src/app/chat/components` only. That
+ *   directory bound was itself a hand-drawn boundary, and it was WRONG the day
+ *   it shipped: widening to `src/` immediately turned up four more spenders
+ *   carrying the same defect — the bank Convert card, both swap panels on
+ *   /launches, and the Blue Hood sign panel, none of them chat cards. A guard
+ *   that derives its predicate but hand-picks its haystack has only moved the
+ *   hand-counting somewhere less visible.
  *
  *   THE DECIMALS ASSERTION IS DERIVED. It does not count occurrences of `18`
  *   and compare to a number someone tallied by hand — a tally goes stale on the
- *   first edit and its staleness looks like a pass. It asserts the digit does
- *   not survive `code()` AT ALL. `18` is not a magic constant a money card is
- *   entitled to; every scale must come from `decimals()` on the token, from
- *   `useBalance`'s own response, or from the chain's `nativeCurrency`.
+ *   first edit and its staleness looks like a pass. It asserts that the SCALE
+ *   ARGUMENT of a units conversion contains no numeric literal at all, wherever
+ *   that conversion appears. Every scale must come from `decimals()` on the
+ *   token, from `useBalance`'s own response, or from the chain's
+ *   `nativeCurrency`.
+ *
+ *   That is narrower than the blanket "no bare 18 anywhere" this file used to
+ *   assert, and the narrowing is not a retreat — the blanket version was simply
+ *   FALSE outside the three RH cards. `ToolCards.tsx` legitimately contains
+ *   thirteen: a token-DEPLOY form whose `min={6} max={18}` and `variant ===
+ *   "stablecoin" ? 6 : 18` are choosing the scale of a token that does not
+ *   exist yet. Choosing a new token's decimals is not assuming an existing
+ *   one's, and a guard that cannot tell those apart gets switched off. What is
+ *   forbidden is a scale used to CONVERT — that is the operation the USDG bug
+ *   was made of.
  *
  * ─── On the exclusion list ───────────────────────────────────────────────────
  *
@@ -58,11 +78,11 @@
  * Hermetic: reads source off disk, no network, no KV. Auto-discovered by
  * `npm test` via the `-check.ts` suffix.
  */
-import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 
 const ROOT = process.cwd();
-const DIR = "src/app/chat/components";
+const SRC = join(ROOT, "src");
 
 let pass = 0;
 const failures: string[] = [];
@@ -205,20 +225,26 @@ const READS_BALANCE = /useBalance\b|balanceOf|useSpendableBalance\b/;
  * Known spenders that still carry the bug, each with the task that closes it.
  * The guard asserts each of these still FAILS, so the entry cannot outlive the
  * defect it documents.
+ *
+ * Currently EMPTY, and that is the intended resting state — an exclusion is a
+ * debt, not a configuration slot. Keys are paths relative to `src/`, because
+ * once the walk is repo-wide a bare basename is ambiguous.
  */
-const EXCLUDED: Record<string, string> = {
-  "ToolCards.tsx":
-    "task #216 — the Base SendCard (~line 2337) has the same fail-open guard " +
-    "plus a MAX button that silently no-ops on a failed read. Not a copy-paste " +
-    "of the RH fix: it has an editable amount, so the MAX path needs its own " +
-    "honest behaviour on `unverified`.",
-};
+const EXCLUDED: Record<string, string> = {};
 
-const componentDir = join(ROOT, DIR);
+/** Every .ts/.tsx under `src/`, keyed by its path relative to `src/`. */
+function walk(dir: string, out: string[] = []): string[] {
+  for (const e of readdirSync(dir)) {
+    const p = join(dir, e);
+    if (statSync(p).isDirectory()) walk(p, out);
+    else if (/\.tsx?$/.test(e)) out.push(p);
+  }
+  return out;
+}
+
 const sources = new Map<string, View>();
-for (const f of readdirSync(componentDir)) {
-  if (!/\.tsx?$/.test(f)) continue;
-  sources.set(f, view(readFileSync(join(componentDir, f), "utf8")));
+for (const p of walk(SRC)) {
+  sources.set(relative(SRC, p).split(sep).join("/"), view(readFileSync(p, "utf8")));
 }
 
 const allSpenders = [...sources.entries()]
@@ -228,45 +254,158 @@ const allSpenders = [...sources.entries()]
 
 const spenders = allSpenders.filter((f) => !(f in EXCLUDED));
 
+// ── two derived predicates, written as parsers ──────────────────────────────
+
+/**
+ * Units conversions whose SCALE argument contains a numeric literal.
+ *
+ * Balances parens rather than pattern-matching them, because the real code
+ * nests: `parseUnits(minOut.toFixed(dec), dec)` has a call inside its first
+ * argument and a regex for "second arg" reads the inner `)` as the end of the
+ * outer call. Returns the offending snippets so a failure names the line
+ * instead of just asserting one exists.
+ *
+ * Bracket indices are stripped first: `rows[0].decimals` is a member access,
+ * not a written-down scale, and its `0` would otherwise read as one.
+ */
+function literalScaleConversions(src: string): string[] {
+  const out: string[] = [];
+  const re = /\b(?:format|parse)Units\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0, lastComma = -1, i = open;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(") depth++;
+      else if (c === ")") { depth--; if (depth === 0) break; }
+      else if (c === "," && depth === 1) lastComma = i;
+    }
+    if (depth !== 0 || lastComma < 0) continue; // unbalanced, or a single argument
+    const scale = src.slice(lastComma + 1, i).replace(/\[\s*\d+\s*\]/g, "").trim();
+    // A legitimate scale is an identifier or a member access and carries no
+    // digits at all. This catches the bare `18`, and also `isStable ? 6 : 18`,
+    // which a "second arg is exactly \d+" test would wave through.
+    if (/(?:^|[^.\w])\d+(?![\w.])/.test(scale)) {
+      out.push(`${m[0].trim()}…, ${scale})`);
+    }
+  }
+  return out;
+}
+
+/**
+ * `useBalance` calls that threw away the difference between "still reading" and
+ * "could not read".
+ *
+ * Only `useBalance` — NOT `useReadContract`. `useBalance` is unambiguously a
+ * read of a wallet's balance, so discarding its failure is always the defect.
+ * `useReadContract` is not: in `ToolCards.tsx` it reads an Aave position, a
+ * vault's share count, and a lending pool's APY, and that last one binds `{ data }`
+ * ON PURPOSE with the reason written beside it — it gates nothing, so a failed
+ * read honestly degrades to "—". A rule that forced an error signal onto every
+ * read would be demanding ceremony there, and a guard that demands ceremony is
+ * a guard someone eventually switches off.
+ *
+ * `isLoading` does NOT count as a failure signal. It is `isPending && isFetching`,
+ * so it goes false the instant a query errors — binding it is how a caller ends
+ * up treating a failed read as a finished one, which is the bug, not the fix.
+ */
+const FAILURE_SIGNAL = /\bis(?:Error|Pending|Success)\b|\berror\b|\bstatus\b/;
+
+function discardingBalanceReads(src: string): string[] {
+  const out: string[] = [];
+  const re = /(?:const|let)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*useBalance\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const binding = m[1];
+    if (binding.startsWith("{")) {
+      // Destructured: the signals it kept are right there in the pattern.
+      if (!FAILURE_SIGNAL.test(binding)) out.push(`useBalance destructured as ${binding.replace(/\s+/g, " ")}`);
+    } else if (!new RegExp(`\\b${binding}\\.(?:isError|isPending|isSuccess|status)\\b`).test(src)) {
+      // Bound whole, which keeps the signals reachable — but reachable is not
+      // read. Require the file to actually consult one.
+      out.push(`\`${binding}\` is bound whole but nothing reads its .isError/.isPending/.status`);
+    }
+  }
+  return out;
+}
+
 // ── the per-spender checks ──────────────────────────────────────────────────
 
-/** Every requirement a spending card must meet, as (label, predicate). */
-const REQUIREMENTS: Array<[string, (v: View) => boolean]> = [
+/**
+ * Every requirement a spending card must meet, as (label, predicate, detail?).
+ *
+ * `detail` exists because "converts at no written-down scale" is useless as a
+ * bare boolean: seven files, some of them two thousand lines, and the failure
+ * would say only that one of them contains a literal somewhere. The two parsers
+ * already return the offending snippets, so a failure quotes them.
+ */
+const REQUIREMENTS: Array<[string, (v: View) => boolean, ((v: View) => string[])?]> = [
   // ONE read. `useSpendableBalance` returns loading/received/failed separately,
   // which is what makes "still reading" distinguishable from "could not read".
   ["reads its balance through useSpendableBalance", (v) => /useSpendableBalance\s*\(/.test(v.code)],
-  // ...and therefore does NOT hand-roll one beside it. Reads `v.code`, WITH
-  // strings: a hand-rolled read spells the method `functionName: "balanceOf"`,
-  // so on the stripped view this check passed on the very code it forbids.
-  ["does not hand-roll a balance read", (v) => !/useBalance\s*\(/.test(v.code) && !/balanceOf/.test(v.code)],
+  // ...and any read it still does by hand keeps its failure signal. This used
+  // to be a flat ban on `useBalance(`/`balanceOf`, which was right for three
+  // chat cards and wrong for the wider set: a spender legitimately reads an
+  // ALLOWANCE, a GAS balance, and an Aave/Morpho POSITION by hand. The defect
+  // was never "you read it yourself" — it was "you discarded the failure."
+  [
+    "keeps the failure signal on every hand-rolled useBalance",
+    (v) => discardingBalanceReads(v.code).length === 0,
+    (v) => discardingBalanceReads(v.code),
+  ],
   // THREE outcomes, from the shared module — not a local ternary.
   ["derives its gate with resolveSpend", (v) => /resolveSpend\s*\(/.test(v.code)],
-  // Fail-CLOSED: the confirm requires a verdict of ok, not merely "not over".
-  ['gates its confirm on gate === "ok"', (v) => /gate\s*===\s*"ok"/.test(v.code)],
+  // Fail-CLOSED: the confirm is licensed by the verdict being `ok`, never by
+  // the absence of the bad ones. Either polarity satisfies this — `gate !== "ok"`
+  // guarding a held-state branch is the same property, and in ReviewSignPanel it
+  // is expressed more strongly still, as a `Record<Exclude<SpendGate,"ok">,…>`
+  // that turns a new outcome into a compile error. What the check forbids is a
+  // file that consults the gate WITHOUT ever naming `"ok"` — i.e. one that
+  // enumerates the three bad verdicts and falls through to sign on a fourth.
+  ['licenses its confirm on the literal "ok" verdict', (v) => /gate\s*[!=]==\s*"ok"/.test(v.code)],
   // The admission AND the way out. `UnverifiedBalance` types `onRetry` as
   // REQUIRED, so rendering it is TypeScript-proof that a retry exists — this
   // check only has to prove it is rendered at all.
   ["renders <UnverifiedBalance> when the read failed", (v) => /<UnverifiedBalance\b/.test(v.code)],
-  // The whole point of the decimals half: no scale is written down anywhere.
-  // The ONE check that reads the stripped view — `text-[18px]` is everywhere.
-  ["writes no decimals literal (no bare 18 in code)", (v) => !/\b18\b/.test(v.noStrings)],
+  // The decimals half. Not "contains no 18" — "converts at no written-down
+  // scale". The ONE check that reads the stripped view, because a scale is
+  // never a string but `text-[18px]` is everywhere in these files.
+  [
+    "converts at no written-down scale (every parse/formatUnits reads its decimals)",
+    (v) => literalScaleConversions(v.noStrings).length === 0,
+    (v) => literalScaleConversions(v.noStrings),
+  ],
 ];
 
 // ── group 1: the derivation itself is sound ─────────────────────────────────
 
 // A floor, not a tally: if the shape-detector ever stops matching, the suite
-// would otherwise pass with zero files checked and report "all green".
+// would otherwise pass with zero files checked and report "all green". The
+// floor is the count measured when the walk went repo-wide (7). It is a floor
+// and not an equality on purpose — a new spending card must be ALLOWED to land,
+// it just may not land unchecked.
 check(
   `1.1 the spender detector finds cards (found ${allSpenders.length}: ${allSpenders.join(", ") || "none"})`,
-  allSpenders.length >= 4,
+  allSpenders.length >= 7,
 );
 check(
-  `1.2 at least three spenders are in scope (in scope: ${spenders.join(", ") || "none"})`,
-  spenders.length >= 3,
+  `1.2 every spender found is in scope (in scope ${spenders.length}/${allSpenders.length})`,
+  spenders.length >= 7,
 );
-// The three cards the money actually moves through, named so a rename or a
-// deletion is visible rather than silently shrinking the set.
-for (const f of ["RobinhoodSendCard.tsx", "RobinhoodSwapCard.tsx", "RobinhoodBridgeCard.tsx"]) {
+// The seven files money actually moves through, named so a rename or a deletion
+// is visible rather than silently shrinking the set. Full paths relative to
+// `src/`, not basenames: once the walk is repo-wide, `SwapCard.tsx` is
+// ambiguous between the bank and the chat surfaces.
+for (const f of [
+  "app/chat/components/RobinhoodSendCard.tsx",
+  "app/chat/components/RobinhoodSwapCard.tsx",
+  "app/chat/components/RobinhoodBridgeCard.tsx",
+  "app/chat/components/ToolCards.tsx",
+  "app/app/bank/SwapCard.tsx",
+  "app/app/launches/LaunchesClient.tsx",
+  "components/blue-hood/ReviewSignPanel.tsx",
+]) {
   check(`1.3 ${f} is detected as a spender`, spenders.includes(f));
 }
 
@@ -274,17 +413,38 @@ for (const f of ["RobinhoodSendCard.tsx", "RobinhoodSwapCard.tsx", "RobinhoodBri
 
 for (const f of spenders) {
   const v = sources.get(f)!;
-  for (const [label, ok] of REQUIREMENTS) check(`2 · ${f} — ${label}`, ok(v));
+  for (const [label, ok, detail] of REQUIREMENTS) {
+    const passed = ok(v);
+    const why = !passed && detail ? ` → ${detail(v).join(" · ")}` : "";
+    check(`2 · ${f} — ${label}${why}`, passed);
+  }
 }
 
 // ── group 3: the shared module keeps its shape ──────────────────────────────
 
-const hookView = view(readFileSync(join(componentDir, "useSpendableBalance.ts"), "utf8"));
+const HOOK = "lib/wallet/useSpendableBalance.ts";
+const UNVERIFIED = "components/wallet/UnverifiedBalance.tsx";
+
+const hookView = sources.get(HOOK);
+check(`3.0 ${HOOK} exists (it is what every requirement above points at)`, hookView != null);
+if (hookView) {
 const hookSrc = hookView.code;
-check("3.1 the hook writes no decimals literal either", !/\b18\b/.test(hookView.noStrings));
-// The hook must expose all four signals plus the way out; a caller cannot fail
-// closed on signals the hook does not give it.
-for (const field of ["balance", "decimals", "loading", "received", "failed", "refetch", "refetching"]) {
+// The hook keeps the BLANKET ban the wider set had to give up. That is not an
+// inconsistency: this file is ~200 lines of nothing but balance reading. It has
+// no deploy form choosing a new token's scale and no Tailwind class with a
+// number in it, so here — and only here — every `18` really is a written-down
+// decimals, and the strongest available assertion is also the correct one.
+check("3.1 the hook writes no decimals literal at all", !/\b18\b/.test(hookView.noStrings));
+// The hook must expose every signal plus the way out; a caller cannot fail
+// closed on signals the hook does not give it. `applicable` and `raw` are load-
+// bearing and easy to lose: `applicable` is how a DISABLED query — which sits at
+// isPending forever — is told apart from one that is genuinely still reading,
+// and `raw` is the un-rounded integer, without which a caller has to reconstruct
+// base units from a float and re-introduces the rounding it just avoided.
+for (const field of [
+  "applicable", "balance", "raw", "decimals",
+  "loading", "received", "failed", "refetch", "refetching",
+]) {
   check(`3.2 the hook exposes \`${field}\``, new RegExp(`\\b${field}\\b`).test(hookSrc));
 }
 // `refetching` must be DERIVED from the queries, never a stored flag — a stored
@@ -293,19 +453,23 @@ check(
   "3.3 `refetching` is derived from the queries, not stored in state",
   /refetching:\s*qs\.some\(/.test(hookSrc) && !/useState[^\n]*refetch/i.test(hookSrc),
 );
+}
 
-const partsSrc = code(readFileSync(join(componentDir, "ConfirmCardParts.tsx"), "utf8"));
+const partsView = sources.get(UNVERIFIED);
+check(`3.4a ${UNVERIFIED} exists (requirement 5 renders it)`, partsView != null);
+if (partsView) {
 // A gate with no way out is a broken card, so the prop is required at the type
 // level. If this ever becomes `onRetry?:` the compiler stops enforcing it.
 check(
   "3.4 UnverifiedBalance requires onRetry (no `?`), so the way out cannot be dropped",
-  /onRetry:\s*\(\)\s*=>\s*void/.test(partsSrc) && !/onRetry\?\s*:/.test(partsSrc),
+  /onRetry:\s*\(\)\s*=>\s*void/.test(partsView.code) && !/onRetry\?\s*:/.test(partsView.code),
 );
+}
 
 // ── group 4: every exclusion still earns its place ──────────────────────────
 
 for (const [f, reason] of Object.entries(EXCLUDED)) {
-  const present = existsSync(join(componentDir, f));
+  const present = sources.has(f);
   check(`4.1 excluded file ${f} still exists (else delete the entry)`, present);
   if (!present) continue;
   check(`4.2 ${f} is still detected as a spender`, allSpenders.includes(f));
@@ -361,6 +525,92 @@ check(
 check(
   "5.14 `balanceOf` named in a comment is NOT counted as a hand-rolled read",
   !/balanceOf/.test(code("// we no longer call balanceOf here\nconst a = 1;")),
+);
+
+// ── group 6: the two parsers are tested in BOTH directions ──────────────────
+//
+// Requirements 2 and 6 are no longer regexes — they are small parsers, and a
+// parser that silently returns `[]` is a check that passes on everything. These
+// are the cases that actually appear in the seven spenders, plus the shapes
+// that broke the regex versions this replaced.
+
+// literalScaleConversions — must FIRE
+check("6.1 a bare literal scale is caught", literalScaleConversions("parseUnits(a, 18)").length === 1);
+check(
+  "6.2 formatUnits is caught too, not just parseUnits",
+  literalScaleConversions("formatUnits(bal, 6)").length === 1,
+);
+check(
+  "6.3 a ternary of two literals is caught (this is the shape a `?? 18` fix leaves behind)",
+  literalScaleConversions("parseUnits(a, isStable ? 6 : 18)").length === 1,
+);
+check(
+  "6.4 a literal FALLBACK behind a real source is still caught",
+  literalScaleConversions("formatUnits(bal, meta?.decimals ?? 18)").length === 1,
+);
+// The nesting that defeats a regex: the call in the FIRST argument closes a
+// paren before the scale argument begins, so "match up to the first `)`" reads
+// `minOut.toFixed(dec)` as the whole call and never sees the scale at all.
+check(
+  "6.5 a nested call in argument one does not hide the scale",
+  literalScaleConversions("parseUnits(minOut.toFixed(18), 18)").length === 1,
+);
+
+// literalScaleConversions — must NOT fire
+check("6.6 a scale read from the token passes", literalScaleConversions("parseUnits(a, tokenDecimals)").length === 0);
+check(
+  "6.7 a scale read from the chain definition passes",
+  literalScaleConversions("parseUnits(a, chain.nativeCurrency.decimals)").length === 0,
+);
+check(
+  "6.8 a nested call in argument one, with a derived scale, passes",
+  literalScaleConversions("parseUnits(minOut.toFixed(outDecimals), outDecimals)").length === 0,
+);
+// `decimals[0]` is a member access, not a written-down eighteen. Without the
+// bracket strip its index reads as a scale and the guard fires on correct code —
+// which is how a guard gets switched off.
+check(
+  "6.9 an array index in the scale expression is not read as a literal",
+  literalScaleConversions("formatUnits(raw, decs[0])").length === 0,
+);
+check(
+  "6.10 a one-argument call is not treated as a scale-less violation",
+  literalScaleConversions("formatUnits(raw)").length === 0,
+);
+
+// discardingBalanceReads — must FIRE
+check(
+  "6.11 useBalance destructured to data alone is caught",
+  discardingBalanceReads("const { data } = useBalance({ address });").length === 1,
+);
+// The one that matters most: `isLoading` is `isPending && isFetching`, so it is
+// FALSE while a query is in its error state. A caller that binds only isLoading
+// treats a failed read as a finished one — the original bug, one layer up.
+check(
+  "6.12 useBalance destructured to data+isLoading is STILL caught (isLoading is not a failure signal)",
+  discardingBalanceReads("const { data, isLoading } = useBalance({ address });").length === 1,
+);
+check(
+  "6.13 a whole-bound query nothing ever interrogates is caught",
+  discardingBalanceReads("const q = useBalance({ address });\nconst x = q.data?.value;").length === 1,
+);
+
+// discardingBalanceReads — must NOT fire
+check(
+  "6.14 destructuring isError passes",
+  discardingBalanceReads("const { data, isError } = useBalance({ address });").length === 0,
+);
+check(
+  "6.15 a whole-bound query whose isPending IS read passes",
+  discardingBalanceReads("const q = useBalance({ address });\nconst reading = q.isPending;").length === 0,
+);
+// Scoped to useBalance on purpose. ToolCards reads an Aave APY with
+// `const { data: reserve } = useReadContract(…)` and says beside it that the
+// read gates nothing, so a failure honestly degrades to "—". Widening this rule
+// to every hook would demand ceremony there for no safety.
+check(
+  "6.16 useReadContract is out of scope — the rule is about wallet balances",
+  discardingBalanceReads("const { data } = useReadContract({ functionName: 'balanceOf' });").length === 0,
 );
 
 // ── report ──────────────────────────────────────────────────────────────────

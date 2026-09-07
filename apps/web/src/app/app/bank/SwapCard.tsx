@@ -21,12 +21,15 @@
 // refusal its own responsibility.
 
 import { useState, useEffect, useRef } from "react";
-import { useAccount, useBalance, useReadContract, useSwitchChain, useWriteContract, useSendTransaction } from "wagmi";
+import { useAccount, useSwitchChain, useWriteContract, useSendTransaction } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
 import { base } from "wagmi/chains";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { DATA_SUFFIX } from "@/constants/builderCode";
 import { BASE_MAJORS, NATIVE_SENTINEL } from "@/lib/wallet/token-trust";
+import { useSpendableBalance } from "@/lib/wallet/useSpendableBalance";
+import { resolveSpend } from "@/lib/wallet/read-state";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
 
 // The tradable majors come from `token-trust.ts`, which is also what decides
 // whether a token in the portfolio may be sold at all. They used to be two
@@ -69,20 +72,27 @@ export default function SwapCard({ account, preset }: { account?: `0x${string}`;
   const [err, setErr] = useState("");
   const [txHash, setTxHash] = useState("");
 
-  // Balance of the sell token.
-  const { data: nativeBal } = useBalance({ address: account, chainId: base.id, query: { enabled: !!account && !!sell.native } });
-  const { data: erc20Bal }  = useReadContract({
-    address: sell.addr as `0x${string}`, abi: ERC20_ABI, functionName: "balanceOf",
-    args: account ? [account] : undefined, chainId: base.id,
-    query: { enabled: !!account && !sell.native },
+  // Balance of the sell token — read (with its scale) through the one hook, so
+  // "still reading" and "could not read" stay distinguishable. `sell.decimals`
+  // is NOT used for money any more: BASE_MAJORS is curated and a `preset` comes
+  // from the portfolio table, but neither is the token itself. What signs is
+  // `bal.decimals`, read from the contract.
+  const bal = useSpendableBalance({
+    holder: account, native: !!sell.native, token: sell.native ? undefined : sell.addr, chainId: base.id,
   });
-  const balance = sell.native
-    ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
-    : (erc20Bal != null ? Number(formatUnits(erc20Bal as bigint, sell.decimals)) : null);
+  const balance = bal.balance;
 
   const amt = parseFloat(amount);
-  const sellBase = amount && amt > 0 ? (() => { try { return parseUnits(amount, sell.decimals).toString(); } catch { return ""; } })() : "";
-  const overBalance = balance != null && amt > balance;
+  const sellBase = amount && amt > 0 && bal.decimals != null
+    ? (() => { try { return parseUnits(amount, bal.decimals!).toString(); } catch { return ""; } })()
+    : "";
+  // FAIL-CLOSED. `over` alone is false on an unread balance; `resolveSpend`
+  // supplies the half that says so — see lib/wallet/read-state.ts.
+  const gate = resolveSpend({
+    loading: bal.loading, received: bal.received, failed: bal.failed,
+    over: balance != null && amt > balance,
+  });
+  const overBalance = gate === "insufficient";
 
   // Debounced quote fetch.
   const reqId = useRef(0);
@@ -118,6 +128,10 @@ export default function SwapCard({ account, preset }: { account?: `0x${string}`;
   const rate = buyAmount != null && amt > 0 ? buyAmount / amt : null;
 
   function flip() { setSell(buy); setBuy(sell); setAmount(""); setQuote(null); }
+  // Max is only offered when a balance was actually read — the whole "Bal …
+  // Max" line is behind `balance != null` below, so it disappears rather than
+  // becoming a dead click. What the user gets instead is the banner, which says
+  // why and offers the retry.
   function setMax() {
     if (balance == null) return;
     setAmount(String(sell.native ? Math.max(0, balance - 0.00005) : balance));
@@ -133,7 +147,7 @@ export default function SwapCard({ account, preset }: { account?: `0x${string}`;
   const inMajors = (t: Token) => TOKENS.some(x => x.addr.toLowerCase() === t.addr.toLowerCase());
   const sellOptions = inMajors(sell) ? TOKENS : [sell, ...TOKENS];
 
-  const canSwap = !!account && !!quote?.transaction && amt > 0 && !overBalance && !loading;
+  const canSwap = !!account && !!quote?.transaction && amt > 0 && gate === "ok" && !loading;
   const busy = step === "approving" || step === "swapping";
 
   async function swap() {
@@ -242,12 +256,17 @@ export default function SwapCard({ account, preset }: { account?: `0x${string}`;
       {quote?.needsKey && <p className="font-mono text-[9px] text-amber-400 mb-2">Convert needs a free 0x API key — set <span className="text-slate-300">ZEROX_API_KEY</span>.</p>}
       {step === "error" && <p className="font-mono text-[10px] text-amber-400 mb-2">{err}</p>}
 
+      {gate === "unverified" && (
+        <UnverifiedBalance symbol={sell.sym} onRetry={() => { void bal.refetch(); }} busy={bal.refetching} />
+      )}
+
       <button onClick={swap} disabled={!canSwap || busy}
         className="w-full font-mono text-[12px] font-bold py-2 rounded-lg transition-all disabled:opacity-50"
         style={{ background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
         {!isConnected ? "Connect your wallet"
           : busy ? (step === "approving" ? "Approve in wallet…" : "Confirm swap…")
           : overBalance ? "Insufficient balance"
+          : gate === "unverified" ? "Balance unread — held"
           : `Convert ${amt > 0 ? fmt(amt) : ""} ${sell.sym} → ${buy.sym}`}
       </button>
       <p className="font-mono text-[9px] text-slate-700 mt-1.5">Best route via 0x · you sign · non-custodial · Base mainnet.</p>

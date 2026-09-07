@@ -36,6 +36,10 @@ import Link from "next/link";
 import type { Arrow, UserAction } from "@/lib/blue-hood/types";
 import { ConnectButton } from "@/components/ConnectModal";
 import { ROBINHOOD_SWAP_ROUTER_ADDRESS } from "@/lib/robinhood/swap";
+import { useSpendableBalance } from "@/lib/wallet/useSpendableBalance";
+import { resolveSpend, type SpendGate } from "@/lib/wallet/read-state";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
+import { clampDecimals } from "@/lib/wallet/amount";
 
 const RH_CHAIN_ID = 4663;
 const RH_EXPLORER = "https://robinhoodchain.blockscout.com";
@@ -179,23 +183,36 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
   // let them sign approve for 1, swap reverted, dangling approval.
   // `quote.execution.token_in` IS the pay-side token regardless of side
   // (USDG on buy, the RWA token on sell) — drop the side filter.
+  //
+  // BUG FIX #2, PART TWO (2026-09-07). The fix above removed one CAUSE of a
+  // null balance and left the SHAPE that made a null balance dangerous. Both
+  // guards it shipped read `walletBalance !== null && …`, which is FAIL-OPEN:
+  // when the read fails rather than merely disagreeing, the guard is false,
+  // the sign button enables, and the user pays gas for a swap that cannot
+  // settle — the exact outcome #0071 was about. Two guards, one input, one
+  // idiom: they fail together, so they were one guard, not two.
+  //
+  // The read now goes through `useSpendableBalance`, which reports pending and
+  // failed as DIFFERENT states and reads `decimals` on-chain instead of taking
+  // the server's `token_in_decimals` (a quote field the panel cannot verify,
+  // defaulted to 6 — and a balance at a guessed scale is not a balance). The
+  // gate is `resolveSpend`, whose `unverified` outcome is fail-CLOSED.
   const payToken: `0x${string}` | undefined =
     quote?.execution?.token_in
       ? (quote.execution.token_in as `0x${string}`)
       : undefined;
-  const payDecimals = quote?.execution?.token_in_decimals ?? 6;
-  const { data: rawBalance } = useReadContract({
-    address: payToken,
-    abi: erc20Abi,
-    functionName: "balanceOf",
-    args: address ? [address] : undefined,
+  const bal = useSpendableBalance({
+    holder: address,
+    native: false,
+    token: payToken,
     chainId: RH_CHAIN_ID,
-    query: { enabled: !!payToken && !!address, refetchInterval: 15_000 },
+    // Long-lived panel: the user reads this number, picks a percentage off it,
+    // and may sit here for minutes. Keep it fresh — 15s, as it always was.
+    pollMs: 15_000,
   });
-  const walletBalance = useMemo(() => {
-    if (typeof rawBalance !== "bigint") return null;
-    return parseFloat(formatUnits(rawBalance, payDecimals));
-  }, [rawBalance, payDecimals]);
+  const walletBalance = bal.balance;
+  const rawBalance = bal.raw;
+  const payDecimals = bal.decimals;
   // Symbol shown next to the amount input + balance line. On BUY it's
   // the denom (USDG / WETH). On SELL it's the ticker being sold.
   const payUnitSymbol = side === "sell" ? arrow.ticker : denom;
@@ -220,8 +237,12 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
     chainId: RH_CHAIN_ID,
     query: { enabled: !!payToken && !!address && !!swapRouter, refetchInterval: 15_000 },
   });
+  // Same scale, same source: the allowance is denominated in the pay token, so
+  // it is unknown for exactly as long as that token's decimals are unknown.
+  // Reading it at a guessed exponent would put a wrong number under the "will
+  // skip approve" hint, which is a claim about what the next click will do.
   const currentAllowance = useMemo(() => {
-    if (typeof rawAllowance !== "bigint") return null;
+    if (typeof rawAllowance !== "bigint" || payDecimals == null) return null;
     return parseFloat(formatUnits(rawAllowance, payDecimals));
   }, [rawAllowance, payDecimals]);
   // `willSkipApprove` uses amountNum which is defined further down; the
@@ -232,11 +253,15 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
   // "insufficient funds for gas" dump is unreadable (screenshot 3+4),
   // and users have no visible signal that they might be under-funded
   // on gas. Show it inline so the panel is honest about pre-conditions.
-  const { data: rhEthBalance } = useBalance({
+  // Bound whole, not `.data`-only: the pre-sign gas assert below has to tell
+  // "you have too little ETH" apart from "we never learned how much ETH you
+  // have", and `data === undefined` says both. Same reason as the balance.
+  const ethQ = useBalance({
     address,
     chainId: RH_CHAIN_ID,
     query: { enabled: !!address, refetchInterval: 15_000 },
   });
+  const rhEthBalance = ethQ.data;
 
   // ── Quote fetcher (debounced on input change) ───────────────────────
   const fetchQuote = useCallback(async () => {
@@ -285,11 +310,39 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
   const heavyImpact = (quote?.trade_impact_pct ?? 0) > HEAVY_IMPACT_PCT;
   const amountNum = Number(amount);
   const validAmount = Number.isFinite(amountNum) && amountNum > 0;
+  // ── The spend gate ──────────────────────────────────────────────────
   // Bug fix #2 (2026-07-24, arrow #0071): the insufficient guard was
   // scoped to `side === "buy"`, so on SELL it never fired even when the
   // wallet balance was clearly less than the requested amount. Widened
   // to both sides — walletBalance is now populated on both.
-  const insufficient = walletBalance !== null && validAmount && amountNum > walletBalance;
+  //
+  // 2026-09-07: and now `unverified` too. The comparison below answers
+  // "are we over", which is only ONE of the three things this panel needs
+  // to know; `resolveSpend` answers the other two, and refuses on both.
+  //
+  // The over-check is an EXACT integer compare. It used to be a float one
+  // carrying a 1.0000001 fudge (see the pre-sign assert), because
+  // `walletBalance` comes out of `formatUnits` lossy and "sell 100%" kept
+  // landing a hair over. With the raw base-units in hand there is nothing
+  // to fudge: the SELL presets are floored integer arithmetic on the very
+  // same bigint, so 100% compares exactly equal and passes.
+  const amountBase = useMemo(() => {
+    if (payDecimals == null || !validAmount) return null;
+    try { return parseUnits(clampDecimals(amount, payDecimals), payDecimals); }
+    catch { return null; }
+  }, [amount, payDecimals, validAmount]);
+  const gate = resolveSpend({
+    loading:  bal.loading,
+    received: bal.received,
+    failed:   bal.failed,
+    over: rawBalance != null && amountBase != null && amountBase > rawBalance,
+  });
+  // The panel only has a pay token once a quote with an execution leg has
+  // arrived; before that the balance queries are disabled and sit at
+  // `isPending` forever, which would read as a permanent "reading…". So the
+  // gate is only consulted once it CAN have an answer — see the hook header.
+  const balanceApplicable = bal.applicable;
+  const insufficient = balanceApplicable && gate === "insufficient";
   // Allowance plan resolves here now that both `currentAllowance` and
   // `amountNum` are in scope. `willSkipApprove` drives the pre-flight
   // banner + the "sign 1 tx / sign 2 txs" hint. Ties directly to what
@@ -302,7 +355,7 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
 
   // The smart action button state — computes what click does + why.
   const action = pickAction({
-    phase, isConnected, wrongChain, arrowIsOpen, validAmount, insufficient,
+    phase, isConnected, wrongChain, arrowIsOpen, validAmount, gate, balanceApplicable,
     poolTooThin, heavyImpact, ackImpact, quoteStale, deadlineExpired, multiHop,
     quote, hasAddress: !!address,
   });
@@ -329,13 +382,36 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
     // caching. Rather than trust the sim as the only guard, add a hard
     // client-side balance assert before ANY signature. `walletBalance`
     // is now read for both sides (bug #2 fix above), so this covers SELL
-    // regardless of the sim's behavior. Uses the LOOSE 0.999999 factor
-    // because rounding of `walletBalance` from formatUnits can be off in
-    // the last decimal; treat "sell 100%" as valid even if it's 0.9999999x.
-    if (walletBalance !== null && amountNum > walletBalance * 1.0000001) {
+    // regardless of the sim's behavior.
+    //
+    // 2026-09-07 — WHAT THIS RE-CHECK IS AND IS NOT. It used to read
+    // `walletBalance !== null && amountNum > walletBalance * 1.0000001`, the
+    // same fail-open idiom as the render-time guard, against the same value,
+    // through the same `!== null`. Two layers that share one input and one
+    // idiom fail at the same instant, so they were never two layers — and the
+    // one moment they were needed (an unreadable balance) is the one moment
+    // both were blind. It reads the GATE now, so `reading` and `unverified`
+    // stop a signature instead of waving it through.
+    //
+    // What it legitimately adds over the button's own gate: the balance polls
+    // every 15s, so the figure can move between the render that enabled the
+    // button and the click that got here. This is a fresh read of a moving
+    // value, not a second opinion on a fixed one.
+    //
+    // The 1.0000001 fudge is gone. It existed because `walletBalance` is a
+    // lossy float out of `formatUnits`, so "sell 100%" kept landing a hair
+    // over its own balance. `gate` compares base-unit integers now — the
+    // presets floor into the same bigint — so 100% is exactly equal and the
+    // fudge has nothing left to paper over.
+    if (gate !== "ok") {
       throw new Error(
-        `insufficient_balance: requested ${amountNum} but balance is ${walletBalance}. ` +
-        `Use the 100% preset to sell everything or lower the amount.`,
+        gate === "insufficient"
+          ? `insufficient_balance: requested ${amountNum} but balance is ${walletBalance}. ` +
+            `Use the 100% preset to sell everything or lower the amount.`
+          : gate === "reading"
+          ? `balance_unread: still reading your ${payUnitSymbol} balance — one moment, then try again.`
+          : `balance_unread: couldn't read your ${payUnitSymbol} balance on Robinhood Chain. ` +
+            `Not signing against a figure we never got — retry the read and this unblocks.`,
       );
     }
     // ── Pre-sign ETH gas budget (2026-07-25 fix for "every BUY reverted"
@@ -347,14 +423,23 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
     //    Threshold 0.0005 ETH is generous — the first real swap used
     //    166k gas at effectively ~0 fee, so anyone with < 0.0005 ETH is
     //    going to hit trouble no matter the price.
-    if (rhEthBalance !== undefined && rhEthBalance !== null) {
-      const eth = Number(rhEthBalance.value) / 10 ** rhEthBalance.decimals;
-      if (eth < 0.0005) {
-        throw new Error(
-          `insufficient_gas_eth: have ${eth.toFixed(6)} ETH on RH Chain, ` +
-          `need at least 0.0005 ETH to cover approve + swap gas`,
-        );
-      }
+    //    2026-09-07: this was `if (rhEthBalance !== undefined && …)` — the same
+    //    fail-open shape as the balance guard, one line below it. An unread gas
+    //    balance skipped the check entirely, which is the case where the check
+    //    is worth having: we cannot promise the wallet can pay for what we are
+    //    about to ask it to sign. Fail closed, and say which read failed.
+    if (ethQ.isPending || ethQ.isError || !ethQ.data) {
+      throw new Error(
+        `gas_unread: couldn't read your ETH balance on Robinhood Chain, so we ` +
+        `can't tell whether you can pay for approve + swap. Retry in a moment.`,
+      );
+    }
+    const eth = Number(ethQ.data.value) / 10 ** ethQ.data.decimals;
+    if (eth < 0.0005) {
+      throw new Error(
+        `insufficient_gas_eth: have ${eth.toFixed(6)} ETH on RH Chain, ` +
+        `need at least 0.0005 ETH to cover approve + swap gas`,
+      );
     }
     const [approveCall, swapCall] = prep.calls;
 
@@ -581,7 +666,10 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
     }
 
     setPhase({ kind: "done", swap_hash: swapHash, approve_hash: approveHash });
-  }, [address, arrow.id, arrow.serial, arrow.ticker, sendTransactionAsync, pubClient, side, amountNum, denom, quote?.min_out, onActionPending, walletBalance, rhEthBalance]);
+    // `gate` and `ethQ` replace the old `walletBalance, rhEthBalance` deps: the
+    // asserts inside now read the gate and the whole query, so the closure has
+    // to be rebuilt when EITHER changes state, not only when a number lands.
+  }, [address, arrow.id, arrow.serial, arrow.ticker, sendTransactionAsync, pubClient, side, amountNum, denom, quote?.min_out, onActionPending, gate, walletBalance, payUnitSymbol, ethQ]);
 
   const onSmartClick = useCallback(async () => {
     if (action.kind === "connect") return; // rendered as ConnectButton child
@@ -790,7 +878,7 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
             <AmountPresetRow
               side={side}
               walletBalance={walletBalance}
-              rawBalance={typeof rawBalance === "bigint" ? rawBalance : undefined}
+              rawBalance={rawBalance ?? undefined}
               payDecimals={payDecimals}
               onSet={(v) => setAmount(v)}
               currentAmount={amount}
@@ -829,6 +917,18 @@ export default function ReviewSignPanel({ arrow, onClose, onActionPending }: Rev
             />
             <span className="text-[10px]" style={{ color: MUTED }}>bps</span>
           </div>
+
+          {/* The way out of `unverified`. The gate is fail-closed, so the panel
+              owes the user a retry — a stop with no path forward is a broken
+              card, not a safe one. Same component as the chat cards and the
+              swap desks: one admission, one wording, one button. */}
+          {isConnected && balanceApplicable && gate === "unverified" && (
+            <UnverifiedBalance
+              symbol={payUnitSymbol}
+              onRetry={() => { void bal.refetch(); }}
+              busy={bal.refetching}
+            />
+          )}
 
           {isConnected && (
             <div className="text-[10px] flex flex-wrap gap-x-4" style={{ color: MUTED }}>
@@ -1083,7 +1183,9 @@ function AmountPresetRow({
   /** Live on-chain balance in base-units (bigint). SELL percents are
    *  computed off THIS, never off the lossy `walletBalance` float. */
   rawBalance: bigint | undefined;
-  payDecimals: number;
+  /** Read from the token, `null` until known — a percentage of a balance at an
+   *  unknown scale is not an amount, so every preset is disabled until it is. */
+  payDecimals: number | null;
   onSet: (v: string) => void;
   currentAmount: string;
   payUnitSymbol: string;
@@ -1107,13 +1209,21 @@ function AmountPresetRow({
     { label: "100%", pct: 100n },
   ];
   const current = Number(currentAmount);
-  const noBalance = rawBalance === undefined || rawBalance === 0n;
+  // `payDecimals == null` means the read did not establish a scale, so neither
+  // the percentage nor the string we would write into the field exists yet.
+  const noBalance = rawBalance === undefined || rawBalance === 0n || payDecimals == null;
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <label className="text-[10px] uppercase" style={{ color: MUTED, letterSpacing: "0.08em" }}>preset</label>
       {side === "buy"
         ? BUY_PRESETS.map((v) => {
-            const insufficient = walletBalance !== null && walletBalance < v;
+            // Two reasons a preset is not offerable, and they are different
+            // sentences: we know you can't afford it, vs we don't know what
+            // you hold. Both disable — an unread balance is not a licence to
+            // offer a size we can't back — but the tooltip says which.
+            const unaffordable = walletBalance !== null && walletBalance < v;
+            const unknown = walletBalance === null;
+            const insufficient = unaffordable || unknown;
             const active = current === v;
             return (
               <button
@@ -1127,7 +1237,9 @@ function AmountPresetRow({
                   color: active ? RH_GREEN : "#9aa1ac",
                   backgroundColor: active ? "rgba(0,200,5,0.10)" : "transparent",
                 }}
-                title={insufficient
+                title={unknown
+                  ? `your ${payUnitSymbol} balance hasn't been read yet`
+                  : unaffordable
                   ? `balance ${walletBalance?.toFixed(2)} ${payUnitSymbol} < ${v}`
                   : `Set to ${v} ${payUnitSymbol}`}
               >
@@ -1138,8 +1250,9 @@ function AmountPresetRow({
         : SELL_PERCENTS.map(({ label, pct }) => {
             // floor(raw * pct / 100). BigInt division truncates toward
             // zero, so this never rounds above the real balance.
-            const rawValue = rawBalance !== undefined ? (rawBalance * pct) / 100n : 0n;
-            const valueStr = rawBalance !== undefined ? formatUnits(rawValue, payDecimals) : "0";
+            const known = rawBalance !== undefined && payDecimals != null;
+            const rawValue = known ? (rawBalance * pct) / 100n : 0n;
+            const valueStr = known ? formatUnits(rawValue, payDecimals) : "0";
             const valueNum = Number(valueStr);
             const disabled = noBalance;
             const active = !disabled && Math.abs(current - valueNum) < 1e-12 && current > 0;
@@ -1155,7 +1268,9 @@ function AmountPresetRow({
                   color: active ? RH_GREEN : "#9aa1ac",
                   backgroundColor: active ? "rgba(0,200,5,0.10)" : "transparent",
                 }}
-                title={disabled
+                title={!known
+                  ? `your ${payUnitSymbol} balance hasn't been read yet`
+                  : disabled
                   ? `no ${payUnitSymbol} balance to sell`
                   : `Sell ${label} of your ${payUnitSymbol} balance (${valueStr})`}
               >
@@ -1288,7 +1403,15 @@ function pickAction(o: {
   hasAddress: boolean;
   arrowIsOpen: boolean;
   validAmount: boolean;
-  insufficient: boolean;
+  /** The three-outcome spend gate. Only meaningful when `balanceApplicable`. */
+  gate: SpendGate;
+  /**
+   * Whether the gate can have an answer yet. False before a quote names the
+   * pay token, when the balance queries are disabled and therefore pinned at
+   * `isPending` — reading THAT as "reading your balance…" would park the panel
+   * on a spinner it can never leave. See `useSpendableBalance`'s header.
+   */
+  balanceApplicable: boolean;
   poolTooThin: boolean;
   heavyImpact: boolean;
   ackImpact: boolean;
@@ -1316,8 +1439,25 @@ function pickAction(o: {
   if (!o.validAmount) {
     return { kind: "noop", label: "Enter an amount", disabled: true, color: MUTED, reason: null };
   }
-  if (o.insufficient) {
-    return { kind: "noop", label: "Insufficient balance", disabled: true, color: RED, reason: "topup or lower the amount" };
+  // THREE outcomes, not two. "We could not read your balance" is its own
+  // answer and it is fail-CLOSED: the sign button stays disabled, because the
+  // cheapest correct move is to read again, not to spend gas learning what a
+  // retry would have told us for free. The banner beside the balance line
+  // carries the retry — a gate with no way out is a broken card.
+  //
+  // The button is licensed by the verdict being `"ok"`, and every other verdict
+  // is held. Written as a chain of `if (gate === <bad>)` it would fall off the
+  // end into `sign` the day a FIFTH outcome is added to SpendGate — collapsing
+  // an unhandled state into a permitted one, which is the "four states, not
+  // two" mistake one level up. Keyed on `Exclude<…, "ok">`, a new outcome is a
+  // COMPILE error here instead of a silent enable.
+  if (o.balanceApplicable && o.gate !== "ok") {
+    const held: Record<Exclude<SpendGate, "ok">, ActionState> = {
+      reading:      { kind: "noop", label: "Reading your balance…",  disabled: true, color: MUTED, reason: null },
+      unverified:   { kind: "noop", label: "Balance unread — held",  disabled: true, color: AMBER, reason: "retry the read above; this says nothing about what you hold" },
+      insufficient: { kind: "noop", label: "Insufficient balance",   disabled: true, color: RED,   reason: "topup or lower the amount" },
+    };
+    return held[o.gate];
   }
   if (!o.quote) {
     return { kind: "noop", label: "Waiting for quote…", disabled: true, color: MUTED, reason: null };
@@ -1400,6 +1540,13 @@ function humanizeSignError(raw: string): string {
   //    real cause. Any change here MUST keep the specific-first order.
 
   // Client-side asserts thrown by signFlow itself:
+  // 2026-09-07 — the two "we never read it" codes. They must be listed BEFORE
+  // `insufficient_balance` for the same ordering reason as everything else
+  // here, and they must not be worded as a statement about the user's funds:
+  // a failed read says nothing about what anyone holds.
+  if (low.startsWith("balance_unread:") || low.startsWith("gas_unread:")) {
+    return s.replace(/^\w+:\s*/, "").split(/\n/)[0]?.trim() || "couldn't read your balance — nothing was signed";
+  }
   if (low.startsWith("insufficient_balance:")) {
     // Format: `insufficient_balance: requested X but balance is Y. ...`
     const detail = s.replace(/^insufficient_balance:\s*/i, "").split(/\n/)[0]?.trim() ?? "";

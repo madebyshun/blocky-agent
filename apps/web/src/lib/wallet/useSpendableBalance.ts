@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * ONE balance read for every card that spends — send, swap, bridge.
+ * ONE balance read for every surface that spends — the chat action cards, the
+ * in-app swap desks, the launch pages, the Blue Hood sign panel.
  *
- * ─── Why this is a hook and not three copies ─────────────────────────────────
+ * ─── Why this is a hook and not N copies ─────────────────────────────────────
  *
  * MEASURED 2026-09-07. The three Robinhood action cards each hand-rolled the
  * same read and each got it wrong the same two ways. Both bugs are the shape
@@ -50,7 +51,25 @@
  *
  *    Robinhood Chain has one public RPC. This is not a hypothetical.
  *
- * The four states and the fail-closed gate live in `lib/wallet/read-state.ts`,
+ * ─── Then the sweep, which is why this lives in lib/ ─────────────────────────
+ *
+ * Fixing those three and then GREPPING for the same shape found four more
+ * surfaces carrying it — the bank Convert card, both swap panels on /launches,
+ * the chat SwapCard and YieldCard, and the Blue Hood sign panel. Seven gates in
+ * four files, none of them chat cards, all of them the same two lines.
+ *
+ * The sign panel is the one worth naming. Its balance read carries a dated
+ * post-mortem — a user typed 1 NVDA holding 0.0095, signed an approve, and the
+ * swap reverted — and the fix that post-mortem shipped removed one CAUSE of a
+ * null balance (a query scoped to the buy side) while leaving the fail-open
+ * SHAPE (`walletBalance !== null &&`) in place, in BOTH the gate and the
+ * "hard client-side balance assert before ANY signature" added beside it. Two
+ * layers, one input, one idiom: they fail together, so they are one layer.
+ *
+ * So this is not chat-card furniture and it does not live under chat/. Anything
+ * that signs a spend reads through here.
+ *
+ * The four states and the fail-closed gate live next door in `read-state.ts`,
  * shared with the wallet's holdings tables — see `resolveSpend` there. This
  * hook's only job is to produce honest SIGNALS for it: what is in flight, what
  * came back, and what did not.
@@ -64,6 +83,16 @@ import { ERC20_ABI } from "@/lib/yield-execution";
 export interface SpendableBalance {
   /** Human-scale balance. `null` whenever it is not established — for ANY reason. */
   balance: number | null;
+  /**
+   * The same balance in base units, exactly as it was read. Exposed because
+   * `balance` is a lossy float and some callers must not round: the Blue Hood
+   * sign panel computes its 25/50/100% presets as `raw * pct / 100n` after a
+   * measured bug where the float path's `.toFixed` ROUNDED UP the last digit,
+   * pushing "sell 100%" a hair over the real balance so the insufficient guard
+   * blocked the user from ever selling everything. Integer division truncates
+   * toward zero and cannot do that.
+   */
+  raw: bigint | null;
   /** Read from the token, never assumed. `null` until known. */
   decimals: number | null;
   /** Feed straight into `resolveSpend`. */
@@ -83,6 +112,14 @@ export interface SpendableBalance {
  *                 paste) reads nothing rather than reading garbage.
  * @param chainId  which chain. Base and Robinhood share no state, so a balance
  *                 without a chain is not an answer — see CLAUDE.md rule 1.
+ * @param pollMs   optional background re-read interval. Omitted, the balance is
+ *                 read once and re-read only on `refetch()`. The Blue Hood sign
+ *                 panel sets 15s because it is a long-lived panel whose amount
+ *                 presets are computed against the balance — a figure the user
+ *                 stares at for minutes must not be a figure from minutes ago.
+ *                 The confirm-only cards do NOT poll: their amount is fixed by
+ *                 the tool call, so a background flip would only move the gate
+ *                 under a user who cannot respond to it.
  *
  * NOTE on `enabled`: a wagmi query that is disabled sits at `isPending`
  * forever, so `received` stays false and the gate reads "reading" — the same
@@ -97,15 +134,16 @@ export function useSpendableBalance(opts: {
   native: boolean;
   token?: string;
   chainId: number;
+  pollMs?: number;
 }): SpendableBalance & { applicable: boolean } {
-  const { holder, native, token, chainId } = opts;
+  const { holder, native, token, chainId, pollMs } = opts;
   const tokenAddr = token && isAddress(token) ? (token as `0x${string}`) : undefined;
   const applicable = !!holder && (native || !!tokenAddr);
 
   const nativeQ = useBalance({
     address: holder || undefined,
     chainId,
-    query: { enabled: !!holder && native },
+    query: { enabled: !!holder && native, refetchInterval: pollMs },
   });
 
   // Decimals and balance are read as a PAIR and fail as a pair. Splitting them
@@ -113,12 +151,13 @@ export function useSpendableBalance(opts: {
   // partially-known quantity, it is an unknown one.
   const decQ = useReadContract({
     address: tokenAddr, abi: ERC20_ABI, functionName: "decimals", chainId,
+    // `decimals` is immutable, so it is never polled even when `pollMs` is set.
     query: { enabled: !!holder && !native && !!tokenAddr },
   });
   const balQ = useReadContract({
     address: tokenAddr, abi: ERC20_ABI, functionName: "balanceOf",
     args: holder ? [holder] : undefined, chainId,
-    query: { enabled: !!holder && !native && !!tokenAddr },
+    query: { enabled: !!holder && !native && !!tokenAddr, refetchInterval: pollMs },
   });
 
   // `useBalance` reports the coin's own decimals — 18 for an EVM native, but
@@ -146,6 +185,7 @@ export function useSpendableBalance(opts: {
   return {
     applicable,
     balance,
+    raw,
     decimals,
     loading:  qs.some(q => q.isLoading),
     received: qs.every(q => !q.isPending),

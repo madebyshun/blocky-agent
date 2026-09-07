@@ -12,9 +12,11 @@ import { useAccount, useSwitchChain, useSendTransaction, usePublicClient } from 
 import { parseUnits } from "viem";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { ConnectButton } from "@/components/ConnectModal";
-import { TokenGlyph, ConfirmPreview, resolveQuantity, clampDecimals, UnverifiedBalance } from "./ConfirmCardParts";
-import { useSpendableBalance } from "./useSpendableBalance";
+import { TokenGlyph, ConfirmPreview, resolveQuantity } from "./ConfirmCardParts";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
+import { useSpendableBalance } from "@/lib/wallet/useSpendableBalance";
 import { resolveSpend } from "@/lib/wallet/read-state";
+import { clampDecimals } from "@/lib/wallet/amount";
 
 const RH_ROUTER = "0x3bb0e9E3dB75faDC5f1f8b7D7B9D761Ef15cd23D" as const;
 const RH_CHAIN_ID = 4663;

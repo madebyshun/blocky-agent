@@ -131,23 +131,10 @@ export function resolveQuantity(
   return { value: value > 0 ? value : null, symbolic: true, word };
 }
 
-/**
- * Truncate a plain decimal string to at most `dp` fractional digits. FLOORS
- * (never rounds up) so a resolved "all"/"half"/"N%" can't tip a hair over the
- * real balance. parseUnits() throws when a string carries more decimals than
- * the token supports — and a symbolic fraction easily does (half of an odd
- * 6-dp balance → 7 dp). Call this right before parseUnits(amount, dec) on any
- * client that signs. Non-exponential inputs only (the cards never feed it a
- * word or "1e-7"); returns the input unchanged when it has no fractional part.
- */
-export function clampDecimals(s: string, dp: number): string {
-  if (!s || !s.includes(".")) return s;
-  const [intPart, fracPart = ""] = s.split(".");
-  const frac = dp > 0 ? fracPart.slice(0, dp) : "";
-  let out = frac ? `${intPart}.${frac}` : intPart;
-  if (out.includes(".")) out = out.replace(/0+$/, "").replace(/\.$/, "");
-  return out;
-}
+// `clampDecimals` used to live here. It moved to `@/lib/wallet/amount` once the
+// Blue Hood sign panel needed the same rule — it is about a token's scale, not
+// about a chat card. Not re-exported on purpose: a fix with two addresses is
+// how the decimals bug got half-applied in the first place.
 
 export interface PreviewSide {
   /** Leading avatar/glyph (TokenGlyph / AddrGlyph). */
@@ -174,37 +161,10 @@ export function ConfirmPreview({
   );
 }
 
-/**
- * The banner a card shows when it could not read the balance it is about to
- * spend against — the rendered half of `resolveSpend`'s `unverified`.
- *
- * One component for the same reason `useSpendableBalance` is one hook: all
- * three cards reach this state and must not grow three different ways of
- * admitting it. `onRetry` is REQUIRED, not optional, so a card cannot render
- * the admission without also rendering the way out — a gate that stops the
- * user with no path forward is not a safe card, it is a broken one.
- *
- * Presentational, per this file's contract: the callback and the busy flag are
- * both derived by the caller from the very queries the retry re-runs.
- */
-export function UnverifiedBalance({
-  symbol, onRetry, busy,
-}: { symbol?: string; onRetry: () => void; busy: boolean }) {
-  return (
-    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 mb-2 flex items-start justify-between gap-2">
-      <div className="text-[10px] text-amber-300 leading-relaxed">
-        <span className="font-bold">Couldn&apos;t read your {symbol ? `${symbol} ` : ""}balance.</span>{" "}
-        Confirming now could spend gas on a transaction that can&apos;t settle, so it&apos;s held
-        until the read succeeds. This says nothing about what you hold.
-      </div>
-      <button onClick={onRetry} disabled={busy}
-        className="shrink-0 text-[10px] px-2 py-1 rounded-lg font-bold transition-opacity hover:opacity-80 disabled:opacity-50"
-        style={{ background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B35" }}>
-        {busy ? "reading…" : "Retry"}
-      </button>
-    </div>
-  );
-}
+// `UnverifiedBalance` used to live here. It moved to
+// `@/components/wallet/UnverifiedBalance` once the same failed-read state
+// appeared outside chat — the `app/` swap desks and the Blue Hood sign panel
+// need it too, and this file is chat-card furniture.
 
 function PreviewCol({ side, align }: { side: PreviewSide; align: "left" | "right" }) {
   const right = align === "right";
