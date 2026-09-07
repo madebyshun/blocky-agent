@@ -413,6 +413,35 @@ export default function BankPage() {
   // "≥" wherever a total is printed from a read that did not cover everything.
   const floor = balanceRead.totalIsFloor ? "≥ " : "";
 
+  // ── The way out of the failed state ──────────────────────────────────────
+  //
+  // Distinguishing four states is worth doing on its own, but three of them are
+  // a DEAD END without this: the page learned to say "we couldn't read your
+  // balance" and then offered nothing that would read it again. The only Retry
+  // in the file belonged to TransactionHistory. The chat system prompt is the
+  // sharpest evidence that this was an omission rather than a decision — it
+  // instructs the model to "offer to retry", a retry the UI did not have.
+  //
+  // Refetches the SAME filtered `legs`, not the four queries: a leg that does
+  // not apply on this chain has no market to read, and TanStack's `refetch`
+  // ignores `enabled`, so retrying it would fire `balanceOf` at an undefined
+  // address. `balanceRead` would not see the resulting error (it reads the
+  // filtered list too), but the request is still wrong to make.
+  //
+  // ETH is refetched even though it is deliberately NOT one of the legs — it is
+  // not part of `total`, but it is what three quarters of the health score rests
+  // on, and a user pressing Retry means "read my wallet again", not "re-run the
+  // three legs of a derivation they cannot see".
+  async function retryBalance() {
+    await Promise.all([...legs.map(l => l.q.refetch()), ethQ.refetch()]);
+  }
+  // Derived, not a `useState` flag — the same reason `balanceRead` is derived.
+  // A stored "retrying" boolean is a fifth copy of a fact wagmi already owns,
+  // and it is the copy that gets left true when a refetch throws. `isFetching`
+  // is also true on the FIRST load, which is harmless here: every control that
+  // reads it renders only in a non-pending branch.
+  const rereading = legs.some(l => l.q.isFetching) || (!!acct && ethQ.isFetching);
+
   // Stats from real wallet history (this calendar month)
   const netFlowMonth      = txData?.stats?.netFlowUsdcMonth ?? 0;
   const transferCountMonth = txData?.stats?.transferCountMonth ?? 0;
@@ -937,8 +966,26 @@ export default function BankPage() {
             the product; and its six brand colours were the single largest
             source of decorative colour in the app (see the palette pass). */}
 
-        {/* 6. Spacer */}
-        <div className="flex-1" />
+        {/* 6. The spacer was HERE, above CHAINS.
+            ─────────────────────────────────────────────────────────────────
+            It earned its place when there were four blocks above it — the USDC
+            widget, the SUPPLIED card, and the ⚡ BASE APPS grid. Three deletes
+            later (two in the dedupe pass, one in the palette pass) the only
+            thing left above it was a one-line chat input, so a `flex-1` here
+            pushed a 90px CHAINS block and a 55px account chip to the floor and
+            left ~two thirds of a 224–320px column blank in the MIDDLE. The
+            sidebar read as broken rather than as sparse.
+
+            It is moved, not deleted, and that distinction is the whole fix: a
+            bottom-pinned account footer is correct and deliberate, so the gap
+            belongs BELOW the content and above that footer, not between two
+            pieces of content. Nothing was invented to fill it — a column padded
+            with something for the sake of not being empty is the decorative
+            colour problem in another medium. CHAINS simply rises to sit under
+            the input, where it reads as content instead of as a second footer.
+
+            (Explicitly NOT the fix: putting a balance back up here. See the
+            note at the top of this aside — the survivor bred once already.) */}
 
         {/* 7. Chains — the two this wallet reads, and what each one carries.
             Titled NETWORK (singular) over one switchable chain, while the stock
@@ -1022,8 +1069,10 @@ export default function BankPage() {
           )}
         </div>
 
-        {/* 8. Account chip */}
-        <div className="px-4 py-3 border-t border-[#1A1A2E]">
+        {/* 8. Account chip — `mt-auto` is the moved spacer. Same pin, one
+            block lower, so the blank space falls above the footer instead of
+            through the middle of the column. */}
+        <div className="mt-auto px-4 py-3 border-t border-[#1A1A2E]">
           <div className="font-mono text-[11px] text-slate-300 truncate">{displayName}</div>
           <div className="flex items-center gap-2 mt-0.5">
             <a href={`${net.explorer}/address/${acct}`} target="_blank" rel="noopener noreferrer"
@@ -1164,12 +1213,18 @@ export default function BankPage() {
               {balanceRead.body === "pending" ? (
                 <div className="font-mono text-[9px] text-slate-600 mt-1">reading {net.short}…</div>
               ) : balanceRead.body === "failed" ? (
-                <div className="font-mono text-[9px] text-amber-500/80 mt-1 leading-relaxed">
-                  Couldn&apos;t read your USDC balance on {net.short}. Unknown — not zero.
+                <div className="flex items-start justify-between gap-2 mt-1">
+                  <span className="font-mono text-[9px] text-amber-500/80 leading-relaxed">
+                    Couldn&apos;t read your USDC balance on {net.short}. Unknown — not zero.
+                  </span>
+                  <RetryRead onRetry={retryBalance} busy={rereading} />
                 </div>
               ) : balanceRead.totalIsFloor ? (
-                <div className="font-mono text-[9px] text-amber-500/80 mt-1 leading-relaxed">
-                  Part of this wallet could not be read — it holds at least this much.
+                <div className="flex items-start justify-between gap-2 mt-1">
+                  <span className="font-mono text-[9px] text-amber-500/80 leading-relaxed">
+                    Part of this wallet could not be read — it holds at least this much.
+                  </span>
+                  <RetryRead onRetry={retryBalance} busy={rereading} />
                 </div>
               ) : null}
               <div className="flex flex-col gap-1.5 mt-3">
@@ -1445,8 +1500,38 @@ export default function BankPage() {
                         )}
                     </div>
                   ))}
+                  {/* The last place on this page where an empty list was read
+                      as a clean bill of health.
+
+                      `allMissions` is built by an if-chain that deliberately
+                      pushes NOTHING on pending, failed or partial — an empty
+                      list beats a confident wrong instruction. Correct in the
+                      derivation, and then this slot turned that silence back
+                      into "✓ All good": a GREEN all-clear over a wallet whose
+                      balance we had just failed to read. Same shape as the
+                      `$0.00` and the "No assets yet" this batch has been
+                      closing, and the last one standing — the derivation was
+                      honest and the rendering re-asserted underneath it.
+
+                      "No actions needed" is a claim about the user's position.
+                      `state === "complete"` is the only thing that licenses it,
+                      exactly as `canAssertEmpty` licenses the empty branches
+                      elsewhere. The other two branches say which fact is
+                      missing, and the degraded one carries the way out. */}
                   {topMissions.length === 0 && (
-                    <div className="font-mono text-[10px] text-slate-600 py-2 text-center">✓ All good — no actions needed</div>
+                    balanceRead.state === "complete" ? (
+                      <div className="font-mono text-[10px] text-slate-600 py-2 text-center">✓ All good — no actions needed</div>
+                    ) : balanceRead.body === "pending" ? (
+                      <div className="font-mono text-[10px] text-slate-600 py-2 text-center">reading {net.short}…</div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl"
+                        style={{ background: "#F59E0B08", border: "1px solid #F59E0B20" }}>
+                        <span className="font-mono text-[10px] text-amber-500/80 leading-snug">
+                          No checklist over a wallet we couldn&apos;t finish reading — this is not an all-clear.
+                        </span>
+                        <RetryRead onRetry={retryBalance} busy={rereading} />
+                      </div>
+                    )
                   )}
                 </div>
               </div>
@@ -1549,16 +1634,22 @@ export default function BankPage() {
                   )}
                   </>
                 ) : balanceRead.body === "failed" ? (
-                  <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+                  <div className="rounded-lg px-3 py-2.5 flex items-start justify-between gap-2"
                     style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
-                    Your balance on {net.short} could not be read. The allocation is unknown —
-                    this is not an empty wallet.
+                    <span className="font-mono text-[9px] leading-relaxed text-amber-500/80">
+                      Your balance on {net.short} could not be read. The allocation is unknown —
+                      this is not an empty wallet.
+                    </span>
+                    <RetryRead onRetry={retryBalance} busy={rereading} />
                   </div>
                 ) : balanceRead.body === "partial" ? (
-                  <div className="rounded-lg px-3 py-2.5 font-mono text-[9px] leading-relaxed text-amber-500/80"
+                  <div className="rounded-lg px-3 py-2.5 flex items-start justify-between gap-2"
                     style={{ border: "1px solid #F59E0B30", background: "#F59E0B08" }}>
-                    Nothing was found in the part that could be read, but part of this wallet was
-                    not read at all. Incomplete, not empty.
+                    <span className="font-mono text-[9px] leading-relaxed text-amber-500/80">
+                      Nothing was found in the part that could be read, but part of this wallet was
+                      not read at all. Incomplete, not empty.
+                    </span>
+                    <RetryRead onRetry={retryBalance} busy={rereading} />
                   </div>
                 ) : (
                   // The one branch that ASSERTS something about the user, and
@@ -1953,6 +2044,23 @@ function IdentityChip({ label, active, color }: { label: string; active: boolean
       {active && <span className="text-[8px]">✓</span>}
       {label}
     </div>
+  );
+}
+
+// The control that turns "we couldn't read this" from a statement into a
+// recoverable one. A component rather than three inline buttons because it
+// appears in all three places a degraded read is admitted (balance caption,
+// mission list, allocation card) and they must not drift into three different
+// affordances for one action — the same argument that made `resolveRead` a
+// module. It carries no state: `busy` is `isFetching`, derived from the very
+// queries it re-runs.
+function RetryRead({ onRetry, busy }: { onRetry: () => void; busy: boolean }) {
+  return (
+    <button onClick={onRetry} disabled={busy}
+      className="shrink-0 font-mono text-[9px] px-2 py-1 rounded-lg font-bold transition-opacity hover:opacity-80 disabled:opacity-50"
+      style={{ background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B35" }}>
+      {busy ? "reading…" : "Retry"}
+    </button>
   );
 }
 
