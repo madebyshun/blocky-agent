@@ -15,8 +15,9 @@ import {
 } from "wagmi";
 import { formatUnits } from "viem";
 import { ConnectButton } from "@/components/ConnectModal";
-import { TokenGlyph, ChainDot, ConfirmPreview, resolveQuantity, UnverifiedBalance } from "./ConfirmCardParts";
-import { useSpendableBalance } from "./useSpendableBalance";
+import { TokenGlyph, ChainDot, ConfirmPreview, resolveQuantity } from "./ConfirmCardParts";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
+import { useSpendableBalance } from "@/lib/wallet/useSpendableBalance";
 import { resolveSpend } from "@/lib/wallet/read-state";
 
 // Chain metadata — hard-coded rather than reused from viem, so this card has

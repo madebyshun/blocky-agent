@@ -3,14 +3,18 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   useAccount, useSendTransaction, useSwitchChain, useWriteContract,
-  useReadContract, useBalance,
+  useReadContract,
 } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
 import { base } from "wagmi/chains";
+import { robinhoodMainnet } from "@/lib/robinhood/chains";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { DATA_SUFFIX } from "@/constants/builderCode";
 import { useLang } from "@/lib/i18n/context";
 import { QRCodeSVG } from "qrcode.react";
+import { useSpendableBalance } from "@/lib/wallet/useSpendableBalance";
+import { resolveSpend } from "@/lib/wallet/read-state";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
 
 const ACCENT = "#F59E0B";
 
@@ -18,8 +22,11 @@ const ACCENT = "#F59E0B";
 // other leg — added dynamically per-card.
 const NATIVE_ETH = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 type PayToken = { sym: string; addr: string; decimals: number; native?: boolean };
+// ETH's scale comes from the CHAIN DEFINITION, not from a typed-in 18. These
+// `decimals` are display-only either way — every amount that becomes calldata
+// is scaled by `bal.decimals`, read from the token itself (see below).
 const PAY_TOKENS: PayToken[] = [
-  { sym: "ETH",  addr: NATIVE_ETH, decimals: 18, native: true },
+  { sym: "ETH",  addr: NATIVE_ETH, decimals: base.nativeCurrency.decimals, native: true },
   { sym: "USDC", addr: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 },
 ];
 
@@ -235,27 +242,26 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
     ? { sym: tokenSym, addr: l.tokenAddress, decimals: tokenDecimals, native: false }
     : { sym: pay.sym, addr: pay.addr, decimals: pay.decimals, native: !!pay.native };
 
-  // Balance of the sell leg.
-  const { data: nativeBal } = useBalance({
-    address, chainId: base.id, query: { enabled: !!address && !!sell.native },
+  // Balance of the sell leg — one hook, which reads the scale alongside it and
+  // keeps "still reading" separable from "could not read".
+  const bal = useSpendableBalance({
+    holder: address, native: !!sell.native, token: sell.native ? undefined : sell.addr, chainId: base.id,
   });
-  const { data: erc20Bal } = useReadContract({
-    address: sell.addr as `0x${string}`, abi: ERC20_ABI, functionName: "balanceOf",
-    args: address ? [address] : undefined, chainId: base.id,
-    query: { enabled: !!address && !sell.native },
-  });
-  const balance = sell.native
-    ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
-    : (erc20Bal != null && sell.decimals !== undefined
-        ? Number(formatUnits(erc20Bal as bigint, sell.decimals)) : null);
+  const balance = bal.balance;
 
   const amt = parseFloat(amount);
-  // No scale → no base-unit amount → no quote → no swap. The `undefined` guard
-  // is the whole point: an unknown decimals must never fall through to 18.
-  const sellBase = amount && amt > 0 && sell.decimals !== undefined
-    ? (() => { try { return parseUnits(amount, sell.decimals!).toString(); } catch { return ""; } })()
+  // No scale → no base-unit amount → no quote → no swap. The null guard is the
+  // whole point: an unknown decimals must never fall through to 18.
+  const sellBase = amount && amt > 0 && bal.decimals != null
+    ? (() => { try { return parseUnits(amount, bal.decimals!).toString(); } catch { return ""; } })()
     : "";
-  const overBalance = balance != null && amt > balance;
+  // FAIL-CLOSED — `over` is false on an unread balance, so it is only ever HALF
+  // a gate. resolveSpend supplies the other half (lib/wallet/read-state.ts).
+  const gate = resolveSpend({
+    loading: bal.loading, received: bal.received, failed: bal.failed,
+    over: balance != null && amt > balance,
+  });
+  const overBalance = gate === "insufficient";
 
   // Debounced 0x quote.
   const reqId = useRef(0);
@@ -287,7 +293,7 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
 
   // `tokenDecimals !== undefined` is a HARD precondition, not a nicety — every
   // parseUnits below turns a typed amount into calldata.
-  const canSwap = !!address && !!quote?.transaction && amt > 0 && !overBalance
+  const canSwap = !!address && !!quote?.transaction && amt > 0 && gate === "ok"
     && !loading && tokenDecimals !== undefined;
   const busy = step === "approving" || step === "swapping";
 
@@ -295,10 +301,18 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
     if (!address) { setErr("Connect your wallet"); setStep("error"); return; }
     if (quote?.needsKey) { setErr("Swap needs a 0x API key (ZEROX_API_KEY)"); setStep("error"); return; }
     if (!quote?.transaction) { setErr(quote?.error || "No route for this pair"); setStep("error"); return; }
-    // Belt-and-braces: canSwap already gates on this, but doSwap is what signs,
-    // so it re-checks rather than trusting a prop upstream of it.
-    if (sell.decimals === undefined || buy.decimals === undefined) {
+    // Belt-and-braces: canSwap already gates on both of these, but doSwap is
+    // what SIGNS, so it re-checks rather than trusting a value upstream of it.
+    // Two separate preconditions, deliberately: the scale (what the amount
+    // MEANS) and the balance verdict (whether it can settle at all).
+    if (bal.decimals == null || buy.decimals === undefined) {
       setErr("Could not read this token's decimals — refusing to build a transaction");
+      setStep("error"); return;
+    }
+    if (gate !== "ok") {
+      setErr(gate === "unverified"
+        ? "Could not read your balance — refusing to sign a transaction that may not settle"
+        : gate === "insufficient" ? "Insufficient balance" : "Still reading your balance");
       setStep("error"); return;
     }
     setErr(""); setTxHash("");
@@ -309,7 +323,7 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
         setStep("approving");
         await writeContractAsync({
           address: sell.addr as `0x${string}`, abi: ERC20_ABI, functionName: "approve",
-          args: [quote.issues.allowance.spender, parseUnits(amount, sell.decimals)], chainId: base.id,
+          args: [quote.issues.allowance.spender, parseUnits(amount, bal.decimals)], chainId: base.id,
         });
       }
       setStep("swapping");
@@ -446,6 +460,9 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
                 contract — trading is disabled rather than guessing the token&apos;s scale.
               </p>
             )}
+            {gate === "unverified" && (
+              <UnverifiedBalance symbol={sell.sym} onRetry={() => { void bal.refetch(); }} busy={bal.refetching} />
+            )}
 
             <button onClick={doSwap} disabled={!canSwap || busy}
               className="w-full font-mono text-[12px] font-bold py-2.5 rounded-lg transition-all disabled:opacity-50"
@@ -457,6 +474,7 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
                 : decLoading ? "Reading token decimals…"
                 : busy ? (step === "approving" ? "Approve in wallet…" : "Confirm in wallet…")
                 : overBalance ? "Insufficient balance"
+                : gate === "unverified" ? "Balance unread — held"
                 : mode === "buy"
                   ? `Buy ${tokenSym}${amt > 0 ? ` with ${fmtNum(amt)} ${sell.sym}` : ""}`
                   : `Sell ${amt > 0 ? fmtNum(amt) : ""} ${tokenSym}`}
@@ -489,6 +507,12 @@ function TradeModal({ l, onClose }: { l: Launch; onClose: () => void }) {
 const RH_ROUTER = "0x3bb0e9E3dB75faDC5f1f8b7D7B9D761Ef15cd23D" as const;
 const RH_EXPLORER = "https://robinhoodchain.blockscout.com";
 const RH_CHAIN_ID = 4663;
+// ETH's scale on Robinhood Chain comes from the CHAIN DEFINITION — the same rule
+// PAY_TOKENS follows for Base above, and the same rule the token side of this
+// modal follows by reading `decimals()`. It used to be a literal `18` written
+// into doSwap's parseUnits calls, which is how the USDG bug was built: a scale
+// that is correct today and unsourced forever.
+const RH_NATIVE_DECIMALS = robinhoodMainnet.nativeCurrency.decimals;
 
 type RhQuote = {
   ok?: boolean;
@@ -504,15 +528,6 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
   const { address, isConnected } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   const { sendTransactionAsync } = useSendTransaction();
-  const { data: nativeBal } = useBalance({
-    address, chainId: RH_CHAIN_ID, query: { enabled: !!address },
-  });
-  const { data: tokenBal } = useReadContract({
-    address: l.tokenAddress as `0x${string}`, abi: ERC20_ABI, functionName: "balanceOf",
-    args: address ? [address] : undefined, chainId: RH_CHAIN_ID,
-    query: { enabled: !!address },
-  });
-
   const tokenSym = (l.tokenSymbol || l.tokenName || "TOKEN").replace(/^\$/, "");
 
   // ⚠️ READ ON-CHAIN — was `const tokenDecimals = 18` justified by "Robinhood
@@ -537,12 +552,22 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
   const [err, setErr] = useState("");
   const [txHash, setTxHash] = useState("");
 
-  const nativeBalance = nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null;
-  const erc20Balance = tokenBal != null && tokenDecimals !== undefined
-    ? Number(formatUnits(tokenBal as bigint, tokenDecimals)) : null;
-  const sellBalance = mode === "buy" ? nativeBalance : erc20Balance;
+  // The sell leg follows the mode: BUY spends native ETH, SELL spends the
+  // launched token. One hook either way — it reads the scale with the balance,
+  // so the `18` that used to sit in `formatUnits(nativeBal.value, 18)` is gone
+  // along with the pending/failed collapse that came with it.
+  const bal = useSpendableBalance({
+    holder: address, native: mode === "buy",
+    token: mode === "buy" ? undefined : l.tokenAddress, chainId: RH_CHAIN_ID,
+  });
+  const sellBalance = bal.balance;
   const amt = parseFloat(amount);
-  const overBalance = sellBalance != null && amt > sellBalance;
+  // FAIL-CLOSED — see lib/wallet/read-state.ts. `over` is only half a gate.
+  const gate = resolveSpend({
+    loading: bal.loading, received: bal.received, failed: bal.failed,
+    over: sellBalance != null && amt > sellBalance,
+  });
+  const overBalance = gate === "insufficient";
 
   // Debounced quote fetch (server-side pool discovery + GeckoTerminal price).
   const reqId = useRef(0);
@@ -575,7 +600,7 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
   const minOut = estimatedOut != null ? estimatedOut * (1 - slippagePct / 100) : null;
 
   // tokenDecimals is a hard precondition — it feeds parseUnits() into calldata.
-  const canSwap = !!address && hasPool && amt > 0 && !overBalance && !loadingQuote
+  const canSwap = !!address && hasPool && amt > 0 && gate === "ok" && !loadingQuote
     && tokenDecimals !== undefined && step !== "approving" && step !== "swapping";
   const busy = step === "approving" || step === "swapping";
 
@@ -583,6 +608,14 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
     if (!address) { setErr("Connect your wallet"); setStep("error"); return; }
     if (!hasPool || !quote?.pool) { setErr("No pool available for this token"); setStep("error"); return; }
     if (!amt || amt <= 0) { setErr("Enter an amount"); setStep("error"); return; }
+    // doSwap is what SIGNS, so it re-derives the verdict rather than trusting
+    // `canSwap` upstream of it.
+    if (gate !== "ok") {
+      setErr(gate === "unverified"
+        ? "Could not read your balance — refusing to sign a transaction that may not settle"
+        : gate === "insufficient" ? "Insufficient balance" : "Still reading your balance");
+      setStep("error"); return;
+    }
     // doSwap is what signs, so it re-checks the scale rather than trusting canSwap.
     if (tokenDecimals === undefined) {
       setErr("Could not read this token's decimals — refusing to build a transaction");
@@ -596,11 +629,14 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
       }
 
       // Compute base-unit amounts + slippage floor.
+      // Neither scale is written down: the token's comes from `decimals()` on
+      // the token, ETH's from the chain definition.
+      const outDecimals = mode === "buy" ? tokenDecimals : RH_NATIVE_DECIMALS;
       const amountInWei = mode === "buy"
-        ? parseUnits(amount, 18)          // ETH → wei
-        : parseUnits(amount, tokenDecimals); // token → base units
+        ? parseUnits(amount, RH_NATIVE_DECIMALS) // ETH → wei
+        : parseUnits(amount, tokenDecimals);     // token → base units
       const minOutBase = minOut != null
-        ? parseUnits(minOut.toFixed(mode === "buy" ? tokenDecimals : 18), mode === "buy" ? tokenDecimals : 18)
+        ? parseUnits(minOut.toFixed(outDecimals), outDecimals)
         : 0n;
 
       // Ask the server for calldata (also returns approve calldata for sells).
@@ -785,6 +821,9 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
                 contract — trading is disabled rather than guessing the token&apos;s scale.
               </p>
             )}
+            {gate === "unverified" && (
+              <UnverifiedBalance symbol={inSym} onRetry={() => { void bal.refetch(); }} busy={bal.refetching} />
+            )}
 
             <button onClick={doSwap} disabled={!canSwap || busy}
               className="w-full font-mono text-[12px] font-bold py-2.5 rounded-lg transition-all disabled:opacity-50"
@@ -797,6 +836,7 @@ function RobinhoodTradeModal({ l, onClose }: { l: Launch; onClose: () => void })
                 : busy ? (step === "approving" ? "Approve in wallet…" : "Confirm in wallet…")
                 : quote?.hasPool === false ? "No pool yet"
                 : overBalance ? "Insufficient balance"
+                : gate === "unverified" ? "Balance unread — held"
                 : mode === "buy"
                   ? `Buy ${tokenSym}${amt > 0 ? ` with ${fmtNum(amt)} ETH` : ""}`
                   : `Sell ${amt > 0 ? fmtNum(amt) : ""} ${tokenSym}`}
@@ -819,7 +859,13 @@ type ExploreData = {
   error?: string;
   network?: "mainnet" | "testnet";
   explorerUrl?: string;
-  info?: { holders_count: string | null; total_supply: string | null; exchange_rate: string | null };
+  // `decimals` was missing from this type while the route has always returned it
+  // (Blockscout's /api/v2/tokens/{addr}, see BlockscoutTokenInfo). Absent from
+  // the type, `fmtSupply` scaled every figure by a written-down 18 — so a 6-dp
+  // token's supply and every holder balance rendered 10^12 too large. Read-only,
+  // so no funds were at risk, but a wrong number shown as a fact is the same
+  // defect as the one this file's swap path just had.
+  info?: { holders_count: string | null; total_supply: string | null; exchange_rate: string | null; decimals: string | null };
   holders?: { address: { hash: string; is_contract: boolean }; value: string }[];
   holdersCount?: number;
   transfers?: {
@@ -844,9 +890,15 @@ function ExploreModal({ l, onClose }: { l: Launch; onClose: () => void }) {
       .finally(() => setLoading(false));
   }, [l.tokenAddress, network]);
 
+  // Scale comes from the token, via Blockscout. When it is absent the quantity
+  // is UNKNOWN, not eighteen — an integer with a guessed exponent is not a
+  // number we may render, so it degrades to the raw integer rather than to a
+  // confidently-wrong decimal.
+  const supplyDecimals = data?.info?.decimals != null ? Number(data.info.decimals) : null;
   function fmtSupply(raw: string | null | undefined): string {
     if (!raw) return "—";
-    try { return Number(formatUnits(BigInt(raw), 18)).toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+    if (supplyDecimals == null || !Number.isFinite(supplyDecimals)) return raw;
+    try { return Number(formatUnits(BigInt(raw), supplyDecimals)).toLocaleString("en-US", { maximumFractionDigits: 0 }); }
     catch { return raw; }
   }
   function fmtAgo(ts: string): string {

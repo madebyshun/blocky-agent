@@ -4,10 +4,10 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAccount, useReadContracts, useBalance, useReadContract, useWriteContract, useSwitchChain, usePublicClient, useSendTransaction, useCapabilities, useSendCalls, useCallsStatus } from "wagmi";
-import { formatUnits, parseUnits, parseEther, isAddress, namehash, encodeFunctionData } from "viem";
+import { formatUnits, parseUnits, isAddress, namehash, encodeFunctionData } from "viem";
 import { base } from "viem/chains";
 import { useName } from "@coinbase/onchainkit/identity";
-import { YIELD_NETWORKS, ERC20_ABI, AAVE_POOL_ABI, ERC4626_ABI, WITHDRAW_ALL, parseUsdc, supplyApyPct, VENUES, VENUE_LIST, type YieldNetwork, type VenueId } from "@/lib/yield-execution";
+import { YIELD_NETWORKS, ERC20_ABI, AAVE_POOL_ABI, ERC4626_ABI, WITHDRAW_ALL, supplyApyPct, VENUES, VENUE_LIST, type YieldNetwork, type VenueId } from "@/lib/yield-execution";
 import { useChat } from "../ChatContext";
 import { useBasename } from "@/lib/useBasename";
 import { DATA_SUFFIX } from "@/constants/builderCode";
@@ -18,6 +18,9 @@ import { useLang } from "@/lib/i18n/context";
 import { B20_ENABLED, B20_USDC } from "@/lib/orders";
 import { encodeTransferWithMemo, isValidMemo, MEMO_MAX_CHARS } from "@/lib/b20/encode";
 import { QRCodeSVG } from "qrcode.react";
+import { useSpendableBalance } from "@/lib/wallet/useSpendableBalance";
+import { resolveSpend } from "@/lib/wallet/read-state";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
 import { RobinhoodSwapCard, type RobinhoodSwapResult } from "./RobinhoodSwapCard";
 import { RobinhoodSendCard, type RobinhoodSendResult } from "./RobinhoodSendCard";
 import { RobinhoodBridgeCard, type RobinhoodBridgeResult } from "./RobinhoodBridgeCard";
@@ -1047,8 +1050,14 @@ function fmtTokenAmt(n: number, decimals: number): string {
 
 function PortfolioCard() {
   const { address, isConnected } = useAccount();
-  const { data: native } = useBalance({ address });
-  const { data, isLoading } = useReadContracts({
+  // Both queries are bound WHOLE. Destructuring `{ data }` alone throws away the
+  // difference between "still reading" and "could not read", and this card then
+  // spent both of them the same way: a greyed-out cell that reads as "you hold
+  // none of this". It signs nothing, so no funds were at risk — but it is the
+  // same defect as the spend gates below, one severity down, and the footer was
+  // calling the result "Live on-chain balances" either way.
+  const nativeQ = useBalance({ address });
+  const tokensQ = useReadContracts({
     contracts: PORTFOLIO_TOKENS.map(t => ({
       address:      t.address as `0x${string}`,
       abi:          ERC20_BALANCE_ABI,
@@ -1057,6 +1066,12 @@ function PortfolioCard() {
     })),
     query: { enabled: !!address },
   });
+  const native = nativeQ.data;
+  // `isPending`, not `isLoading`. `isLoading` is `isPending && isFetching`, so it
+  // goes FALSE the moment a read errors out — which would put a failed read back
+  // in the same bucket as a finished one. Both queries are enabled here (the
+  // no-address case returns above), so `isPending` means exactly "no answer yet".
+  const reading = nativeQ.isPending || tokensQ.isPending;
 
   if (!isConnected || !address) {
     return (
@@ -1066,15 +1081,22 @@ function PortfolioCard() {
     );
   }
 
-  const eth = native ? Number(formatUnits(native.value, 18)) : null;
+  // Scale comes from the response, not from a literal. `useBalance` reports the
+  // coin's own decimals; the fallback is only ever read when `native` is absent,
+  // in which case `amt` is null and no formatting happens.
+  const ethDec = native?.decimals ?? base.nativeCurrency.decimals;
+  const eth = native ? Number(formatUnits(native.value, ethDec)) : null;
   const rows = [
-    { sym: "ETH", color: "#627EEA", decimals: 18, amt: eth },
+    { sym: "ETH", color: "#627EEA", decimals: ethDec, amt: eth },
     ...PORTFOLIO_TOKENS.map((t, i) => {
-      const raw = data?.[i]?.result as bigint | undefined;
+      const raw = tokensQ.data?.[i]?.result as bigint | undefined;
       return { sym: t.sym, color: t.color, decimals: t.decimals,
                amt: raw !== undefined ? Number(formatUnits(raw, t.decimals)) : null };
     }),
   ];
+  // How much of this portfolio we actually read. Counted, not assumed — the
+  // footer below is the card's claim about itself and it has to be true.
+  const unread = rows.filter(r => r.amt === null).length;
 
   return (
     <div className="mt-2 rounded-xl border border-[#1A1A2E] bg-[#0a0a0f] p-3.5">
@@ -1084,19 +1106,28 @@ function PortfolioCard() {
       </div>
       <div className="grid grid-cols-3 gap-2">
         {rows.map(t => {
-          const isZero = !t.amt || t.amt === 0;
+          // An UNREAD balance is not a zero one. `!t.amt` treated them alike, so
+          // a failed read got the dimmed "you hold none of this" styling while
+          // the value beside it honestly said "—".
+          const isZero = t.amt !== null && t.amt === 0;
           return (
             <div key={t.sym}
               className={`rounded-lg border p-2 ${isZero ? "border-[#1A1A2E]/40 bg-[#0a0a0f]/40 opacity-50" : "border-[#1A1A2E] bg-[#0d0d12]"}`}>
               <div className="font-mono text-[9px] tracking-widest font-bold mb-0.5" style={{ color: t.color }}>{t.sym}</div>
               <div className="font-mono text-[12px] font-bold text-white leading-none truncate">
-                {isLoading && t.amt === null ? "…" : t.amt === null ? "—" : fmtTokenAmt(t.amt, t.decimals)}
+                {reading && t.amt === null ? "…" : t.amt === null ? "—" : fmtTokenAmt(t.amt, t.decimals)}
               </div>
             </div>
           );
         })}
       </div>
-      <p className="font-mono text-[9px] text-slate-700 mt-2.5">Live on-chain balances · read-only</p>
+      <p className="font-mono text-[9px] text-slate-700 mt-2.5">
+        {reading
+          ? "Reading on-chain balances…"
+          : unread > 0
+          ? `${rows.length - unread}/${rows.length} balances read · ${unread} unread, shown as —`
+          : "Live on-chain balances · read-only"}
+      </p>
     </div>
   );
 }
@@ -1984,63 +2015,97 @@ export function MoveToYieldCard({ result, account, withdrawOnly = false }: { res
   useEffect(() => { if (!VENUES[venue].nets[network]) setVenue("aave"); }, [network, venue]);
 
   // #1 Position — Aave: aToken.balanceOf (rebases). Morpho: vault.maxWithdraw
-  // (USDC-equivalent of your shares). Both in USDC units for display.
-  const { data: aaveBal, refetch: refetchAave } = useReadContract({
+  // (USDC-equivalent of your shares). Both in the underlying's units.
+  //
+  // These are POSITION reads, not wallet-balance reads, so they stay hand-rolled
+  // rather than going through useSpendableBalance. What they do NOT get to keep
+  // is the half-answer: a withdraw is gated on the position, so the whole query
+  // is bound here and its pending/error state is read, not just `.data`.
+  const aaveQ = useReadContract({
     address: vnet?.receipt, abi: ERC20_ABI, functionName: "balanceOf",
     args: address ? [address] : undefined, chainId,
     query: { enabled: !!address && isAave && !!vnet },
   });
+  // APY only — this one gates nothing, so a failed read degrades to "—".
   const { data: reserve } = useReadContract({
     address: vnet?.target, abi: AAVE_POOL_ABI, functionName: "getReserveData",
     args: vnet ? [vnet.usdc] : undefined, chainId,
     query: { enabled: isAave && !!vnet },
   });
-  const { data: morphoMaxW, refetch: refetchMorpho } = useReadContract({
+  const morphoQ = useReadContract({
     address: vnet?.target, abi: ERC4626_ABI, functionName: "maxWithdraw",
     args: address ? [address] : undefined, chainId,
     query: { enabled: !!address && !isAave && !!vnet },
   });
-  const { data: morphoShares } = useReadContract({
+  const morphoSharesQ = useReadContract({
     address: vnet?.receipt, abi: ERC20_ABI, functionName: "balanceOf",
     args: address ? [address] : undefined, chainId,
     query: { enabled: !!address && !isAave && !!vnet },
   });
 
-  const position = isAave
-    ? (aaveBal != null ? Number(formatUnits(aaveBal as bigint, 6)) : null)
-    : (morphoMaxW != null ? Number(formatUnits(morphoMaxW as bigint, 6)) : null);
+  // Basename identity + spendable wallet USDC. The hook also supplies the USDC
+  // SCALE, read from the token — which retires the three written-down copies
+  // this card used to carry (two bare `6`s below and a `usdcDecimals ?? 6`).
+  // Position and wallet share that scale, so a decimals read that failed makes
+  // both unknown, which is exactly right: neither is a quantity without it.
+  const { name: fromName } = useBasename(address);
+  const bal = useSpendableBalance({ holder: address, native: false, token: vnet?.usdc, chainId });
+  const walletUsdc = bal.balance;
+  const usdcDec = bal.decimals;
+
+  const position = usdcDec == null ? null : isAave
+    ? (aaveQ.data != null ? Number(formatUnits(aaveQ.data as bigint, usdcDec)) : null)
+    : (morphoQ.data != null ? Number(formatUnits(morphoQ.data as bigint, usdcDec)) : null);
   const venueRate = rates?.find(r => r.project === vcfg.llamaProject)?.apy ?? null;
   const apy = isAave && reserve
     ? supplyApyPct((reserve as { currentLiquidityRate: bigint }).currentLiquidityRate)
     : venueRate;
-  const refetchPos = () => { refetchAave?.(); refetchMorpho?.(); };
 
-  // Basename identity + spendable wallet USDC (balance-aware supply, Tier 1 #3).
-  const { name: fromName } = useBasename(address);
-  const { data: walletUsdcRaw } = useReadContract({
-    address: vnet?.usdc, abi: ERC20_ABI, functionName: "balanceOf",
-    args: address ? [address] : undefined, chainId,
-    query: { enabled: !!address && !!vnet },
-  });
-  const walletUsdc = walletUsdcRaw != null ? Number(formatUnits(walletUsdcRaw as bigint, vnet?.usdcDecimals ?? 6)) : null;
+  const posQ = isAave ? aaveQ : morphoQ;
+  const refetchPos = () => { void posQ.refetch(); if (!isAave) void morphoSharesQ.refetch(); void bal.refetch(); };
+
   const maxFor = action === "supply" ? walletUsdc : position; // supply caps at wallet, withdraw at position
-  function setMax() { if (maxFor != null) setAmount(String(maxFor)); }
+  function setMax() { if (maxFor != null) setAmount(String(maxFor)); } // the Max chip only renders when maxFor != null
 
   const amt = parseFloat(amount);
   const withdrawAll = action === "withdraw" && all;
-  const overMax = !withdrawAll && maxFor != null && amt > maxFor;
-  const valid = !!vnet && (withdrawAll || (amt > 0 && !overMax));
+  // Supply spends the WALLET, withdraw spends the POSITION — different reads,
+  // one gate. "Withdraw all" names no amount so it can never be over, but it
+  // still needs a position that was actually read: `redeem` against an unread
+  // share balance is the same signature on the same missing evidence.
+  const gate = resolveSpend({
+    loading:  action === "supply" ? bal.loading  : bal.loading || posQ.isLoading,
+    received: action === "supply" ? bal.received : bal.received && !posQ.isPending,
+    failed:   action === "supply" ? bal.failed
+      : bal.failed || posQ.isError || (!posQ.isPending && position == null),
+    over: !withdrawAll && maxFor != null && amt > maxFor,
+  });
+  const overMax = gate === "insufficient";
+  const valid = !!vnet && gate === "ok" && (withdrawAll || amt > 0);
   const busy = step === "switching" || step === "approving" || step === "supplying" || step === "withdrawing";
 
   async function run() {
     if (!address) { setErr("Connect your wallet first"); setStep("error"); return; }
     if (!vnet)    { setErr(`${vcfg.short} isn't available on ${net.short}`); setStep("error"); return; }
+    // Gate BEFORE the form check, and before anything is signed. It runs ahead
+    // of `!valid` on purpose: "we couldn't read your position" is a truer thing
+    // to say than "enter an amount", and `valid` folds the gate in, so checking
+    // it first would leave nothing here to narrow.
+    if (gate !== "ok" || usdcDec == null) {
+      setErr(gate === "insufficient"
+          ? (action === "supply" ? "Exceeds your wallet USDC" : "Exceeds your position")
+        : gate === "reading" ? "Still reading your balance — one moment"
+        : `Couldn't read your ${action === "supply" ? "wallet USDC" : "position"} — refusing to sign against a figure we don't have`);
+      setStep("error"); return;
+    }
     if (!valid)   { setErr("Enter an amount"); setStep("error"); return; }
     setErr(""); setTxHash("");
     try {
       setStep("switching");
       await switchChainAsync({ chainId });
-      const value = withdrawAll ? WITHDRAW_ALL : parseUsdc(amt, network);
+      // Scale read from the token, not from config — same number the balance
+      // above was scaled by, so the amount checked and the amount signed agree.
+      const value = withdrawAll ? WITHDRAW_ALL : parseUnits(String(amt), usdcDec);
 
       if (action === "supply") {
         setStep("approving");
@@ -2061,7 +2126,11 @@ export function MoveToYieldCard({ result, account, withdrawOnly = false }: { res
           wHash = await writeContractAsync({ address: vnet.target, abi: AAVE_POOL_ABI, functionName: "withdraw", args: [vnet.usdc, value, address], chainId });
         } else if (withdrawAll) {
           // ERC-4626 has no "max" sentinel — redeem the full share balance.
-          const shares = (morphoShares as bigint | undefined) ?? 0n;
+          // `?? 0n` used to collapse "read it, you have none" into "couldn't
+          // read it", and reported the first. Separate them: only one of the
+          // two is a statement about the user.
+          if (morphoSharesQ.data == null) throw new Error("Couldn't read your vault shares — not signing a redeem against a balance we never saw");
+          const shares = morphoSharesQ.data as bigint;
           if (shares === 0n) throw new Error("No position to withdraw");
           wHash = await writeContractAsync({ address: vnet.target, abi: ERC4626_ABI, functionName: "redeem", args: [shares, address, address], chainId });
         } else {
@@ -2237,12 +2306,23 @@ export function MoveToYieldCard({ result, account, withdrawOnly = false }: { res
 
       {step === "error" && <p className="font-mono text-[10px] text-amber-400 mb-2">{err}</p>}
 
+      {/* Names the side that actually failed — the wallet on a supply, the
+          position on a withdraw — and retries exactly that read. */}
+      {isConnected && !busy && gate === "unverified" && (
+        <UnverifiedBalance
+          symbol={action === "supply" ? "wallet USDC" : `${vcfg.short} position`}
+          onRetry={refetchPos}
+          busy={bal.refetching || posQ.isFetching || (!isAave && morphoSharesQ.isFetching)} />
+      )}
+
       <button onClick={run} disabled={busy || !valid || !isConnected}
         className="w-full font-mono text-[12px] font-bold py-2 rounded-lg transition-all disabled:opacity-50"
         style={action === "supply"
           ? { background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B40" }
           : { background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
-        {!isConnected ? "Connect your wallet to continue" : btnLabel}
+        {!isConnected ? "Connect your wallet to continue"
+          : !busy && gate === "unverified" ? "Balance unread — held"
+          : btnLabel}
       </button>
       <p className="font-mono text-[9px] text-slate-700 mt-1.5">
         {vcfg.label} · {net.label} · you sign every transaction · withdraw anytime.
@@ -2334,47 +2414,54 @@ export function SendCard({ result, account }: { result: SendResult; account?: `0
 
   // Basename as account identity + spendable balance (Tier 1 #3, balance-aware).
   const { name: fromName } = useBasename(fromAddr);
-  const { data: usdcBalRaw } = useReadContract({
-    address: net.usdc, abi: ERC20_ABI, functionName: "balanceOf",
-    args: fromAddr ? [fromAddr] : undefined, chainId,
-    query: { enabled: !!fromAddr && asset === "USDC" },
+  // ONE read for all three assets. Was three hand-rolled queries that each
+  // destructured only `.data`, so "still reading" and "could not read" were the
+  // same `null` and the guard below was FAIL-OPEN — a failed read enabled Send.
+  // B20 native is Base-mainnet-only, so it pins base.id regardless of `network`;
+  // when B20 is switched off the token is undefined and nothing is read, which
+  // leaves the gate at "reading" and the button disabled. Fail-closed by default.
+  const bal = useSpendableBalance({
+    holder: fromAddr,
+    native: asset === "ETH",
+    token: asset === "USDC" ? net.usdc : (isB20Asset && b20Available) ? B20_USDC : undefined,
+    chainId: isB20Asset ? base.id : chainId,
   });
-  const { data: ethBal } = useBalance({ address: fromAddr, chainId, query: { enabled: !!fromAddr && asset === "ETH" } });
-  const { data: b20BalRaw } = useReadContract({
-    address: B20_USDC as `0x${string}`, abi: ERC20_ABI, functionName: "balanceOf",
-    args: fromAddr ? [fromAddr] : undefined, chainId: base.id,
-    query: { enabled: !!fromAddr && isB20Asset && b20Available },
-  });
-  const balance = asset === "USDC"
-    ? (usdcBalRaw != null ? Number(formatUnits(usdcBalRaw as bigint, net.usdcDecimals)) : null)
-    : asset === "ETH"
-    ? (ethBal ? Number(formatUnits(ethBal.value, ethBal.decimals)) : null)
-    : (b20BalRaw != null ? Number(formatUnits(b20BalRaw as bigint, 6)) : null);
+  const balance = bal.balance;
   function setMax() {
-    if (balance == null) return;
+    if (balance == null) return; // unreachable — the whole "Bal … Max" line is behind `balance != null`
     setAmount(String(asset === "ETH" ? Math.max(0, balance - 0.00005) : balance)); // leave a little ETH for gas
   }
 
   const amt = parseFloat(amount);
-  const overBalance = balance != null && amt > balance;
+  // `balance != null && amt > balance` is fine HERE and only here: it answers
+  // "are we over", which is genuinely unknown on an unread balance. What it must
+  // never do is answer "may we sign" — resolveSpend supplies that half.
+  const gate = resolveSpend({
+    loading: bal.loading, received: bal.received, failed: bal.failed,
+    over: balance != null && amt > balance,
+  });
+  const overBalance = gate === "insufficient";
   const memoTooLong = isB20Asset && memo.trim().length > MEMO_MAX_CHARS;
-  const valid = !!toAddress && amt > 0 && !overBalance && !memoTooLong;
+  const valid = !!toAddress && amt > 0 && gate === "ok" && !memoTooLong;
   const busy = step === "switching" || step === "sending";
 
-  // Build the value-transfer call for the selected asset. B20 native routes
-  // through transferWithMemo when a memo is present (else a plain transfer);
-  // USDC/ETH paths are unchanged.
-  function buildTransferCall(to: `0x${string}`): { to: `0x${string}`; data?: `0x${string}`; value?: bigint } {
+  // Build the value-transfer call for the selected asset. The scale is passed
+  // IN — read off the token by useSpendableBalance — so the quantity signed and
+  // the balance it was checked against can never be at different exponents. The
+  // three literals that used to live here (net.usdcDecimals, 6, and parseEther's
+  // implicit 18) were three chances to disagree with the read. B20 native routes
+  // through transferWithMemo when a memo is present, else a plain transfer.
+  function buildTransferCall(to: `0x${string}`, dec: number): { to: `0x${string}`; data?: `0x${string}`; value?: bigint } {
     if (asset === "USDC") {
-      return { to: net.usdc, data: encodeFunctionData({ abi: ERC20_ABI, functionName: "transfer", args: [to, parseUnits(amount, net.usdcDecimals)] }) };
+      return { to: net.usdc, data: encodeFunctionData({ abi: ERC20_ABI, functionName: "transfer", args: [to, parseUnits(amount, dec)] }) };
     }
     if (asset === "ETH") {
-      return { to, value: parseEther(amount) };
+      return { to, value: parseUnits(amount, dec) };
     }
     // B20 native
     const data = isValidMemo(memo)
-      ? encodeTransferWithMemo({ to, amount, decimals: 6, memo })
-      : encodeFunctionData({ abi: ERC20_ABI, functionName: "transfer", args: [to, parseUnits(amount, 6)] });
+      ? encodeTransferWithMemo({ to, amount, decimals: dec, memo })
+      : encodeFunctionData({ abi: ERC20_ABI, functionName: "transfer", args: [to, parseUnits(amount, dec)] });
     return { to: B20_USDC as `0x${string}`, data };
   }
 
@@ -2382,6 +2469,17 @@ export function SendCard({ result, account }: { result: SendResult; account?: `0
     if (!fromAddr)  { setErr("Connect your wallet first"); setStep("error"); return; }
     if (!toAddress) { setErr(recipIsName ? "Couldn't resolve that name" : "Enter a valid address or .base name"); setStep("error"); return; }
     if (!(amt > 0)) { setErr("Enter an amount"); setStep("error"); return; }
+    // `valid` guards the CLICK; this guards the SIGNATURE. They read the same
+    // gate on purpose — the button can be re-enabled by a stale render, a
+    // keyboard submit, or a balance that went unreadable between paint and
+    // click, and none of those should reach a wallet prompt.
+    if (gate !== "ok" || bal.decimals == null) {
+      setErr(gate === "insufficient" ? `Amount exceeds your ${asset} balance`
+        : gate === "reading" ? "Still reading your balance — one moment"
+        : "Couldn't read your balance — refusing to sign a transfer that may not settle");
+      setStep("error"); return;
+    }
+    const dec = bal.decimals;
     setErr(""); setTxHash(""); setCallsId("");
     try {
       setStep("switching");
@@ -2397,7 +2495,7 @@ export function SendCard({ result, account }: { result: SendResult; account?: `0
       // status hook resolves the on-chain tx hash for both.
       const supportsSendCalls = !!walletCapabilities;
       if (supportsSendCalls) {
-        const call = buildTransferCall(toAddress);
+        const call = buildTransferCall(toAddress, dec);
         const origin = typeof window !== "undefined" ? window.location.origin : "";
         const dataSuffix = { value: DATA_SUFFIX, optional: true };
         const capabilities = gaslessSupported
@@ -2411,9 +2509,9 @@ export function SendCard({ result, account }: { result: SendResult; account?: `0
       // Legacy fallback — wallets without EIP-5792 (older EOAs). Unattributed:
       // builder-code attribution needs the sendCalls dataSuffix capability above.
       setIsEoa(true);
-      const call = buildTransferCall(toAddress);
+      const call = buildTransferCall(toAddress, dec);
       const hash = asset === "USDC"
-        ? await writeContractAsync({ address: net.usdc, abi: ERC20_ABI, functionName: "transfer", args: [toAddress, parseUnits(amount, net.usdcDecimals)], chainId })
+        ? await writeContractAsync({ address: net.usdc, abi: ERC20_ABI, functionName: "transfer", args: [toAddress, parseUnits(amount, dec)], chainId })
         : await sendTransactionAsync({ to: call.to, value: call.value, data: call.data, chainId });
       setTxHash(hash); setStep("done");
     } catch (e) {
@@ -2556,10 +2654,18 @@ export function SendCard({ result, account }: { result: SendResult; account?: `0
 
       {step === "error" && <p className="font-mono text-[10px] text-amber-400 mb-2">{err}</p>}
 
+      {/* The read failed — say so, and hand back the way out. Rendered only once
+          there IS a wallet, since a disconnected card has nothing to read yet. */}
+      {isConnected && !busy && gate === "unverified" && (
+        <UnverifiedBalance symbol={asset} onRetry={() => { void bal.refetch(); }} busy={bal.refetching} />
+      )}
+
       <button onClick={send} disabled={busy || !valid || !isConnected}
         className="w-full font-mono text-[12px] font-bold py-2 rounded-lg transition-all disabled:opacity-50"
         style={{ background: "#34D39915", color: "#34D399", border: "1px solid #34D39940" }}>
-        {!isConnected ? "Connect your wallet to continue" : btnLabel}
+        {!isConnected ? "Connect your wallet to continue"
+          : !busy && gate === "unverified" ? "Balance unread — held"
+          : btnLabel}
       </button>
       <p className="font-mono text-[9px] text-slate-700 mt-1.5">
         {net.label} · you sign every transaction · sends are final.
@@ -2612,17 +2718,24 @@ export function SwapCard({ result, account }: { result: SwapResult; account?: `0
   const buyNative  = buyAddr.toLowerCase()  === SWAP_NATIVE;
   const unresolved = !sellAddr || !buyAddr;
 
-  // On-chain decimals for non-native legs (native = 18). 0x works in base units.
-  const { data: sellDecRaw } = useReadContract({
-    address: sellAddr as `0x${string}`, abi: DECIMALS_ABI, functionName: "decimals",
-    chainId: base.id, query: { enabled: !!sellAddr && !sellNative },
+  // The SELL leg — balance and its scale, read as one pair. 0x works in base
+  // units, so the exponent is not cosmetic here: it is the difference between
+  // signing 1 USDG and signing 1e12 of them. `sellDec` is whatever the token
+  // said, never a literal.
+  const bal = useSpendableBalance({
+    holder: account, native: sellNative,
+    token: sellNative ? undefined : sellAddr, chainId: base.id,
   });
+  const balance = bal.balance;
+  const sellDec = bal.decimals;
+
+  // The BUY leg is display-only (we never spend it), so it keeps its own read.
+  // Native scale comes off the chain definition rather than a written-down 18.
   const { data: buyDecRaw } = useReadContract({
     address: buyAddr as `0x${string}`, abi: DECIMALS_ABI, functionName: "decimals",
     chainId: base.id, query: { enabled: !!buyAddr && !buyNative },
   });
-  const sellDec = sellNative ? 18 : (sellDecRaw != null ? Number(sellDecRaw) : undefined);
-  const buyDec  = buyNative  ? 18 : (buyDecRaw  != null ? Number(buyDecRaw)  : undefined);
+  const buyDec = buyNative ? base.nativeCurrency.decimals : (buyDecRaw != null ? Number(buyDecRaw) : undefined);
 
   const [amount, setAmount] = useState<string>(result.amountIn ?? "");
   const [quote,  setQuote]  = useState<ChatSwapQuote | null>(null);
@@ -2631,22 +2744,18 @@ export function SwapCard({ result, account }: { result: SwapResult; account?: `0
   const [err,  setErr]  = useState("");
   const [txHash, setTxHash] = useState("");
 
-  // Balance of the sell leg.
-  const { data: nativeBal } = useBalance({ address: account, chainId: base.id, query: { enabled: !!account && sellNative } });
-  const { data: erc20Bal } = useReadContract({
-    address: sellAddr as `0x${string}`, abi: ERC20_ABI, functionName: "balanceOf",
-    args: account ? [account] : undefined, chainId: base.id,
-    query: { enabled: !!account && !!sellAddr && !sellNative },
-  });
-  const balance = sellNative
-    ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
-    : (erc20Bal != null && sellDec != null ? Number(formatUnits(erc20Bal as bigint, sellDec)) : null);
-
   const amt = parseFloat(amount);
   const sellBase = amount && amt > 0 && sellDec != null
     ? (() => { try { return parseUnits(amount, sellDec).toString(); } catch { return ""; } })()
     : "";
-  const overBalance = balance != null && amt > balance;
+  // Three outcomes, not two. `balance != null && amt > balance` answers "are we
+  // over"; on its own it also answered "may we sign", and said yes on a read
+  // that never landed. resolveSpend keeps those two questions apart.
+  const gate = resolveSpend({
+    loading: bal.loading, received: bal.received, failed: bal.failed,
+    over: balance != null && amt > balance,
+  });
+  const overBalance = gate === "insufficient";
 
   // Debounced 0x quote.
   const reqId = useRef(0);
@@ -2667,11 +2776,11 @@ export function SwapCard({ result, account }: { result: SwapResult; account?: `0
   const minBuy    = quote?.minBuyAmount && buyDec != null ? Number(formatUnits(BigInt(quote.minBuyAmount), buyDec)) : null;
   const rate = buyAmount != null && amt > 0 ? buyAmount / amt : null;
 
-  const canSwap = !!account && !!quote?.transaction && amt > 0 && !overBalance && !loading && sellDec != null;
+  const canSwap = !!account && !!quote?.transaction && amt > 0 && gate === "ok" && !loading && sellDec != null;
   const busy = step === "approving" || step === "swapping";
 
   function setMax() {
-    if (balance == null) return;
+    if (balance == null) return; // unreachable — the "Bal … Max" line is behind `balance != null`
     setAmount(String(sellNative ? Math.max(0, balance - 0.00005) : balance));
   }
 
@@ -2679,6 +2788,15 @@ export function SwapCard({ result, account }: { result: SwapResult; account?: `0
     if (!account) { setErr("Connect your wallet"); setStep("error"); return; }
     if (quote?.needsKey) { setErr("Swap needs a 0x API key (ZEROX_API_KEY)"); setStep("error"); return; }
     if (!quote?.transaction || sellDec == null) { setErr(quote?.error || "No route for this pair"); setStep("error"); return; }
+    // A swap signs TWICE on an ERC-20 sell — approve, then the swap itself. An
+    // unread balance stops it here rather than after the approve has already
+    // been paid for and left dangling.
+    if (gate !== "ok") {
+      setErr(gate === "insufficient" ? `Exceeds your ${sellSym} balance`
+        : gate === "reading" ? "Still reading your balance — one moment"
+        : "Couldn't read your balance — refusing to sign a swap that may not settle");
+      setStep("error"); return;
+    }
     setErr(""); setTxHash("");
     try {
       await switchChainAsync({ chainId: base.id });
@@ -2784,11 +2902,16 @@ export function SwapCard({ result, account }: { result: SwapResult; account?: `0
       {quote?.error && !quote.needsKey && !loading && amt > 0 && <p className="font-mono text-[9px] text-amber-400 mb-2">No route found for this pair.</p>}
       {step === "error" && <p className="font-mono text-[10px] text-amber-400 mb-2">{err}</p>}
 
+      {isConnected && !busy && gate === "unverified" && (
+        <UnverifiedBalance symbol={sellSym} onRetry={() => { void bal.refetch(); }} busy={bal.refetching} />
+      )}
+
       <button onClick={doSwap} disabled={!canSwap || busy}
         className="w-full font-mono text-[12px] font-bold py-2.5 rounded-lg transition-all disabled:opacity-50"
         style={{ background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
         {!isConnected ? "Connect your wallet"
           : busy ? (step === "approving" ? "Approve in wallet…" : "Confirm in wallet…")
+          : gate === "unverified" ? "Balance unread — held"
           : overBalance ? "Insufficient balance"
           : amt > 0 ? `Swap ${fmtSwapNum(amt)} ${sellSym}` : "Enter an amount"}
       </button>
