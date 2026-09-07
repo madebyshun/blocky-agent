@@ -218,7 +218,7 @@ For swaps: always show preview, require confirmation.`
  */
 
 /** Facts and prohibitions. Nothing here names a tool or asks for a call. */
-const b20Knowledge = (hasTools: boolean) => `## B20 Token Awareness (Beryl upgrade, live June 25 2026)
+const b20Knowledge = (hasTools: boolean) => `## B20 Token Awareness (Beryl upgrade — live on Base mainnet)
 B20 is the Base Native Token Standard — a Rust PRECOMPILE (not a Solidity contract).
 Full ERC-20 selector compatibility. Two variants: Asset (RWA/compliance) and Stablecoin (mint/burn).
 

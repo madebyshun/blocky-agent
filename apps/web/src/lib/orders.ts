@@ -2,8 +2,20 @@
 
 // Blue Bank orders + invoices — localStorage-backed payment requests settled in
 // B20 USDC via transferWithMemo (Memo.memo === stringToHex(orderId) flips a
-// request pending → paid). Gated behind NEXT_PUBLIC_B20_ENABLED until B20
-// mainnet (June 25); the on-chain settlement/listener is wired when enabled.
+// request pending → paid).
+//
+// Gated behind NEXT_PUBLIC_B20_ENABLED. This comment used to say "until B20
+// mainnet (June 25)", which read as "the gate opens on that date". It does not:
+// the gate is an env var, and it is NOT SET in production (measured 2026-09-06
+// against all 42 production vars). B20 itself has been active on Base mainnet
+// since well before then — the ActivationRegistry says so on-chain — so the two
+// facts are independent and the date explained neither.
+//
+// While the flag is off, `markPaid` is unreachable: its only two call sites (the
+// Memo watcher in OrdersPanel and the Pay button on /pay/[address]) both return
+// early on !B20_ENABLED. Orders can be created and shared; nothing can move one
+// out of Pending. Say that in any copy you write about this — do not describe it
+// as settlement that is merely "coming".
 
 export const B20_ENABLED = process.env.NEXT_PUBLIC_B20_ENABLED === "true";
 

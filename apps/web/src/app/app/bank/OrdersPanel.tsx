@@ -135,10 +135,37 @@ export default function OrdersPanel() {
         </button>
       </div>
 
+      {/* States what is true today, and promises no date.
+
+          It used to read "…go live at B20 mainnet (June 25)" — future tense
+          about a day that has since passed, so from June 26 onward the panel
+          quoted a deadline it had already missed to every user who opened it.
+          Nobody noticed for 74 days, and the reason is structural: a promise
+          with a date in it goes stale SILENTLY. The string never changes, only
+          the calendar does, so there is nothing for a type-check or a test to
+          fail on. Do not write another one.
+
+          It also understated the outage. `markPaid` has exactly two call sites
+          repo-wide — the Memo watcher above (returns early on !B20_ENABLED) and
+          the payer's button on /pay/[address] (same gate) — so with the flag
+          off NOTHING can move an order out of Pending. The old copy said
+          auto-settlement and paid-detection were pending, which reads as "it
+          will reconcile later"; in fact the pending → paid transition does not
+          exist on this deployment at all. Say the whole thing.
+
+          A shipping claim needs the flag that gates the shipping code. While
+          that flag is off the honest report is the CURRENT state, never a
+          forecast. Two sibling surfaces carried the same rot and are fixed in
+          this commit: the wallet's mission list asserted the mirror image
+          ("B20 payments live", date-gated, contradicting this very box), and
+          the PUBLIC /pay/[address] button — the one a merchant sends to a
+          customer — showed a disabled "go live June 25". */}
       {!B20_ENABLED && (
         <div className="rounded-lg px-2.5 py-2 mb-3" style={{ border: "1px solid #F59E0B30", background: "#F59E0B0d" }}>
           <p className="font-mono text-[9px] text-[#F59E0B] leading-relaxed">
-            Payment links work now. B20 USDC auto-settlement + paid-status detection go live at B20 mainnet (June 25).
+            B20 USDC settlement is not enabled on this deployment, so orders
+            stay Pending — nothing can mark one Paid. Links still record and
+            share the amount; collect payment another way for now.
           </p>
         </div>
       )}

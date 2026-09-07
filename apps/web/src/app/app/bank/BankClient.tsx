@@ -840,12 +840,40 @@ export default function BankPage() {
       allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} supplied — withdrawable any time`, action: "Withdraw", onAction: () => openAction("withdraw"), color: "#34D399" });
     if (ethBal != null && ethBal < 0.005)
       allMissions.push({ priority: "warn", icon: "⛽", text: "ETH too low for gas fees", action: "Get ETH", onAction: () => openAction("convert"), color: "#F59E0B" });
-    // "Try" used to call `openAction("orders")`. With B20_ENABLED off that
-    // opened the action modal onto a panel whose tab had been filtered out of
-    // TABS and whose body had no branch — a modal containing a close button and
-    // nothing else. It now scrolls to a tab that always exists.
-    if (new Date() >= new Date("2026-06-25"))
-      allMissions.push({ priority: "info", icon: "⚡", text: "Beryl live — B20 payments + faster L1 withdrawals", action: "Try", onAction: () => setView("orders"), color: "#4FC3F7" });
+    // A fourth mission used to sit here:
+    //
+    //   if (new Date() >= new Date("2026-06-25"))
+    //     "⚡ Beryl live — B20 payments + faster L1 withdrawals"  [Try]
+    //
+    // It is gone, for two reasons that compound.
+    //
+    // 1. THE CLAIM IS FALSE IN PRODUCTION. B20 payments are gated on
+    //    `NEXT_PUBLIC_B20_ENABLED` (lib/orders.ts), and that variable is not
+    //    set in the production project — measured, 42 vars, not one of them
+    //    this. So the wallet asserted a capability the build had compiled out.
+    //    Same family as #143/#166: advertising something the product cannot do.
+    //
+    //    The root cause is the gate itself. A CALENDAR DATE cannot know whether
+    //    a feature shipped — it only knows that a day someone once expected it
+    //    on has passed. The flag knows. Anything that announces B20 must be
+    //    gated on `B20_ENABLED`, never on a date.
+    //
+    // 2. IT WAS NOT A MISSION. Per this list's own definition four lines up, a
+    //    mission is advice about the user's position. This was a product
+    //    announcement, and a date-gated one, so from 2026-06-25 it was
+    //    unconditionally true forever: a permanent banner holding one of only
+    //    three slots, still calling a 74-day-old upgrade news.
+    //
+    // Those two hid each other. Because it never changed, it read as furniture
+    // and nobody re-checked the claim; because the claim was in an "info" chip
+    // rather than a control, nothing failed when it was wrong. The `Try` button
+    // led to OrdersPanel, which — being honestly gated on the flag — told the
+    // user the opposite in the same click: B20 settlement "goes live June 25",
+    // future tense, 74 days after that date. Two surfaces, one flag, opposite
+    // stories. OrdersPanel's copy is fixed in this commit too.
+    //
+    // When B20 actually ships, the place to say so is OrdersPanel, gated on
+    // B20_ENABLED, where the feature lives.
   }
   const topMissions = allMissions.slice(0, 3);
   // Gated on the BALANCE READ, not on `total`.
