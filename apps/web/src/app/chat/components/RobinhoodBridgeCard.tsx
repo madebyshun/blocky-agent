@@ -10,12 +10,14 @@
 
 import { useEffect, useState } from "react";
 import {
-  useAccount, useSwitchChain, useSendTransaction, useReadContract, useBalance, useChainId,
+  useAccount, useSwitchChain, useSendTransaction, useChainId,
   useWaitForTransactionReceipt,
 } from "wagmi";
-import { formatUnits, isAddress } from "viem";
+import { formatUnits } from "viem";
 import { ConnectButton } from "@/components/ConnectModal";
-import { TokenGlyph, ChainDot, ConfirmPreview, resolveQuantity } from "./ConfirmCardParts";
+import { TokenGlyph, ChainDot, ConfirmPreview, resolveQuantity, UnverifiedBalance } from "./ConfirmCardParts";
+import { useSpendableBalance } from "./useSpendableBalance";
+import { resolveSpend } from "@/lib/wallet/read-state";
 
 // Chain metadata — hard-coded rather than reused from viem, so this card has
 // no cross-file coupling to the wagmi config. Base blue vs Robinhood green
@@ -36,11 +38,11 @@ const CHAINS = {
 } as const;
 type ChainKey = keyof typeof CHAINS;
 
-// Minimal ERC-20 balanceOf ABI — matches the shape RobinhoodSendCard uses.
-const BALANCE_OF_ABI = [
-  { name: "balanceOf", type: "function", stateMutability: "view",
-    inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
-] as const;
+// The local balanceOf ABI that used to live here is gone with the hand-rolled
+// balance read it served — see useSpendableBalance, which reads `decimals`
+// alongside `balanceOf` from the shared ERC20_ABI. "Matches the shape
+// RobinhoodSendCard uses" was the old comment, and matching a shape is exactly
+// how three cards came to share one bug.
 
 /** Marker shape the /api/chat handler emits for `robinhood_bridge`. */
 export interface RobinhoodBridgeResult {
@@ -85,15 +87,25 @@ function shortAddr(a: string): string {
   return a.length > 10 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
 }
 
-function fmtAmount(raw: string | number | undefined, decimals: number): string {
+/**
+ * Format a server-supplied amount for display. `decimals` is nullable and the
+ * null case is the point: a long all-digits string is BASE UNITS, and base
+ * units without a scale are not a quantity. The old signature took a plain
+ * `number` and the caller supplied `?? 18`, so an absent scale silently became
+ * eighteen — the same substitution that made 1,000 USDG read as a millionth of
+ * a cent elsewhere in this file. Unknown scale now renders "" rather than a
+ * confident wrong number, and never the raw integer.
+ */
+function fmtAmount(raw: string | number | undefined, decimals: number | null): string {
   if (raw == null || raw === "") return "";
-  // If it's a base-units bigint-y string, format it; if it's already decimal, pass through.
   const asStr = String(raw);
   if (/^\d+$/.test(asStr) && asStr.length > 6) {
+    if (decimals == null) return "";
     try {
       const n = Number(formatUnits(BigInt(asStr), decimals));
       if (Number.isFinite(n)) return n.toLocaleString("en-US", { maximumFractionDigits: 6 });
-    } catch { /* fall through */ }
+    } catch { /* unscalable — fall to "" below, never print base units */ }
+    return "";
   }
   const n = typeof raw === "number" ? raw : parseFloat(asStr);
   if (!Number.isFinite(n)) return String(raw);
@@ -134,27 +146,28 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   const [approveHash, setApproveHash] = useState<`0x${string}` | "">("");
   const [txHash, setTxHash]           = useState<`0x${string}` | "">("");
 
-  // Balance for the sender on the SOURCE chain — used to show "insufficient
-  // balance" before the user signs. ERC-20 for a token address, native for ETH.
-  const { data: nativeBal } = useBalance({
-    address: fromAddress || undefined,
+  // Balance for the sender on the SOURCE chain — used to gate the signature.
+  // ERC-20 for a token address, native for ETH; the chain is `fromCfg.id`,
+  // which is Base OR Robinhood depending on direction, so the read is
+  // explicitly chain-scoped (CLAUDE.md rule 1 — the two share no state).
+  //
+  // Deleted here:
+  //
+  //     const decimals = prep?.meta?.token.decimals ?? 18;
+  //
+  // which reads like deference to the server and is not. `prep` only exists
+  // after the prepare fetch; the prepare fetch is gated on `amount`; and for a
+  // quantity word `amount` is resolved FROM this balance, which needs decimals.
+  // The dependency is circular, so `18` was not a fallback — it was the value,
+  // every time, including for USDG's 6.
+  const bal = useSpendableBalance({
+    holder:  fromAddress,
+    native:  isNative,
+    token:   isNative ? undefined : rawToken,
     chainId: fromCfg.id,
-    query:   { enabled: !!fromAddress && isNative },
   });
-  const { data: erc20Bal } = useReadContract({
-    address:      isNative ? undefined : (isAddress(rawToken) ? (rawToken as `0x${string}`) : undefined),
-    abi:          BALANCE_OF_ABI,
-    functionName: "balanceOf",
-    args:         fromAddress ? [fromAddress] : undefined,
-    chainId:      fromCfg.id,
-    query:        { enabled: !!fromAddress && !isNative && isAddress(rawToken) },
-  });
-
-  const decimals = prep?.meta?.token.decimals ?? 18;
-  const symbol   = (prep?.meta?.token.symbol || tokenSymHint || (isNative ? "ETH" : "TOKEN")).replace(/^\$/, "");
-  const balance  = isNative
-    ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
-    : (erc20Bal != null ? Number(formatUnits(erc20Bal as bigint, decimals)) : null);
+  const symbol  = (prep?.meta?.token.symbol || tokenSymHint || (isNative ? "ETH" : "TOKEN")).replace(/^\$/, "");
+  const balance = bal.balance;
 
   // The amount may be a quantity word ("all"/"max"/"half"/"N%") — resolve it
   // against the SOURCE-chain balance we just read (#137/#138). Native ETH keeps
@@ -170,7 +183,18 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
   const amtLabel = q.value != null && q.value > 0
     ? q.value.toLocaleString("en-US", { maximumFractionDigits: 6 })
     : (q.symbolic ? "…" : "0.0");
-  const overBalance = balance != null && q.value != null && q.value > balance;
+  // THREE outcomes, not two. The old guard was
+  //     balance != null && q.value != null && q.value > balance
+  // which is false when the read FAILED — fail-open, so an unreadable balance
+  // enabled the button and sent the user to pay gas on the source chain for a
+  // bridge that cannot settle.
+  const gate = resolveSpend({
+    loading:  bal.loading,
+    received: bal.received,
+    failed:   bal.failed,
+    over:     balance != null && q.value != null && q.value > balance,
+  });
+  const overBalance = gate === "insufficient";
 
   // Watch the primary tx until the SOURCE-chain RPC returns a receipt — that's
   // the point where the funds are handed off to the Relay solvers and the
@@ -236,9 +260,13 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
       return;
     }
     if (!amount) {
-      // A quantity word ("all"/"max"/…) still resolving against the source-chain
-      // balance — wait (keep the spinner), don't error or round-trip Relay yet.
-      setLoading(true);
+      // A quantity word ("all"/"max"/…) with no number yet. Keep the spinner
+      // ONLY while the balance read is genuinely in flight. `setLoading(true)`
+      // unconditionally was a permanent "Preparing…" with no error and no way
+      // out whenever that read failed — the balance never arrives, so the word
+      // never resolves, so `amount` stays "" forever. Same defect, same fix, as
+      // in the send card.
+      setLoading(gate === "reading");
       setPrepErr("");
       return;
     }
@@ -276,12 +304,16 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [fromChain, toChain, fromAddress, recipient, rawToken, amount]);
+    // `gate` is a dep because the wait branch above reads it — without it the
+    // spinner would keep whatever value it had when the balance read began.
+  }, [fromChain, toChain, fromAddress, recipient, rawToken, amount, gate]);
 
   const wrongChain = isConnected && walletChainId !== fromCfg.id;
   const needsApprove = !!prep?.approve && !approveHash;
 
-  const canSign = !!prep?.tx && !prepErr && !loading && !overBalance
+  // `gate === "ok"` replaces `!overBalance` — it additionally requires that the
+  // balance was actually READ, so an unread balance blocks instead of passing.
+  const canSign = !!prep?.tx && !prepErr && !loading && gate === "ok"
     && step !== "switching" && step !== "approving" && step !== "sending" && step !== "delivering";
   const busy = step === "switching" || step === "approving" || step === "sending" || step === "delivering";
 
@@ -358,8 +390,13 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
     );
   }
 
+  // The server states the token's decimals in the SAME payload as `amountOut`,
+  // so that is the authority for scaling it — and the only one. If the field is
+  // absent we don't know the scale, and fmtAmount renders "" instead of the
+  // `?? 18` that used to sit here.
   const amountOutDisplay = prep?.meta
-    ? fmtAmount(prep.meta.amountOut, prep.meta.token.decimals || decimals)
+    ? fmtAmount(prep.meta.amountOut,
+        Number.isFinite(prep.meta.token?.decimals) ? prep.meta.token.decimals : null)
     : "";
   const shortRecipient = (recipient || fromAddress) ? shortAddr(recipient || fromAddress) : "";
 
@@ -417,11 +454,21 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
             }}
           />
 
-          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to. */}
-          {q.symbolic && (
+          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to.
+              Suppressed once the read has failed: "Resolving your balance…" is a
+              promise that an answer is coming, and there is no longer one. The
+              banner below says what actually happened and offers the way out. */}
+          {q.symbolic && gate !== "unverified" && (
             <div className="text-[9px] text-[#34D399] mb-2">
               {q.value != null ? `${q.word} → ${amtLabel} ${symbol}` : "Resolving your balance…"}
             </div>
+          )}
+
+          {/* The source-chain balance read failed. Fail-closed: the button is
+              already disabled by `gate === "ok"`, so this is the only thing that
+              tells the user why — and the retry is the way out of the gate. */}
+          {gate === "unverified" && (
+            <UnverifiedBalance symbol={symbol} onRetry={() => { void bal.refetch(); }} busy={bal.refetching} />
           )}
 
           {/* Small meta text: relayer fee · est fill · recipient · balance.
@@ -479,12 +526,16 @@ export function RobinhoodBridgeCard({ result }: { result: RobinhoodBridgeResult 
             style={{ background: "#34D39915", color: "#34D399", border: "1px solid #34D39940" }}
           >
             {!isConnected ? "Connect your wallet"
-              : loading   ? "Fetching quote…"
-              : prepErr   ? "Retry"
+              // The in-flight states come first: once a signature is sitting in
+              // the wallet, a background re-read that flips to `failed` must not
+              // relabel a live bridge as a balance problem.
               : busy && step === "switching"  ? `Switching to ${fromCfg.label}…`
               : busy && step === "approving"  ? "Approving in wallet…"
               : busy && step === "sending"    ? "Confirm in wallet…"
               : busy && step === "delivering" ? "Delivering on destination…"
+              : gate === "unverified" ? "Balance unread"
+              : loading   ? "Fetching quote…"
+              : prepErr   ? "Retry"
               : wrongChain    ? `Switch to ${fromCfg.label}`
               : overBalance   ? "Insufficient balance"
               : needsApprove  ? `Approve ${symbol}`

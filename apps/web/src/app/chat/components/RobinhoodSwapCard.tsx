@@ -8,11 +8,13 @@
 // Non-custodial: server holds no keys, on-chain math bounds the final amount.
 
 import { useEffect, useRef, useState } from "react";
-import { useAccount, useSwitchChain, useSendTransaction, useReadContract, useBalance, usePublicClient } from "wagmi";
-import { parseUnits, formatUnits } from "viem";
+import { useAccount, useSwitchChain, useSendTransaction, usePublicClient } from "wagmi";
+import { parseUnits } from "viem";
 import { ERC20_ABI } from "@/lib/yield-execution";
 import { ConnectButton } from "@/components/ConnectModal";
-import { TokenGlyph, ConfirmPreview, resolveQuantity, clampDecimals } from "./ConfirmCardParts";
+import { TokenGlyph, ConfirmPreview, resolveQuantity, clampDecimals, UnverifiedBalance } from "./ConfirmCardParts";
+import { useSpendableBalance } from "./useSpendableBalance";
+import { resolveSpend } from "@/lib/wallet/read-state";
 
 const RH_ROUTER = "0x3bb0e9E3dB75faDC5f1f8b7D7B9D761Ef15cd23D" as const;
 const RH_CHAIN_ID = 4663;
@@ -117,35 +119,49 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
   const [err, setErr] = useState("");
   const [txHash, setTxHash] = useState("");
 
-  // Balances (native ETH for buy, ERC-20 for sell OR when tokenIn is set).
-  const { data: nativeBal } = useBalance({
-    address, chainId: RH_CHAIN_ID, query: { enabled: !!address && direction === "buy" && !isT2T },
+  // The balance of whatever this swap SPENDS: native ETH on a buy, the token
+  // on a sell, tokenIn on a token→token. One hook, so decimals are READ rather
+  // than assumed and "still reading" stays distinct from "could not read".
+  //
+  // Deleted here, and worth naming because it was live on chain 4663:
+  //
+  //     formatUnits(tokenBal as bigint, 18)   ← three times, one per branch
+  //
+  // USDG is 6 decimals, so a wallet holding 1,000 USDG read as 0.000000000001:
+  // "swap all my USDG" resolved to dust, and any real amount tripped the
+  // over-balance guard so the confirm button said "Insufficient balance" and
+  // was DISABLED on a wallet that held plenty. This same file already knew —
+  // its readDecimals() comment ~90 lines below says so — and fixed only the
+  // copy at prepare time. That is the whole argument for one shared read.
+  const isNativeIn = !isT2T && direction === "buy";
+  const bal = useSpendableBalance({
+    holder:  address,
+    native:  isNativeIn,
+    token:   isT2T ? tokenInAddr : (direction === "sell" ? token : undefined),
+    chainId: RH_CHAIN_ID,
   });
-  // For sell → use the "token_address" balance. For T2T → use the tokenIn balance.
-  const balanceOfAddress: `0x${string}` | undefined = isT2T
-    ? (tokenInAddr || undefined)
-    : (direction === "sell" ? (token || undefined) : undefined);
-  const { data: tokenBal } = useReadContract({
-    address: balanceOfAddress, abi: ERC20_ABI, functionName: "balanceOf",
-    args: address ? [address] : undefined, chainId: RH_CHAIN_ID,
-    query: { enabled: !!address && !!balanceOfAddress },
-  });
-  const balance = isT2T
-    ? (tokenBal != null ? Number(formatUnits(tokenBal as bigint, 18)) : null)
-    : direction === "buy"
-      ? (nativeBal ? Number(formatUnits(nativeBal.value, 18)) : null)
-      : (tokenBal != null ? Number(formatUnits(tokenBal as bigint, 18)) : null);
+  const balance = bal.balance;
 
   // Resolve a symbolic amount against the balance we just read. On a BUY the
   // input is native ETH → keep a gas reserve; on sell / token→token the input
   // is the ERC-20 (gas is paid in ETH, separately), so no reserve.
-  const q = resolveQuantity(initialAmt, balance, { isNative: !isT2T && direction === "buy" });
+  const q = resolveQuantity(initialAmt, balance, { isNative: isNativeIn });
   // Non-symbolic → keep the LLM's exact string (avoids exponential re-format of
   // tiny numbers like "0.0000001", which parseUnits/servers reject). Symbolic →
   // the resolved balance-fraction as a plain decimal string.
   const amount = q.symbolic ? (q.value != null ? String(q.value) : "") : initialAmt;
   const amt = q.value ?? NaN;
-  const overBalance = balance != null && Number.isFinite(amt) && amt > balance;
+  // THREE outcomes, not two. The old guard was
+  //     balance != null && Number.isFinite(amt) && amt > balance
+  // which is false when the read FAILED — fail-open, so an unreadable balance
+  // enabled the button and sent the user to pay gas for a doomed swap.
+  const gate = resolveSpend({
+    loading:  bal.loading,
+    received: bal.received,
+    failed:   bal.failed,
+    over:     balance != null && Number.isFinite(amt) && amt > balance,
+  });
+  const overBalance = gate === "insufficient";
 
   // Debounced quote fetch — /api/robinhood/swap/quote for ETH↔token,
   // GeckoTerminal-only for token→token (that endpoint doesn't handle it).
@@ -205,7 +221,9 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
   const slippageFrac = isT2T ? slippageBps / 10000 : slippagePct / 100;
   const minOut = estimatedOut != null ? estimatedOut * (1 - slippageFrac) : null;
   const anyLoading = isT2T ? loadingT2T : loadingQuote;
-  const canSwap = !!address && hasPool && amt > 0 && !overBalance && !anyLoading && step !== "approving" && step !== "swapping";
+  // `gate === "ok"` replaces `!overBalance` — it additionally requires that the
+  // balance was actually READ, so an unread balance blocks instead of passing.
+  const canSwap = !!address && hasPool && amt > 0 && gate === "ok" && !anyLoading && step !== "approving" && step !== "swapping";
   const busy = step === "approving" || step === "swapping";
 
   async function doSwap() {
@@ -218,23 +236,45 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
       try { await switchChainAsync({ chainId: RH_CHAIN_ID }); } catch {
         throw new Error("Switch to Robinhood Chain (4663) and try again");
       }
-      // Read on-chain decimals for tokenIn + tokenOut instead of assuming 18.
-      // Hardcoding 18 was a real bug: USDG has 6 decimals, so any USDG side
-      // of a swap got the amount scaled by 10^12 too large — router reverted
-      // amountOutMinimum check and MetaMask showed "likely to fail".
-      // Fail-soft: if the read errors (RPC hiccup), fall back to 18 with a
-      // warning — safer than throwing here mid-flow.
-      const inTokenAddr = isT2T ? tokenInAddr : (direction === "sell" ? token : null);
+      // Decimals for BOTH sides — read, never assumed. Hardcoding 18 was a real
+      // bug: USDG has 6 decimals, so any USDG side of a swap got the amount
+      // scaled by 10^12 too large, the router reverted its amountOutMinimum
+      // check, and MetaMask showed "likely to fail".
+      //
+      // This block used to fall back to `18` when the read errored and called
+      // that "fail-soft". It is not soft. A wrong exponent is a wrong AMOUNT —
+      // off by a factor of a million on USDG — so the swap that follows is not
+      // a degraded swap, it is a doomed one that still costs gas. It now fails
+      // CLOSED, the same rule the balance gate above follows: "we could not
+      // check" is not "go ahead". A retry costs the user nothing.
+      //
+      // The INPUT side is not re-read here at all. useSpendableBalance already
+      // read it on-chain — that read is what produced the balance this swap was
+      // gated against, and `gate === "ok"` is what let us reach this line.
+      // Reading the same value twice in one file is precisely how the two
+      // copies drifted, and how the balance copy kept the bug this comment
+      // describes for ninety lines above it.
+      const nativeDec = rhPublicClient?.chain?.nativeCurrency?.decimals;
+      const inDec = bal.decimals;
+      if (inDec == null) throw new Error(`Could not read ${inSym} decimals on Robinhood Chain — try again.`);
+      // Out side: the ERC-20 for a buy or a token→token, native ETH on a sell.
       const outTokenAddr = isT2T ? token : (direction === "buy" ? token : null);
-      const ERC20_DEC_ABI = [{ type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] }] as const;
-      async function readDecimals(addr: `0x${string}` | null): Promise<number> {
-        if (!addr || !rhPublicClient) return 18;
+      let outDec: number;
+      if (outTokenAddr) {
+        if (!rhPublicClient) throw new Error("No Robinhood Chain RPC — try again.");
         try {
-          const d = await rhPublicClient.readContract({ address: addr, abi: ERC20_DEC_ABI, functionName: "decimals" });
-          return Number(d);
-        } catch { return 18; }
+          outDec = Number(await rhPublicClient.readContract({
+            address: outTokenAddr as `0x${string}`, abi: ERC20_ABI, functionName: "decimals",
+          }));
+        } catch {
+          throw new Error(`Could not read ${outSym} decimals on Robinhood Chain — try again.`);
+        }
+      } else {
+        // Native ETH. Taken from the chain's own config rather than written
+        // down, so this file holds no decimals literal that can drift.
+        if (nativeDec == null) throw new Error("Could not read the chain's native decimals — try again.");
+        outDec = nativeDec;
       }
-      const [inDec, outDec] = await Promise.all([readDecimals(inTokenAddr as `0x${string}` | null), readDecimals(outTokenAddr as `0x${string}` | null)]);
       // Truncate to the token's own decimals — a resolved "half"/"N%" can carry
       // more fractional digits than the token supports, and parseUnits throws on
       // that. Floor (never round up) so we can't exceed the real balance.
@@ -416,8 +456,11 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
             right={{ glyph: <TokenGlyph symbol={outSym} />, top: previewOut, bottom: outSym }}
           />
 
-          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to. */}
-          {q.symbolic && (
+          {/* Quantity-word hint — shows what "all"/"max"/"half"/"N%" resolved to.
+              Suppressed once the read has failed: "Resolving your balance…" is a
+              promise that an answer is coming, and there is no longer one. The
+              banner below says what actually happened and offers the way out. */}
+          {q.symbolic && gate !== "unverified" && (
             <div className="text-[9px] text-[#4FC3F7] mb-2">
               {q.value != null ? `${q.word} → ${fmtNum(q.value)} ${inSym}` : "Resolving your balance…"}
             </div>
@@ -445,6 +488,13 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
               </div>
             )}
           </div>
+
+          {/* The balance read failed. Fail-closed: the button is already
+              disabled by `gate === "ok"`, so this is the only thing that tells
+              the user why — and the retry is the way out of the gate. */}
+          {gate === "unverified" && (
+            <UnverifiedBalance symbol={inSym} onRetry={() => { void bal.refetch(); }} busy={bal.refetching} />
+          )}
 
           {anyLoading && <p className="text-[9px] text-slate-600 mb-2">Checking pools + prices…</p>}
           {overBalance && <p className="text-[10px] text-red-500 mb-2">Exceeds your {inSym} balance</p>}
@@ -476,6 +526,7 @@ export function RobinhoodSwapCard({ result }: { result: RobinhoodSwapResult }) {
               : { background: "#EF444415", color: "#EF4444", border: "1px solid #EF444440" }}>
             {!isConnected ? "Connect your wallet"
               : busy ? (step === "approving" ? "Approve in wallet…" : "Confirm in wallet…")
+              : gate === "unverified" ? "Balance unread"
               : !isT2T && quote?.hasPool === false ? "No pool yet"
               : prepRoute === "none" ? "No route"
               : overBalance ? "Insufficient balance"
