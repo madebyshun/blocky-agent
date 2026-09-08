@@ -52,7 +52,24 @@
  * run reads as a healthy-but-quiet desk and a real desk-wide blanking is
  * indistinguishable from a bad minute at the provider. See `captureMiss`.
  *
- * Usage:  npx tsx scripts/dex-anchor-check.ts [--chain base|rh|both]
+ * ── This is a LIVE PROBE, not a CI suite — so when do you run it? ──────────
+ * It is listed in `NEEDS_NETWORK` in `run-tests.ts` and is therefore skipped by
+ * `npm test`. That exclusion is load-bearing in both directions: ~62 provider
+ * calls at rate-limit spacing take >4 min against a 120s per-suite cap, and a
+ * throttled run scores `unverified` rather than `ok` — so wiring it into CI
+ * would produce the least trustworthy green in the repo, not a safety net.
+ *
+ * The cost of that is the failure mode `run-tests.ts` names out loud: a guard
+ * that stops guarding while still appearing in the directory listing. So it has
+ * named trigger points rather than a schedule:
+ *   • BEFORE admitting any ticker (alongside `npm run base:admit`).
+ *   • AFTER any change to pool SELECTION in `rwa-price.ts` — the anchor sets,
+ *     the sort, the base/quote side logic, or either provider's parser.
+ *   • When a desk goes quiet and you need to know whether it is `dark`
+ *     (no anchored pool — honest) or `unverified` (provider down — unknown).
+ *
+ * Usage:  npm run dex:anchor -- [--chain base|rh|both]
+ *         npx tsx scripts/dex-anchor-check.ts [--chain base|rh|both]
  * Exit:   0 = every published price is dollar-denominated; 1 = at least one is not.
  */
 import {

@@ -24,6 +24,14 @@ const WEB = path.resolve(SCRIPTS_DIR, "..");
 const NEEDS_NETWORK: Record<string, string> = {
   "pledge-ledger-test.ts": "reads real pledges over RPC + indexer; run via `npm run test:pledge`",
   "workspace-sync-test.ts": "drives the HTTP surface end-to-end; needs `npm run dev` on :3000, run via `npm run test:workspace-sync`",
+  // ~62 live DexScreener/GeckoTerminal calls at rate-limit spacing (>4 min, well
+  // past PER_SUITE_TIMEOUT_MS). It cannot be made hermetic without destroying its
+  // point: it asks the provider what pool production picked TODAY, and a fixture
+  // would only certify a snapshot. Nor should it gate CI — the script itself
+  // scores a 429 as `unverified` rather than a pass precisely because a throttled
+  // run proves nothing, so a green CI here would be the least trustworthy green
+  // in the repo.
+  "dex-anchor-check.ts": "makes ~62 live DEX provider calls at rate-limit spacing; run via `npm run dex:anchor`",
 };
 
 /*
