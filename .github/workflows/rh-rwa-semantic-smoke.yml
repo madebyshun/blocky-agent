@@ -1,3 +1,14 @@
+# ⚠️ This workflow runs the SAME script for two different jobs, and the
+# difference matters (see the mustUpstream header in semantic-smoke.ts):
+#
+#   pull_request → GATE.    SMOKE_MODE=gate. Third-party outages are advisory.
+#   schedule     → MONITOR. SMOKE_MODE=monitor (the default). Outages are fatal.
+#
+# Note what this script does NOT do: it targets https://blueagent.dev, so even
+# on a pull_request it exercises PRODUCTION, never the branch's code. That is
+# why an upstream outage must not block a merge — the diff was never under test
+# in the first place. If this is ever pointed at a per-PR preview deployment,
+# revisit the split: at that point the PR run really would be testing the diff.
 name: RH RWA — Semantic Smoke
 
 on:
@@ -30,5 +41,8 @@ jobs:
         env:
           TARGET: https://blueagent.dev
           INTERNAL_SERVICE_KEY: ${{ secrets.INTERNAL_SERVICE_KEY }}
+          # Anything not a PR (schedule, workflow_dispatch) is a prod monitor
+          # and stays fatal on upstream failures.
+          SMOKE_MODE: ${{ github.event_name == 'pull_request' && 'gate' || 'monitor' }}
         working-directory: apps/web
         run: tsx scripts/semantic-smoke.ts

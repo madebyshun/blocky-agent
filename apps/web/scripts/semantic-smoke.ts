@@ -67,6 +67,37 @@ function must(ok: boolean, label: string, detail?: string) {
   else console.log(`  ✅ ${label}`);
 }
 
+// This script answers two DIFFERENT questions depending on how it was
+// triggered, and one of its assertions was only ever valid for one of them:
+//
+//   schedule (0 */6 * * *) → MONITOR. "Is prod healthy right now?" A third-
+//                            party gateway being down is a real incident and
+//                            SHOULD go red.
+//   pull_request           → GATE.    "Is it safe to merge this diff?" The
+//                            script hits TARGET=blueagent.dev, i.e. PROD — it
+//                            never executes the branch's code — so an upstream
+//                            outage says nothing about the diff, yet it blocked
+//                            the merge anyway.
+//
+// MEASURED 2026-09-07: that is exactly what happened to #416. Virtuals
+// returned `content_len=0`, A4's `llm.provider` came back null, and a PR whose
+// diff touches no rh-* handler and no LLM path went red. `main` itself was red
+// in 3 of its last 4 runs for the same reason. A gate that a PR cannot pass by
+// being correct, and cannot fail by being wrong, is not gating anything.
+//
+// So: assertions that depend on a THIRD-PARTY service are declared with
+// `mustUpstream` and are advisory in gate mode. Everything about OUR OWN code
+// — including how it degrades when that service is down — stays `must` and
+// stays fatal in both modes. This narrows what can block a merge; it does not
+// narrow what gets checked.
+const SMOKE_MODE = (process.env.SMOKE_MODE ?? "monitor").toLowerCase() === "gate" ? "gate" : "monitor";
+const upstreamDown: string[] = [];
+function mustUpstream(ok: boolean, label: string, detail?: string) {
+  if (ok || SMOKE_MODE === "monitor") return must(ok, label, detail);
+  upstreamDown.push(`${label}${detail ? ` — ${detail}` : ""}`);
+  console.warn(`  ⚠️  ${label}${detail ? ` — ${detail}` : ""} (upstream dependency; advisory in gate mode)`);
+}
+
 async function m5AapleArb() {
   console.log("\n── M5 rh-stock-arb AAPL ──");
   const r = await call("rh-stock-arb", { ticker: "AAPL" });
@@ -170,14 +201,23 @@ async function l4Verify() {
 async function a4Brief() {
   console.log("\n── A4 rh-stock-agent-brief AAPL ──");
   const r = await call("rh-stock-agent-brief", { ticker: "AAPL" });
-  must(r.status === 200, "A4 status 200");
+  must(r.status === 200, "A4 status 200", `got ${r.status}`);
+  // Every assertion below reads the `llm` block of the response BODY. If the
+  // call itself didn't succeed there is no body to read, and asserting on it
+  // invents a second finding for one cause — a 402 would be reported as both
+  // "status != 200" AND "the tool failed to admit its context was missing",
+  // the latter describing a degradation path that was never reached. One root
+  // cause, one failure line.
+  if (r.status !== 200) return;
   const llm = r.data.llm as {
     provider?: string | null;
     web_search_used?: boolean;
     duration_ms?: number | null;
     attempts?: Array<{ provider?: string; status?: string; duration_ms?: number }>;
   } | undefined;
-  must(llm?.provider != null, "A4 llm.provider non-null", `got provider=${llm?.provider}`);
+  // Upstream: this is Virtuals' uptime, not our correctness. Fatal on the 6h
+  // monitor, advisory on a PR — see the mustUpstream header.
+  mustUpstream(llm?.provider != null, "A4 llm.provider non-null", `got provider=${llm?.provider}`);
 
   // Log-only evidence (no assertion change). Grep target for launch
   // content — the first line here becomes "provider=virtuals model=X
@@ -206,15 +246,45 @@ async function a4Brief() {
     console.log(`  [a4-fail-chain] attempts=[${attemptsStr}] warnings=${JSON.stringify(((r.data.warnings ?? []) as string[]).slice(0, 6))}`);
   }
 
+  // The handler emits ONE of two mutually-exclusive warnings, and this used to
+  // assert on only half of the condition that picks between them. From
+  // rh-stock-agent-brief.ts:
+  //
+  //   llm_provider === null           → "llm_context_unavailable: …"
+  //   provider !== null && !searched  → "no_web_search_this_run: served by <p>…"
+  //
+  // The second is deliberately withheld when no provider answered, because its
+  // own text reads "served by <provider>" and "served by null" is nonsense.
+  // The old check keyed on `web_search_used === false` alone — which is also
+  // the default when the gateway never answered (llm_web_search_used = false at
+  // declaration) — so on an outage it demanded the exact warning the handler is
+  // written not to emit, and failed CORRECT degradation.
+  //
+  // Both branches are now asserted. The `else` is NEW and is deliberately
+  // fatal: a null provider with no warning at all would be a silent degrade —
+  // the tool answering 200 with a deterministic verdict while never admitting
+  // the narrative context is missing. That is our bug, not Virtuals', so it
+  // blocks a merge in either mode.
   const warnings = (r.data.warnings ?? []) as string[];
-  if (llm?.web_search_used === false) {
-    const has = warnings.some((w) => w.includes("no_web_search_this_run"));
-    must(has, "A4 no_web_search_this_run warning when web_search_used=false");
+  if (llm?.provider != null) {
+    if (llm.web_search_used === false) {
+      must(
+        warnings.some((w) => w.includes("no_web_search_this_run")),
+        "A4 no_web_search_this_run warning when a provider answered without search",
+        `warnings=${JSON.stringify(warnings)}`,
+      );
+    }
+  } else {
+    must(
+      warnings.some((w) => w.includes("llm_context_unavailable")),
+      "A4 llm_context_unavailable warning when no provider answered",
+      `warnings=${JSON.stringify(warnings)}`,
+    );
   }
 }
 
 async function main() {
-  console.log(`Semantic smoke → ${TARGET}`);
+  console.log(`Semantic smoke → ${TARGET} [mode=${SMOKE_MODE}]`);
   await m5AapleArb();
   await x1SwapQuote();
   await m4Movers();
@@ -224,6 +294,16 @@ async function main() {
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n── SUMMARY ── ${results.length - failed.length}/${results.length} pass`);
+
+  // Downgraded, never dropped. A gate-mode run that goes green while a
+  // dependency is down still SAYS SO, in the log and in the job summary — the
+  // point was to stop an outage blocking merges, not to stop reporting it.
+  if (upstreamDown.length) {
+    console.warn(`\n⚠️  ${upstreamDown.length} upstream-dependency assertion(s) failed (advisory in gate mode):`);
+    for (const u of upstreamDown) console.warn(`  - ${u}`);
+    console.warn(`  → prod may be degraded right now. The 6h monitor run treats these as fatal.`);
+  }
+
   if (failed.length) {
     console.error(`\n${failed.length} assertion(s) failed:`);
     for (const f of failed) console.error(`  - ${f.label}${f.detail ? ` (${f.detail})` : ""}`);
