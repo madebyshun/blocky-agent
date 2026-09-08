@@ -85,7 +85,68 @@ export interface PriceSource {
    *  Multicall3 there yet — task #88), so RH client construction stays
    *  byte-identical to the pre-multichain path. */
   multicall?: boolean;
+  /** Lowercased addresses of the assets a pool may be priced AGAINST on this
+   *  chain. Required — see `ANCHOR_ASSETS` for why this is per-source and why
+   *  there is no default. */
+  anchors: ReadonlySet<string>;
 }
+
+/**
+ * ── The quote-asset anchor set (#223) ────────────────────────────────────────
+ *
+ * A pool's price is an EXCHANGE RATE, not a share price. `TSLAc/USDC` says what
+ * a share costs; `TSLAc/STC` says what a share costs *in STC*, and calling that
+ * a dollar price is only correct if STC is a dollar. Depth does not fix this —
+ * a deep pool against a memecoin is still a deep pool — so sorting candidates
+ * by liquidity and taking `[0]`, which is what both readers below used to do,
+ * will happily return the STC rate the moment that pool out-ranks the USDC one.
+ *
+ * The rule is therefore: **the side of the pool that is NOT our token must be a
+ * USD-anchored asset.** Stated symmetrically on purpose — `dexPriceGecko`
+ * accepts pools where our token sits on the quote side, so "check the quote
+ * token" would silently skip half the cases.
+ *
+ * PER-CHAIN, because the anchor differs: Base settles into **USDC**, RH into
+ * **USDG**. A Base-only allowlist applied to this shared read path would blank
+ * the entire RH desk. Held on `PriceSource` rather than a module constant so
+ * adding a third chain cannot forget it — the field is required, so a source
+ * without an anchor set does not compile.
+ *
+ * WETH is in both sets deliberately. It is not a stablecoin, but it has deep
+ * external price discovery that a pool cannot fake, and it carries real depth
+ * here: MEASURED 2026-09-08, RH COIN's deepest anchored pool is `COIN/WETH 0.3%`
+ * ($535K) ahead of `COIN/USDG 1%` ($403K), and MSTR/TSLA/QQQ/SPY all hold WETH
+ * pools in their top five. Dropping WETH would push those onto shallower pools
+ * for no safety gain.
+ *
+ * ⚠️ The zero address is NOT an anchor even though it means native ETH. On
+ * Uniswap V4, GeckoTerminal reports native-ETH pools with the counter-token id
+ * `0x0000…0000` while NAMING the pool "WETH", so an address-keyed set is what
+ * separates them and a name-keyed one would not. Measured the same day, every
+ * such pool on the RH desk is a thin 5%-fee V4 pool quoting visibly worse
+ * (COIN $190.05 vs $180.23, BABA $115.77 vs $111.79, QQQ $742.25 vs $718.90).
+ * Excluding them costs nothing today and removes a class we cannot price-check.
+ *
+ * ⚠️ DO NOT import `ALLOWED_QUOTE_ASSETS` from
+ * `scripts/base-stock-admission-probe.ts` here, and do not make that script
+ * import this. The probe's gate 4b inspects the pool THIS CODE selected; if the
+ * two shared a constant, the gate would be asserting production's output against
+ * production's own rule — a tautology that can never fail. The duplication is
+ * the test. Same reasoning as `saneBand` (wide production backstop) vs
+ * `SANE_BAND` (tight independent acceptance test) in the registry.
+ */
+const ANCHOR_ASSETS = {
+  /** Base 8453 — USDC is the settlement asset for every B20 pool. */
+  base: new Set([
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // USDC
+    "0x4200000000000000000000000000000000000006", // WETH
+  ]),
+  /** RH 4663 — USDG (Global Dollar), NOT USDC. USDC is not the RH anchor. */
+  robinhood: new Set([
+    "0x5fc5360d0400a0fd4f2af552add042d716f1d168", // USDG
+    "0x0bd7d308f8e1639fab988df18a8011f41eacad73", // WETH
+  ]),
+} as const;
 
 // Reliable keyless Base RPCs, in fallback order. Verified 2026-08-23 to serve
 // contract reads (NVDA `multiplier()` → 1e18). `base.llamarpc.com` (CF 521) and
@@ -108,6 +169,7 @@ function baseRpcUrls(): string[] {
 export const RH_PRICE_SOURCE: PriceSource = {
   chain: robinhoodMainnet,
   gtNetwork: "robinhood",
+  anchors: ANCHOR_ASSETS.robinhood,
 };
 
 /**
@@ -132,6 +194,7 @@ export const BASE_PRICE_SOURCE: PriceSource = {
   dexFeed: { kind: "dexscreener", chain: "base" },
   rpcUrls: baseRpcUrls(),
   multicall: true,
+  anchors: ANCHOR_ASSETS.base,
 };
 
 const AGGREGATOR_V3_ABI = [
@@ -269,16 +332,35 @@ export async function dexPrice(
 ): Promise<DexQuote | null> {
   const feed = source.dexFeed ?? { kind: "geckoterminal" as const };
   return feed.kind === "dexscreener"
-    ? dexPriceDexScreener(contract, feed.chain)
-    : dexPriceGecko(contract, source.gtNetwork);
+    ? dexPriceDexScreener(contract, feed.chain, source.anchors)
+    : dexPriceGecko(contract, source.gtNetwork, source.anchors);
 }
 
 /** GeckoTerminal price + pool metadata for a token. Free, no key.
  *  Picks whichever side (base / quote) the queried token sits on, so the
- *  returned price is always for our token — never the pool's counter-asset. */
+ *  returned price is always for our token — never the pool's counter-asset.
+ *
+ *  ── #223: why this reader needed the anchor rule too ───────────────────────
+ *  It is tempting to think GT is immune: it publishes `base_token_price_usd` /
+ *  `quote_token_price_usd` computed from ITS OWN cross-market view, so a
+ *  hijacked pool does not move the price the way DexScreener's `priceUsd` does.
+ *  That is true of the PRICE and false of everything else. `pool_address`,
+ *  `liquidity_usd`, `volume_24h_usd` and `change_24h` are all read off the
+ *  winning pool verbatim, and `liquidity_usd`/`volume_24h_usd` feed the
+ *  dead-pool liveness gate in `rule-engine.ts` — the gate that decides whether
+ *  an arrow is allowed to fire at all.
+ *
+ *  MEASURED 2026-09-08, and this one had already happened: RH **NVDA** resolved
+ *  to the `AI / NVDA` pool (liquidity $21.9M, 24h volume $3.2M) instead of
+ *  `NVDA / USDG 0.05%` (liquidity $6.4M, 24h volume $31.9M). The price was
+ *  right to within 0.17%; the reported depth was 3.4× too high and the volume
+ *  was 10× too LOW. Same shape on MU ($36.0M/$66K reported against the real
+ *  $1.7M/$3.4M), and on ORCL, SNDK, USAR, CRWV, INTC, QQQ — 8 of 24 RH tickers
+ *  were priced on a pool whose metadata belonged to some other token. */
 async function dexPriceGecko(
   contract: Address,
   net: string,
+  anchors: ReadonlySet<string>,
 ): Promise<DexQuote | null> {
   const token = contract.toLowerCase();
   const t0 = Date.now();
@@ -319,12 +401,18 @@ async function dexPriceGecko(
     const strip = (id: string | undefined) =>
       id ? (id.startsWith(prefix) ? id.slice(prefix.length).toLowerCase() : id.toLowerCase()) : "";
     // Materialize each pool with the correct side selected + non-null price.
+    let unanchored = 0;
     const enriched = (d.data ?? []).flatMap((p) => {
       const attr = p.attributes;
       if (!attr?.address) return [];
       const baseId = strip(p.relationships?.base_token?.data?.id);
       const quoteId = strip(p.relationships?.quote_token?.data?.id);
       const isQuoteSide = target === quoteId && target !== baseId;
+      // #223 — the OTHER side must be USD-anchored. Symmetric, because our token
+      // can sit on either side here: whichever side is not ours is the one whose
+      // value we are implicitly quoting in.
+      const counterAsset = isQuoteSide ? baseId : quoteId;
+      if (!anchors.has(counterAsset)) { unanchored++; return []; }
       const priceStr = isQuoteSide ? attr.quote_token_price_usd : attr.base_token_price_usd;
       if (!priceStr) return [];
       const price = parseFloat(priceStr);
@@ -332,17 +420,21 @@ async function dexPriceGecko(
       return [{ p, attr, priceStr, price }];
     });
     if (!enriched.length) {
-      // Two very different causes, separated because they need opposite fixes:
-      //   pools=0  → GT does not index this token on this network at all
-      //              (wrong slug / unindexed pool) — retrying never helps.
-      //   pools>0  → pools exist but none priced OUR token on either side
-      //              (missing *_token_price_usd, or an id-prefix mismatch).
+      // Three very different causes, separated because they need opposite fixes:
+      //   pools=0     → GT does not index this token on this network at all
+      //                 (wrong slug / unindexed pool) — retrying never helps.
+      //   unanchored  → pools exist but every one is quoted against something
+      //                 that is not USD-anchored (#223). NOT an outage: the
+      //                 honest answer for a token with no dollar-denominated
+      //                 market is "no price", not a memecoin exchange rate.
+      //   usable=0    → anchored pools exist but none priced OUR token on
+      //                 either side (missing *_token_price_usd, id mismatch).
       const pools = d.data?.length ?? 0;
       logDexMiss(
         "geckoterminal", net, token, Date.now() - t0,
         pools === 0
           ? "http=200 pools=0 (token not indexed on this network)"
-          : `http=200 pools=${pools} usable=0 (no pool priced this token on either side)`,
+          : `http=200 pools=${pools} usable=0 unanchored=${unanchored} (no USD-anchored pool priced this token)`,
       );
       return null;
     }
@@ -411,39 +503,37 @@ function dsNum(v: unknown): number | null {
  *     skipped quote-side count is logged so a future regression is visible
  *     rather than silent.
  *
- * ⚠️ KNOWN GAP — THERE IS NO THIRD RULE, AND THERE SHOULD BE. Rule 2 keeps us on
- * the side of the pair whose price `priceUsd` actually reports; it does NOT ask
- * what the OTHER side is. Nothing here requires the winning pool to be quoted in
- * a USD-anchored asset, so the deepest-liquidity sort can hand back an exchange
- * rate against an arbitrary token as if it were a share price.
+ *  3. **USD-anchored quote asset (#223).** Rules 1–2 keep us on the side of the
+ *     pair whose price `priceUsd` reports; neither asks what the OTHER side is,
+ *     so the deepest-liquidity sort could hand back an exchange rate against an
+ *     arbitrary token as if it were a share price. `quoteToken.address` must now
+ *     be in this source's `anchors` set (see `ANCHOR_ASSETS`).
  *
  * MEASURED 2026-09-08 on TSLAc (an admission candidate, NOT yet in BASE_STOCKS):
- * this function returns **$13,789.61** against a $354.24 Chainlink share price —
- * 38.93× wrong — because DexScreener labels the illiquid `TSLAc/STC` V4 pool
- * with TSLAc on the base side and it out-ranks the genuine `TSLAc/USDC`
- * Aerodrome pool ($195,852 liquidity, $354.87). Note GeckoTerminal labels that
- * same pool the other way round, so `dexPriceGecko` does not reproduce it — the
- * defect is specific to this provider's base/quote convention.
+ * before rule 3 this function returned **$14,226.33** against a ~$358 Chainlink
+ * share price — 39.7× wrong — because DexScreener labels the illiquid
+ * `TSLAc/STC` V4 pool ($263,361) with TSLAc on the base side and it out-ranked
+ * the genuine `TSLAc/USDC` Aerodrome pool ($185,546, $358.08). Rule 3 drops the
+ * STC pool and returns $358.08.
  *
- * BLAST RADIUS TODAY: none. All seven admitted tickers resolve to their USDC
- * pool at $136k–$2.3M liquidity, ~10× beyond casual reach. But the newer rows
- * are far thinner than the original four, so a memecoin pool could out-rank one
- * without being expensive. `saneBand` is the backstop and it is a PARTIAL one:
- * it catches a magnitude break (the ticker goes dark with
- * `price_out_of_band` — wrong, but not lying) and does NOT catch a junk price
- * that lands inside the band. The admission probe now blocks new tickers on
- * this (`scripts/base-stock-admission-probe.ts`, gates 4b/4c) — that stops the
- * bleeding at the door, it does not fix the read.
+ * WHY THE ANCHORED BUCKET DOES NOT FALL THROUGH TO AN UNANCHORED POOL: an
+ * earlier draft of this comment proposed partitioning and falling back "only
+ * when the first bucket is empty". That is `resolvePrimaryPool`'s step 3 in
+ * `rwa-market.ts`, and it reintroduces exactly the bug — the fallback fires
+ * precisely in the case the rule exists to catch. Measured the same day, the
+ * fallback is also unnecessary: 0 of 24 RH tickers and 0 of 7 admitted Base
+ * tickers lack an anchored pool. So an empty bucket returns `null`, which
+ * surfaces as the honest `dex_unavailable` that #140 built.
  *
- * THE FIX is to prefer a USD-anchored quote asset before sorting by depth, i.e.
- * partition `usable` into USDC/WETH-quoted and everything else and only fall
- * through when the first bucket is empty. Deliberately NOT bundled with the
- * admission change: this is the shared RH+Base read path, so it deserves its own
- * PR with its own before/after on all seven tickers.
+ * BLAST RADIUS OF THE OLD BEHAVIOUR ON BASE: none — all seven admitted tickers
+ * already resolved to their USDC pool and are byte-identical after this change.
+ * The defect was live only on the RH side (see `dexPriceGecko`) and on TSLA,
+ * which is why TSLA admission was blocked behind this fix.
  */
 async function dexPriceDexScreener(
   contract: Address,
   chain: string,
+  anchors: ReadonlySet<string>,
 ): Promise<DexQuote | null> {
   const token = contract.toLowerCase();
   const t0 = Date.now();
@@ -480,9 +570,16 @@ async function dexPriceDexScreener(
       return null;
     }
     let quoteSideSkipped = 0;
+    let unanchored = 0;
     const usable = onChain.flatMap((p) => {
       if ((p.baseToken?.address ?? "").toLowerCase() !== token) {
         quoteSideSkipped++;
+        return [];
+      }
+      // #223 — rule 3. Rule 2 already pinned our token to the base side, so the
+      // "other side" is unambiguously the quote token here.
+      if (!anchors.has((p.quoteToken?.address ?? "").toLowerCase())) {
+        unanchored++;
         return [];
       }
       const price = parseFloat(p.priceUsd ?? "");
@@ -490,9 +587,12 @@ async function dexPriceDexScreener(
       return [{ p, price, liq: dsNum(p.liquidity?.usd) }];
     });
     if (!usable.length) {
+      // `unanchored` separates "this token has no dollar market" from the
+      // pre-existing "DS indexed it but priced nothing" — opposite fixes, and
+      // only the first is a legitimate reason to stay dark.
       logDexMiss(
         "dexscreener", chain, token, Date.now() - t0,
-        `http=200 pairs=${pairs.length} on_chain=${onChain.length} usable=0 quote_side_skipped=${quoteSideSkipped}`,
+        `http=200 pairs=${pairs.length} on_chain=${onChain.length} usable=0 quote_side_skipped=${quoteSideSkipped} unanchored=${unanchored}`,
       );
       return null;
     }
