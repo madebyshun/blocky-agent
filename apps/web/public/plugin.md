@@ -3,7 +3,7 @@
 > Source of truth: https://blueagent.dev/plugin.md
 > Hub UI: https://blueagent.dev/hub · Catalog (machine-readable): https://blueagent.dev/api/catalog
 
-112 AI tools for Base builders and autonomous agents — audits, token signals,
+111 AI tools for Base builders and autonomous agents — audits, token signals,
 market-fit analysis, deep due diligence, launch readiness, ecosystem intel and
 more. Every tool is a paid HTTP endpoint that speaks **x402 v2** natively, so
 Base MCP can call any tool and settle the USDC payment without extra wiring.

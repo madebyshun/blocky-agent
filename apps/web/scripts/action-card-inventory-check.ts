@@ -45,14 +45,39 @@
  *      A doc page that still promises sponsored gas is the same lie as a live
  *      button; the user reads the doc first.
  *   4. A TEST THAT PASSES BY DELETING EVERYTHING. Every absence assertion below
- *      is paired with a presence assertion on the surviving self-hosted path
- *      (`hub_b20_launch` → B20LaunchCard → /api/b20/*) and on the launch
- *      registry. Without that pairing this file would go green if chat lost all
- *      its cards, which is the failure mode of every "assert absence" test.
+ *      is paired with a presence assertion on the surviving path (/app/b20 →
+ *      /api/b20/* behind the activation read) and on the launch registry. Without
+ *      that pairing this file would go green if chat lost all its cards, which is
+ *      the failure mode of every "assert absence" test.
  *   5. THE EVIDENCE GETTING SWEPT UP. Tokens Bankr deployed are real and still
  *      on-chain. CLAUDE.md: deleting routes does not entitle you to delete the
  *      data behind them. `src/lib/launches.ts` and its two live writers must
  *      survive the cleanup that removed their third writer.
+ *   6. A SECOND DOOR TO THE SAME DEPLOY. Until 2026-09-08 the chat card had a
+ *      Deploy button of its own: it POSTed /api/b20/prepare and had the user
+ *      sign `createB20`, while the card's own header comment still said "no API
+ *      call, no funds moved". That made TWO deploy entrances, and chat's was the
+ *      worse one — /app/b20 reads the ActivationRegistry before letting anyone
+ *      sign, so an unactivated variant is refused up front instead of surfacing
+ *      as "Unable to estimate fee" from a wallet aimed at a revert.
+ *
+ *      Removing only the BUTTON left half a product: a $0.25 tool and a card that
+ *      still generated a Foundry deploy script. So the whole surface went — tool
+ *      schema, marker, card, script generator, the `b20-launch` catalog entry and
+ *      its x402 endpoint, and the MCP proxy. Chat now has NO token-deploy path.
+ *      Checked in BOTH directions, because each rots on its own: chat must not
+ *      regrow one, and /app/b20 must not lose the one it has — otherwise "we
+ *      removed the entrance" turns into "there is no way to deploy".
+ *   7. THE PROMPT OUTLIVING THE TOOL. This is #204/#205, and it is the failure
+ *      this file is worst at catching by inspection: a rule that says "use X to
+ *      deploy" after X is deleted does not break the build, it just teaches the
+ *      model that a deploy capability exists, and the model then invents the
+ *      procedure. So the prompt is checked against the REGISTERED TOOL LIST, both
+ *      derived from source — never a hand-written array. #205's own fix shipped a
+ *      `TOOL_NAMES` constant whose comment claimed it was "drawn from the real
+ *      sections" while 8 names had actually been copied by hand; a list like that
+ *      is stale the moment a tool is added, and it is stale in the silent
+ *      direction.
  *
  * Source-reading, not network: these are properties of the text we ship.
  *
@@ -76,6 +101,9 @@ const LAUNCHES = read("src/app/app/launches/LaunchesClient.tsx");
 const REGISTRY = read("src/lib/launches.ts");
 const DOCS     = read("src/app/docs/blue-chat/page.tsx");
 const LAUNCHPG = read("src/app/launch/page.tsx");
+/** The deploy surface itself. Read here so the "chat no longer signs" assertion
+ *  can be paired with "something still does" — see point 6 in the header. */
+const B20PAGE  = read("src/app/app/b20/B20Client.tsx");
 
 let failures = 0;
 /** Counted, never hardcoded — a hand-maintained total goes stale the first time
@@ -162,30 +190,146 @@ for (const [label, src] of [["blue-chat docs", DOCS], ["/launch page", LAUNCHPG]
 check("the docs explain what happened to the launchpad instead of hiding it",
   /Bankr/.test(DOCS) && /suspended/i.test(DOCS));
 
-// ── 3. Counter-assertions: the surviving path is intact ──────────────────────
-// Without these, deleting every card and every doc would turn this file green.
-console.log("\n3. the self-hosted B20 path survived the removal");
+// ── 3. Chat has no token-deploy tool, and the prompt knows it ────────────────
+// Header points 6 and 7. Everything here is DERIVED from the two source files:
+// the registered-tool list comes out of route.ts, the prefixes come out of that
+// list, and the prompt is scanned with a pattern built from those prefixes. No
+// tool name is written down in this file except the one retired id, and that one
+// only as a tombstone.
+console.log("\n3. chat offers no way to deploy a token");
 
-check("hub_b20_launch is still a registered tool",
-  /name:\s*"hub_b20_launch"/.test(ROUTE));
-check("hub_b20_launch still has a marker handler",
-  /toolName === "hub_b20_launch"/.test(ROUTE));
-check("B20LaunchCard is still rendered by the dispatcher",
-  /case "hub_b20_launch":/.test(CARDS) && /function B20LaunchCard/.test(CARDS));
-// The card signs against the Factory from the user's own wallet — the property
-// that makes it survivable when a third party bans an account.
-check("the B20 card still deploys through our own /api/b20 endpoints",
-  /["'`]\/api\/b20\/prepare/.test(CARDS) && /["'`]\/api\/b20\/receipt/.test(CARDS));
-check("the prompt names hub_b20_launch as the only deploy path",
-  /hub_b20_launch is the ONLY token-deploy tool/.test(PROMPT));
-// …and it must sit in the GATED half. `b20Dispatch()` is only injected when the
-// request carries tools; `b20Knowledge()` always is. Rule 6g names a tool, so in
-// the ungated half it would re-create #205 — a tool-free prompt advertising a
-// tool — which is the bug the file split was made to fix. Checked positionally:
-// 6g must fall after the dispatch header, not before it.
-check("rule 6g lives in the tool-gated half, not the always-on knowledge block",
-  PROMPT.indexOf("hub_b20_launch is the ONLY token-deploy tool")
-    > PROMPT.indexOf("## B20 & chain actions — which tool to call"));
+/** The tool schema list the model is actually handed. Same shape the orphan
+ *  check above relies on (`name: "…"`), so if that pattern ever stops matching,
+ *  BOTH checks go loud rather than one silently passing on an empty set. */
+const REGISTERED = [...new Set([...ROUTE.matchAll(/name: "([a-z0-9_]+)"/g)].map(m => m[1]))];
+check("the registered-tool list was derived, not empty", REGISTERED.length > 20,
+  `${REGISTERED.length} tools`);
+
+// Names, narrowed to TOKEN creation. The first draft of this pattern was just
+// /launch|deploy/ and it flagged `blue_deploy` — which is a text tool about
+// Basescan verify commands and gas, not a token launcher. That false positive is
+// the useful one: a name is weak evidence, so it is the NET here, not the test.
+// `hub_b20_manage` (mint/burn on an EXISTING token) must not match; creating one
+// must.
+const DEPLOY_SHAPED =
+  /launch|(?:deploy|create|issue)[_a-z]*token|token[_a-z]*(?:deploy|create)|b20[_a-z]*create|create[_a-z]*b20/;
+const deployTools = REGISTERED.filter(n => DEPLOY_SHAPED.test(n));
+check("no registered chat tool is named like a token-deploy tool", deployTools.length === 0,
+  deployTools.length ? `found: ${deployTools.join(", ")}` : `checked ${REGISTERED.length}`);
+
+// The operation, which is what actually matters. A tool only becomes a deploy
+// PATH when it can put a transaction in front of the user, and in this codebase
+// that means a dispatcher case rendering an action card — text tools just return
+// prose. So: any tool that TALKS about deploying (name or description) must have
+// no card. That keeps `blue_deploy` and `hub_b20_analyze` honest as explainers
+// and would catch a rename that dodges the pattern above, without either one
+// being written down here.
+const SCHEMAS = [...ROUTE.matchAll(/name: "([a-z0-9_]+)",\s*\n\s*description: "([^"]*)"/g)];
+check("tool descriptions were parsed for the operation check", SCHEMAS.length > 20,
+  `${SCHEMAS.length} schemas`);
+const deployish = SCHEMAS
+  .filter(([, n, d]) => /deploy|launch/i.test(n) || /\bdeploy(ing|ment)?\b|\blaunch(ing)?\b/i.test(d))
+  .map(([, n]) => n);
+check("tools that discuss deploying were found", deployish.length > 0, deployish.join(", "));
+const deployishWithCard = deployish.filter(n => CARDS.includes(`case "${n}":`));
+check("no deploy-related tool renders an action card", deployishWithCard.length === 0,
+  deployishWithCard.length
+    ? `these can put a tx in front of the user: ${deployishWithCard.join(", ")}`
+    : `${deployish.length} explainers, all card-less`);
+
+// The retired ids by name, as tombstones. `prepare_token_launch` (Bankr) and
+// `hub_b20_launch` (self-hosted) died for different reasons four days apart;
+// naming both means re-adding either one fails loudly instead of matching the
+// generic pattern above and being argued about.
+for (const dead of ["hub_b20_launch", "prepare_token_launch"]) {
+  check(`"${dead}" is not registered again`, !ROUTE.includes(`name: "${dead}"`));
+  check(`"${dead}" has no marker handler`, !ROUTE.includes(`toolName === "${dead}"`));
+  check(`"${dead}" has no dispatcher case`, !CARDS.includes(`case "${dead}":`));
+}
+check("the B20 launch card and its script generator are gone",
+  !/B20LaunchCard|CreateToken\.s\.sol/.test(CARDS));
+
+// ── 3a. …and the prompt does not name a tool that isn't there ────────────────
+// The #204/#205 mechanism: a template with no tool behind it gets filled in from
+// training data. Derived on both sides — prefixes come from the registered names
+// themselves, so a new tool family (`foo_*`) is scanned the day it ships without
+// anyone editing this file.
+console.log("\n3a. every tool the prompt names is a tool that exists");
+
+const PREFIXES = [...new Set(REGISTERED.map(n => n.split("_")[0]))];
+check("tool-name prefixes were derived from the registered list", PREFIXES.length >= 3,
+  PREFIXES.join(", "));
+
+const NAMED = [...new Set(
+  PROMPT.match(new RegExp(String.raw`\b(?:${PREFIXES.join("|")})_[a-z0-9_]+\b`, "g")) ?? [],
+)];
+check("the prompt names tools at all", NAMED.length > 5, `${NAMED.length} names`);
+
+const phantom = NAMED.filter(n => !REGISTERED.includes(n));
+check("the prompt names no tool that is not registered", phantom.length === 0,
+  phantom.length ? `phantom: ${phantom.join(", ")}` : `${NAMED.length} names all resolve`);
+
+const promptDeploy = NAMED.filter(n => DEPLOY_SHAPED.test(n));
+check("the prompt names no token-deploy tool", promptDeploy.length === 0,
+  promptDeploy.length ? `found: ${promptDeploy.join(", ")}` : "");
+
+// The counter-assertion, and the reason this whole section is not just deletion:
+// removing the rules WITHOUT stating the missing capability is the #204 hole
+// itself — full B20 knowledge (createB20, initCalls, Beryl) and no sentence
+// saying it cannot be performed. The denial must exist…
+check("the prompt states plainly that chat cannot deploy a token",
+  /YOU CANNOT DEPLOY, LAUNCH OR CREATE A TOKEN/.test(PROMPT));
+// …and must sit in the ALWAYS-ON half, which is the inverse of what this file
+// asserted before 2026-09-08. Then the rule named a tool, so it belonged in the
+// gated half or it would re-create #205. Now it names none, and a tool-free
+// prompt carrying B20 knowledge is precisely the one most likely to invent a
+// deploy flow — so it has to be ahead of the dispatch header, not after it.
+check("the denial lives in the always-on knowledge block, not the gated one",
+  PROMPT.indexOf("YOU CANNOT DEPLOY, LAUNCH OR CREATE A TOKEN")
+    < PROMPT.indexOf("## B20 & chain actions — which tool to call"));
+// Pointing at a page is allowed and wanted; describing a flow is not.
+check("the prompt still points at /app/b20 as a place the user can go",
+  /\/app\/b20/.test(PROMPT));
+
+// The knowledge that must NOT have been deleted along with the dispatch: reading
+// B20 state is a live capability and explaining the standard is allowed. If these
+// go, "we removed deploy" quietly became "we removed B20".
+check("the B20 read/explain tools survived the removal",
+  ROUTE.includes(`name: "hub_b20_inspect"`) && ROUTE.includes(`name: "hub_b20_analyze"`));
+check("the prompt kept the real B20 background",
+  /PolicyRegistry/.test(PROMPT) && /Beryl/.test(PROMPT) && /createB20/.test(PROMPT));
+
+// ── 3b. One deploy entrance, and it is not the chat bubble ───────────────────
+// Both halves are asserted together on purpose (header point 6). Absence alone
+// would pass if /app/b20 also lost its deploy; presence alone would pass if chat
+// grew its button back. The pair says "exactly one door, and it is the gated
+// one".
+console.log("\n3b. deploying is /app/b20's job, and chat does not do it too");
+
+// Quote-anchored: a retirement comment NAMES /api/b20/prepare while explaining
+// why nothing calls it. A bare substring match would read that explanation as
+// the offence it warns about.
+//
+// This is now whole-file rather than scoped to one component, and that is the
+// upgrade the full removal bought. Before, the claim was "the B20 card does not
+// sign" and it had to be checked against a slice of that one function — the rest
+// of the file legitimately signs (robinhood_send, robinhood_swap, earn all
+// broadcast from chat, by design). With no B20 card at all, the stronger claim
+// holds: NOTHING in chat talks to the B20 deploy endpoints.
+for (const ep of ["prepare", "receipt"]) {
+  check(`no chat card calls /api/b20/${ep}`,
+    !new RegExp(`["'\`]/api/b20/${ep}`).test(CARDS));
+}
+
+check("/app/b20 still holds the deploy that chat gave up",
+  /["'`]\/api\/b20\/prepare/.test(B20PAGE) && /["'`]\/api\/b20\/receipt/.test(B20PAGE));
+// The reason /app/b20 is the door we kept: it refuses an unactivated variant up
+// front instead of sending the wallet at a transaction that reverts. If this
+// read goes, the two doors are equally bad again and the removal loses its point.
+// Anchored on the CALL and the derived gate, not on the word "activation" —
+// a comment mentioning the registry must not be able to satisfy this.
+check("/app/b20 still gates on the on-chain activation read before signing",
+  /runB20Activation\(/.test(B20PAGE) && /const canDeploy = .*!notActivated/.test(B20PAGE));
 
 // ── 4. The launch records are evidence and must outlive their writer ─────────
 console.log("\n4. launch history survived the route that produced some of it");
@@ -206,8 +350,13 @@ check("the /app/launches showcase still lists them",
 // ── 5. Every published URL still resolves ────────────────────────────────────
 console.log("\n5. the advertised /launch URL still goes somewhere real");
 
+// It used to redirect to chat, because chat carried the launch tool. It no
+// longer does, so sending /launch there would land the user on a surface whose
+// only honest answer is "I can't". The redirect follows the capability.
 check("/launch is kept as a redirect, not deleted into a 404",
-  existsSync(path.join(WEB, "src/app/launch/page.tsx")) && /redirect\("\/app\/chat"\)/.test(LAUNCHPG));
+  existsSync(path.join(WEB, "src/app/launch/page.tsx")));
+check("/launch points at the surface that can actually deploy",
+  /redirect\("\/app\/b20"\)/.test(LAUNCHPG));
 
 console.log(`\n${failures ? "FAIL" : "PASS"} — ${checks - failures}/${checks} checks passed`);
 if (failures) process.exit(1);
