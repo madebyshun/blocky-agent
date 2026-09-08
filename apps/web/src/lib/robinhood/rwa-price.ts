@@ -405,11 +405,41 @@ function dsNum(v: unknown): number | null {
  *     is the COUNTER-asset's price — reading it would report (e.g.) USDC's $1
  *     as NVDA's share price and hand the drift engine a ~99% fake gap. It is
  *     derivable via `priceUsd / priceNative`, but we do not need it: verified
- *     2026-08-25 across all four B20 tickers, the deepest Base pair is the
- *     base-side Aerodrome/USDC pool in every case (NVDA $1.06M, GOOGL $742K,
+ *     2026-08-25 across all four B20 tickers then live, the deepest Base pair is
+ *     the base-side Aerodrome/USDC pool in every case (NVDA $1.06M, GOOGL $742K,
  *     AAPL $713K, META $671K liquidity), so base-side-only loses no depth. The
  *     skipped quote-side count is logged so a future regression is visible
  *     rather than silent.
+ *
+ * ⚠️ KNOWN GAP — THERE IS NO THIRD RULE, AND THERE SHOULD BE. Rule 2 keeps us on
+ * the side of the pair whose price `priceUsd` actually reports; it does NOT ask
+ * what the OTHER side is. Nothing here requires the winning pool to be quoted in
+ * a USD-anchored asset, so the deepest-liquidity sort can hand back an exchange
+ * rate against an arbitrary token as if it were a share price.
+ *
+ * MEASURED 2026-09-08 on TSLAc (an admission candidate, NOT yet in BASE_STOCKS):
+ * this function returns **$13,789.61** against a $354.24 Chainlink share price —
+ * 38.93× wrong — because DexScreener labels the illiquid `TSLAc/STC` V4 pool
+ * with TSLAc on the base side and it out-ranks the genuine `TSLAc/USDC`
+ * Aerodrome pool ($195,852 liquidity, $354.87). Note GeckoTerminal labels that
+ * same pool the other way round, so `dexPriceGecko` does not reproduce it — the
+ * defect is specific to this provider's base/quote convention.
+ *
+ * BLAST RADIUS TODAY: none. All seven admitted tickers resolve to their USDC
+ * pool at $136k–$2.3M liquidity, ~10× beyond casual reach. But the newer rows
+ * are far thinner than the original four, so a memecoin pool could out-rank one
+ * without being expensive. `saneBand` is the backstop and it is a PARTIAL one:
+ * it catches a magnitude break (the ticker goes dark with
+ * `price_out_of_band` — wrong, but not lying) and does NOT catch a junk price
+ * that lands inside the band. The admission probe now blocks new tickers on
+ * this (`scripts/base-stock-admission-probe.ts`, gates 4b/4c) — that stops the
+ * bleeding at the door, it does not fix the read.
+ *
+ * THE FIX is to prefer a USD-anchored quote asset before sorting by depth, i.e.
+ * partition `usable` into USDC/WETH-quoted and everything else and only fall
+ * through when the first bucket is empty. Deliberately NOT bundled with the
+ * admission change: this is the shared RH+Base read path, so it deserves its own
+ * PR with its own before/after on all seven tickers.
  */
 async function dexPriceDexScreener(
   contract: Address,
