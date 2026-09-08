@@ -44,11 +44,35 @@ function approx(a: number, b: number, tolPct = 0.001) {
 // ⚠️ EVERY ticker in BASE_STOCKS needs a row here. A missing band used to SKIP
 // the assertion silently, so a newly-admitted ticker would have quietly lost the
 // single strongest check in this probe. Missing is now a hard FAIL (see below).
+//
+// ⚠️ These are DELIBERATELY NOT the registry's `saneBand`, and must never be
+// derived from it. `b20-quote.ts` already suppresses any price outside
+// `stock.saneBand` before this probe ever sees it, so asserting production's
+// output against production's own band is a tautology that can never fail.
+// The value here is an INDEPENDENT second opinion, held tighter on purpose —
+// registry bands are a wide "don't publish an absurdity" backstop, these are a
+// narrow "does today's read look like the actual stock" acceptance test.
 const SANE_BAND: Record<string, [number, number]> = {
   NVDA: [120, 340],
   META: [320, 840],
   GOOGL: [190, 540],
   AAPL: [170, 500], // ~$310 at admission 2026-08-24
+  // Admitted 2026-09-08. Floors sit below each ticker's measured 52-week low so
+  // a real return to a price it traded at THIS YEAR is not reported as a bug;
+  // ceilings sit above the 52w high with room, and still well under 2× spot.
+  AMZN: [140, 420], // anchor $256.23, 52w $196.00–$287.20 — 2× ⇒ $512 caught, ÷2 ⇒ $128 caught
+  MSFT: [270, 800], // anchor $496.57, 52w $349.20–$553.72 — 2× ⇒ $993 caught, ÷2 ⇒ $248 caught
+  // ⚠️ MSTR is the one row that CANNOT catch a 2× error, and pretending
+  // otherwise would be worse than saying so. Its own 52-week range is
+  // $81.81–$365.21 — 4.5× wide — so any band that tolerates real MSTR movement
+  // is wider than a doubling. Narrowing it would make the probe cry wolf on a
+  // genuine move, which gets a check ignored rather than obeyed.
+  // A 2× is NOT uncovered, it is covered ELSEWHERE and better: while the
+  // multiplier reads 1e18 the `unit-multiplier ⇒ share == total-return` check
+  // below asserts exact equality, so a dropped or doubled division shows up
+  // there regardless of magnitude. This band still catches the errors that
+  // check cannot: ÷100 ⇒ $1.38 and ×100 ⇒ $13,830 both blow through.
+  MSTR: [60, 500], // anchor $138.30, 52w $81.81–$365.21
 };
 
 async function liveChecks() {

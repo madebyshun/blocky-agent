@@ -19,6 +19,28 @@
  * The public track record IS the product. A thin-pool ticker poisons it, and
  * published arrows are never rewritten. So: **the pool decides.**
  *
+ * ── …but the DEEPEST pool is not automatically the RIGHT pool ────────────────
+ * Added 2026-09-08, after this probe returned **PASS** on TSLA while the price
+ * the production path would have published was **$13,789.61** against an oracle
+ * share price of **$354.24** — a 38.93× error, printed by the probe as a
+ * 3792.716% "drift" and passed anyway, because every gate above measures how
+ * BUSY a pool is and none of them asked what the pool is priced AGAINST.
+ *
+ * `dexPriceDexScreener` takes the deepest pair whose BASE token is ours;
+ * DexScreener labels the illiquid `TSLAc/STC` V4 pool with TSLAc on the base
+ * side, so that sort beat the genuine `TSLAc/USDC` Aerodrome pool. Two gates
+ * now close it, and they are complementary rather than redundant:
+ *   • the QUOTE-ASSET gate — the priced pool must pair against a USD-anchored
+ *     asset. Catches a hijack whose bad number lands inside the drift band.
+ *   • the DRIFT-SANITY gate — oracle and DEX must agree at admission. Catches
+ *     a hijack that IS quoted in USDC and so clears the allowlist.
+ * A pool must clear both. Neither can be relaxed to make a ticker fit.
+ *
+ * ⚠️ This probe is the ADMISSION gate; it does not fix the production read. A
+ * ticker that fails 4b/4c is telling you `dexPriceDexScreener` cannot price it
+ * yet — the correct response is to defer the ticker and fix the read, never to
+ * widen the gate.
+ *
  * ── Usage ────────────────────────────────────────────────────────────────────
  *   # Health check — re-run the gate against every ticker already admitted:
  *   npx tsx scripts/base-stock-admission-probe.ts
@@ -85,6 +107,66 @@ const AGGREGATOR_MINI_ABI = [
 // below the good population so a genuine-but-smaller market still qualifies.
 const MIN_LIQUIDITY_USD = 100_000;
 const MIN_VOLUME_24H_USD = 50_000;
+
+/**
+ * Quote assets a tokenized equity may be PRICED against.
+ *
+ * ⚠️ ADDED 2026-09-08 BECAUSE THE GATE RETURNED **PASS** ON A PRICE THAT WAS
+ * 38.93× WRONG. TSLA cleared every floor above — $261,562 liquidity, $214,799
+ * 24h volume, 65 live candles — while the price the production path would have
+ * published was **$13,789.61** against an oracle share price of **$354.24**.
+ *
+ * Root cause, one sentence: `dexPriceDexScreener` takes the deepest pair whose
+ * BASE token is our token, and DexScreener labels the illiquid `TSLAc/STC` V4
+ * pool with TSLAc on the base side, so the deepest-pool sort picked it over the
+ * genuine `TSLAc/USDC` Aerodrome pool ($195,852 liquidity, $404,994 volume,
+ * $354.87 — drift ~0.01%). TSLA's MARKET is healthy; our READ of it is not.
+ *
+ * Every floor in this file measures how much trading a pool sees. NONE of them
+ * asked the prior question: is the thing on the other side of the pool an asset
+ * whose dollar value we actually know? Pricing a tokenized equity through a
+ * memecoin is meaningless no matter how deep the pool is — the number is not a
+ * share price, it is an exchange rate against something with no anchor.
+ *
+ * USDC and WETH are the two Base assets with an independent, deep dollar
+ * reference. Every pool on the desk today is USDC; WETH is allowed because its
+ * USD conversion is itself well-anchored, not because anything needs it yet.
+ * Adding to this set is a correctness decision — the same bar as adding a row
+ * to `BASE_STOCKS`.
+ */
+const ALLOWED_QUOTE_ASSETS: Record<string, string> = {
+  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
+  "0x4200000000000000000000000000000000000006": "WETH",
+};
+
+/**
+ * Max |drift| between the DEX price we would publish and the oracle share
+ * price, at admission time.
+ *
+ * This is the SECOND half of the TSLA fix and it is NOT redundant with the
+ * quote-asset gate — the two catch different halves of the same failure:
+ *   • quote-asset gate  → a hijacked pool whose bad price happens to land
+ *                         INSIDE this band (undetectable by magnitude);
+ *   • drift gate        → a hijacked pool that IS quoted in USDC/WETH and so
+ *                         passes the allowlist (undetectable by pairing).
+ * Neither subsumes the other; a pool must clear both.
+ *
+ * 25% sits in the empty gap between two measured populations. The eight healthy
+ * tickers measured 2026-09-08 all landed within **0.4%** of their oracle
+ * (MSFT 0.045%, SNDK 0.115%, MSTR -0.142%, AMZN 0.382%; the four incumbents
+ * were ≤0.1% at their own admission). The hijacked read landed at **3792.7%**.
+ * So the floor is ~65× above the worst legitimate observation and ~150× below
+ * the break — it cannot fire on real basis, and cannot miss a magnitude error.
+ *
+ * ⚠️ This is an ADMISSION-TIME consistency check, not a drift threshold. It says
+ * "these two independent measurements of one share price must agree before we
+ * start publishing their difference as a signal." Do not confuse it with
+ * `DRIFT_MIN_ABS_PCT`, which is the engine deciding when a *real* gap is worth
+ * an arrow. Raising this to make a ticker pass would be admitting a ticker whose
+ * price we demonstrably cannot read.
+ */
+const MAX_ADMISSION_DRIFT_PCT = 25;
+
 /** Hourly candles to scan for the BABA test (frozen / zero-volume pool). */
 const CANDLE_HOURS = 72;
 /** Max share of hours allowed to be zero-volume or flat-close before FAIL. */
@@ -116,8 +198,20 @@ interface GateResult {
   deadHours: number | null;
   flatHours: number | null;
   candles: number | null;
+  /** Symbol on the other side of the pool we were priced on ("USDC", "STC", …). */
+  quoteAsset: string | null;
+  dexPrice: number | null;
   verdict: Verdict;
-  /** Measured shortfalls — facts about the ticker. */
+  /**
+   * Measured shortfalls → FAIL.
+   *
+   * Mostly facts about the TICKER (its pool is thin, its feed is stale). The
+   * quote-asset and drift gates add a second kind: a fact about the PRICE WE
+   * WOULD PUBLISH for it. TSLA's market is fine; our read of it is 38.9× wrong.
+   * Both belong here rather than in `unknowns`, because both are measured,
+   * reproducible, and will not change on a re-run — telling the operator to
+   * "re-run in a few minutes" would be false advice.
+   */
   reasons: string[];
   /** Things we could not measure — facts about our own read. */
   unknowns: string[];
@@ -125,6 +219,13 @@ interface GateResult {
 
 function usd(n: number | null, dp = 0): string {
   return n === null ? "—" : "$" + n.toLocaleString("en-US", { maximumFractionDigits: dp });
+}
+
+/** Pad AND truncate — a Uniswap V4 `poolId` is 66 chars, not 42, so a bare
+ *  `padEnd` silently shears every later column off the checkpoint table that
+ *  gets pasted for approval. Truncated cells are marked with `…`. */
+function col(s: string, w: number): string {
+  return s.length > w - 1 ? s.slice(0, w - 2) + "… " : s.padEnd(w);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -208,6 +309,60 @@ async function poolCount(token: string): Promise<number | null> {
   if (json === null) return null;
   const data = (json as { data?: unknown[] }).data;
   return Array.isArray(data) ? data.length : null;
+}
+
+/**
+ * What is on the OTHER SIDE of the pool the production path just priced us on?
+ *
+ * Deliberately re-reads the pool by ADDRESS from DexScreener — the same provider
+ * `BASE_PRICE_SOURCE` dispatches to (`dexFeed.kind === "dexscreener"`), so this
+ * audits the pool the real code actually chose rather than asking a second
+ * indexer for its own opinion. Providers disagree about which side of a pair is
+ * "base": GeckoTerminal and DexScreener label the TSLAc/STC pool oppositely, and
+ * that disagreement is precisely what let the hijack through. Auditing the
+ * decision means using the decider's own labels.
+ *
+ * Returns null when the pair cannot be read → INCONCLUSIVE, never "fine".
+ */
+async function pricedPairing(pool: string): Promise<{
+  base: string;
+  quote: string;
+  quoteAddress: string;
+  dex: string;
+  priceUsd: number | null;
+} | null> {
+  for (let i = 0; i < 4; i++) {
+    if (i > 0) await sleep(1500 * 2 ** (i - 1));
+    try {
+      const res = await fetch(
+        `https://api.dexscreener.com/latest/dex/pairs/base/${pool.toLowerCase()}`,
+        { headers: { accept: "application/json" } },
+      );
+      if (res.status === 429 || res.status >= 500) continue;
+      if (!res.ok) return null;
+      const json = (await res.json()) as {
+        pairs?: {
+          dexId?: string;
+          baseToken?: { address?: string; symbol?: string };
+          quoteToken?: { address?: string; symbol?: string };
+          priceUsd?: string;
+        }[] | null;
+      };
+      const p = json.pairs?.[0];
+      if (!p?.quoteToken?.address) return null;
+      const px = parseFloat(p.priceUsd ?? "");
+      return {
+        base: p.baseToken?.symbol ?? "?",
+        quote: p.quoteToken.symbol ?? "?",
+        quoteAddress: p.quoteToken.address.toLowerCase(),
+        dex: p.dexId ?? "?",
+        priceUsd: Number.isFinite(px) ? px : null,
+      };
+    } catch {
+      /* network blip — retry */
+    }
+  }
+  return null;
 }
 
 /**
@@ -310,6 +465,59 @@ async function runGate(
     }
   }
 
+  // 4b. WHAT ARE WE PRICED AGAINST? Every gate above measures how BUSY the pool
+  //     is; none of them asks whether the other side of it has a dollar value we
+  //     know. A deep pool against a memecoin is a deep pool, and its "price" is
+  //     not a share price. See ALLOWED_QUOTE_ASSETS for the TSLA measurement
+  //     that made this gate necessary.
+  let quoteAsset: string | null = null;
+  let dexPx: number | null = null;
+  if (q.dex_pool_address) {
+    const pair = await pricedPairing(q.dex_pool_address);
+    if (pair === null) {
+      unknowns.push(
+        "could not read the pairing of the pool we were priced on — cannot admit " +
+          "without knowing what the price is denominated in",
+      );
+    } else {
+      quoteAsset = pair.quote;
+      dexPx = pair.priceUsd;
+      const known = ALLOWED_QUOTE_ASSETS[pair.quoteAddress];
+      if (!known) {
+        reasons.push(
+          `priced on ${pair.base}/${pair.quote} (${pair.dex}) — ${pair.quote} ` +
+            `(${pair.quoteAddress}) is not a USD-anchored quote asset. ` +
+            `Allowed: ${Object.values(ALLOWED_QUOTE_ASSETS).join(", ")}. ` +
+            "The deepest pool is not automatically the right pool.",
+        );
+      }
+    }
+  }
+
+  // 4c. DO OUR TWO PRICE SOURCES AGREE? The oracle and the DEX measure the same
+  //     share price by completely independent means, so at admission they must
+  //     land on the same number. A magnitude gap is not a trading opportunity —
+  //     it is proof we are reading one of them wrong, and admitting on it would
+  //     publish that error as a signal on the permanent track record.
+  if (q.share_price_usd !== null && q.share_price_usd > 0 && q.drift_pct !== null) {
+    if (Math.abs(q.drift_pct) > MAX_ADMISSION_DRIFT_PCT) {
+      const detail =
+        `DEX ${usd(q.dex_price_usd, 2)} vs oracle ${usd(q.share_price_usd, 2)} — ` +
+        `drift ${q.drift_pct.toFixed(1)}% exceeds ±${MAX_ADMISSION_DRIFT_PCT}% ` +
+        `(${(Math.abs(q.drift_pct) / 100 + 1).toFixed(1)}× apart). ` +
+        "Two independent reads of one share price cannot disagree by this much: " +
+        "one of them is wrong, and we do not yet know which.";
+      // Attribute it, exactly as staleness is attributed: if the oracle is frozen
+      // because the market is closed, the DEX has been free to wander and the gap
+      // may be the calendar rather than a broken read.
+      if (q.feed_is_stale && marketClosed !== null && marketClosed.closed) {
+        unknowns.push(`${detail} Oracle is stale during a market close — re-run on a weekday.`);
+      } else {
+        reasons.push(detail);
+      }
+    }
+  }
+
   // 5. can_fire — the exact predicate the poller/grader gate on. If the DEX leg
   //    was merely unreachable, `can_fire:false` is a symptom of OUR read, not of
   //    the token, so it must not be recorded as a measured failure.
@@ -362,6 +570,8 @@ async function runGate(
     deadHours: dead,
     flatHours: flat,
     candles,
+    quoteAsset,
+    dexPrice: dexPx ?? q.dex_price_usd,
     // A measured shortfall outranks an unmeasurable one: if we KNOW it fails,
     // say FAIL. Otherwise any gap in the evidence means INCONCLUSIVE, which
     // still blocks admission — "unknown" is never read as "fine".
@@ -495,10 +705,12 @@ async function main() {
     console.log(`  token       ${r.token}`);
     console.log(`  feed        ${r.feed}`);
     console.log(`  pool        ${r.pool ?? "— none found —"}`);
+    console.log(`  quoted in   ${r.quoteAsset ?? "—"}`);
     console.log(`  liquidity   ${usd(r.liquidity)}`);
     console.log(`  volume 24h  ${usd(r.volume24h)}`);
     console.log(
-      `  price       ${r.sharePrice === null ? "—" : "$" + r.sharePrice.toFixed(2)}` +
+      `  price       oracle ${r.sharePrice === null ? "—" : "$" + r.sharePrice.toFixed(2)}` +
+        `   dex ${r.dexPrice === null ? "—" : "$" + r.dexPrice.toFixed(2)}` +
         `   drift ${r.driftPct === null ? "—" : r.driftPct.toFixed(3) + "%"}`,
     );
     if (r.candles !== null) {
@@ -530,27 +742,29 @@ async function main() {
   }
 
   // The checkpoint table — this is what gets pasted for approval.
-  console.log("─".repeat(118));
+  console.log("─".repeat(132));
   console.log(
     "ticker".padEnd(8) +
       "token".padEnd(44) +
       "pool".padEnd(44) +
+      "quote".padEnd(7) +
       "liquidity".padEnd(13) +
       "vol 24h".padEnd(13) +
       "gate",
   );
-  console.log("─".repeat(118));
+  console.log("─".repeat(132));
   for (const r of results) {
     console.log(
-      r.ticker.padEnd(8) +
-        r.token.padEnd(44) +
-        (r.pool ?? "—").padEnd(44) +
-        usd(r.liquidity).padEnd(13) +
-        usd(r.volume24h).padEnd(13) +
+      col(r.ticker, 8) +
+        col(r.token, 44) +
+        col(r.pool ?? "—", 44) +
+        col(r.quoteAsset ?? "—", 7) +
+        col(usd(r.liquidity), 13) +
+        col(usd(r.volume24h), 13) +
         r.verdict,
     );
   }
-  console.log("─".repeat(118));
+  console.log("─".repeat(132));
 
   const failed = results.filter((r) => r.verdict === "FAIL");
   const unclear = results.filter((r) => r.verdict === "INCONCLUSIVE");
