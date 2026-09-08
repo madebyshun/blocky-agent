@@ -7,16 +7,41 @@
  *   A. LIVE — read every BASE_STOCKS ticker end-to-end from Base mainnet and print the
  *      multiplier-adjusted share price, the raw total-return value, the DEX
  *      spot, the drift, and every suppression gate. Assert each share price
- *      lands in a sane per-ticker band. This is the "sharePrice matches the
- *      REAL stock price (~$215), not $215 × multiplier" acceptance test.
+ *      lands in a sane per-ticker band, AND that it satisfies the division
+ *      identity `share == total_return ÷ (multiplier / 1e18)`. This is the
+ *      "sharePrice matches the REAL stock price (~$215), not $215 × multiplier"
+ *      acceptance test.
  *
- *   B. SYNTHETIC — the multiplier hazard cannot be caught by the live test today
- *      because every registered token currently reports multiplier == 1e18, which makes
- *      the division a no-op (share == total-return). So we feed a FIXED answer
- *      through `sharePriceFromFeed` with multipliers ≠ 1e18 and assert the
- *      division actually happens (2× multiplier ⟹ half price; 1.05× ⟹ 205, not
- *      215) and that a zero multiplier THROWS (the fail-loud contract). THIS is
- *      the test that would catch a dropped division.
+ *   B. SYNTHETIC — every registered token reports multiplier == 1e18 today, which
+ *      makes the live division a no-op, so the hazard needs a second venue that
+ *      does not depend on the market. We feed a FIXED answer through
+ *      `sharePriceFromFeed` with multipliers ≠ 1e18 and assert the division
+ *      actually happens (2× ⟹ half price; 1.05× ⟹ 205, not 215; 1.02× ⟹ the
+ *      post-dividend case from the B20 spec) and that a zero multiplier THROWS.
+ *
+ * ⚠️ A AND B ARE NOT REDUNDANT, and A used to opt out of its half. B tests the
+ * FUNCTION `sharePriceFromFeed` in isolation; A tests the WIRING — that
+ * `readBaseStockQuote` actually hands that function this token's real multiplier.
+ * A caller that passes `WAD` instead of `tok.multiplier` leaves B perfectly green
+ * (the function is still correct!) and is visible ONLY to A. That is the shape a
+ * refactor produces, so A is the load-bearing half for exactly the bug most
+ * likely to be introduced.
+ *
+ * And A used to skip itself. The live identity was written
+ * `if (q.multiplier_is_unit) { assert share == total }` — an assertion that only
+ * ran while the multiplier was exactly 1e18, i.e. one that RETIRES ITSELF the
+ * moment the thing it guards starts happening. Base's B20 spec folds cash
+ * dividends into the multiplier rather than distributing them ("the multiplier
+ * increases to 1.02"), so the first ex-dividend date on any of the six
+ * dividend-paying tickers would have switched it off silently.
+ *
+ * MEASURED, not argued (scratch worktree, 2026-09-08): with the call site passing
+ * WAD and the multiplier reading 1.02e18, the OLD probe exited 0 and printed
+ * "ALL CHECKS PASSED" with zero FAIL lines while all 7 tickers served a price 2%
+ * too high — inside every band, so nothing else caught it either. The new
+ * unconditional identity failed all 7 and named each one with its expected value.
+ * Anything it genuinely cannot check lands in the `skipped` ledger, which prints
+ * next to the verdict. (#224.)
  *
  * Run: `npm run test:base-stocks` (from apps/web).
  */
@@ -33,6 +58,15 @@ function check(name: string, ok: boolean, detail = "") {
   console.log(`${mark} ${name}${detail ? `  — ${detail}` : ""}`);
   if (!ok) failures++;
 }
+
+/**
+ * Assertions that legitimately could NOT run this cycle (e.g. a suppressed quote
+ * has no price to divide). These are not failures — but they are not allowed to
+ * be silent either, which is the whole defect #224 is about: a check that stops
+ * running while the summary line still says ALL CHECKS PASSED. Everything here
+ * is reprinted next to that line, so the operator sees the hole.
+ */
+const skipped: string[] = [];
 function approx(a: number, b: number, tolPct = 0.001) {
   return Math.abs(a - b) <= Math.abs(b) * tolPct + 1e-9;
 }
@@ -67,11 +101,19 @@ const SANE_BAND: Record<string, [number, number]> = {
   // $81.81–$365.21 — 4.5× wide — so any band that tolerates real MSTR movement
   // is wider than a doubling. Narrowing it would make the probe cry wolf on a
   // genuine move, which gets a check ignored rather than obeyed.
-  // A 2× is NOT uncovered, it is covered ELSEWHERE and better: while the
-  // multiplier reads 1e18 the `unit-multiplier ⇒ share == total-return` check
-  // below asserts exact equality, so a dropped or doubled division shows up
-  // there regardless of magnitude. This band still catches the errors that
-  // check cannot: ÷100 ⇒ $1.38 and ×100 ⇒ $13,830 both blow through.
+  // A 2× is NOT uncovered, it is covered ELSEWHERE and better: the
+  // `share == total-return ÷ multiplier` identity below asserts exact equality,
+  // so a dropped or doubled division shows up there regardless of magnitude.
+  // This band still catches the errors that check cannot: ÷100 ⇒ $1.38 and
+  // ×100 ⇒ $13,830 both blow through.
+  //
+  // ⚠️ That sentence used to read "*while* the multiplier reads 1e18" — and the
+  // hedge was load-bearing, because the identity check really did switch itself
+  // off above 1e18. MSTR pays no dividend, but a split or any other rebase moves
+  // its multiplier too, and on THIS row a self-retiring identity check meant a 2×
+  // would have had no cover at all: the band can't see it and the check wouldn't
+  // have run. The identity is now unconditional, so the caveat is gone rather
+  // than merely reworded.
   MSTR: [60, 500], // anchor $138.30, 52w $81.81–$365.21
 };
 
@@ -135,13 +177,50 @@ async function liveChecks() {
     }
     check(`${stock.ticker} impostor gate passes`, q.impostor_ok);
     check(`${stock.ticker} multiplier readable & > 0`, q.multiplier_ok);
-    // When multiplier == 1e18 the share price must equal the raw total-return
-    // value; if they diverge with a unit multiplier the WAD math is broken.
-    if (q.multiplier_is_unit && q.share_price_usd !== null && q.total_return_value_usd !== null) {
+
+    // ── The division identity, asserted at EVERY multiplier ──────────────────
+    //
+    // ⚠️ This check used to read `if (q.multiplier_is_unit) { ... }` — it only
+    // ran while the multiplier happened to be exactly 1e18. That is a gate that
+    // RETIRES ITSELF. Base's B20 spec is explicit that a cash dividend is not
+    // distributed but folded into the multiplier ("After a dividend on a
+    // tokenized equity, the multiplier increases to 1.02"), so the first
+    // dividend on any ticker would have silently switched this assertion off —
+    // and the probe would have gone on printing "ALL CHECKS PASSED" with the
+    // strongest check in the file no longer running. Six of the seven tickers
+    // pay dividends. (#224, same family as #222.)
+    //
+    // The identity below holds at ANY multiplier:
+    //     share == total_return ÷ (multiplier / 1e18)
+    // At multiplier == 1e18 it reduces exactly to the old `share == total_return`,
+    // so nothing is lost — and above 1e18 it is strictly stronger, because it is
+    // the ONLY thing here that can catch a dropped or doubled division on a
+    // ticker whose saneBand is too wide to notice one. MSTR is exactly that
+    // ticker; see the SANE_BAND note.
+    if (q.multiplier === null) {
       check(
-        `${stock.ticker} unit-multiplier ⇒ share == total-return`,
-        approx(q.share_price_usd, q.total_return_value_usd, 1e-6),
-        `share=$${q.share_price_usd.toFixed(6)} tr=$${q.total_return_value_usd.toFixed(6)}`,
+        `${stock.ticker} multiplier readable for the division identity`,
+        false,
+        "multiplier() unreadable — the division identity CANNOT be checked for this ticker",
+      );
+    } else if (q.share_price_usd === null || q.total_return_value_usd === null) {
+      // A suppressed quote legitimately has no price, so this is not a failure —
+      // but it is never allowed to be SILENT. It lands in the skipped ledger and
+      // is reprinted at the end, so "ALL CHECKS PASSED" can't hide a hole.
+      skipped.push(
+        `${stock.ticker} division identity — no price to check ` +
+          `(share=${q.share_price_usd === null ? "null" : "ok"}, ` +
+          `total_return=${q.total_return_value_usd === null ? "null" : "ok"}, ` +
+          `reason=${q.suppressed_reason ?? "unknown"})`,
+      );
+    } else {
+      const mult = Number(BigInt(q.multiplier)) / Number(WAD);
+      const expected = q.total_return_value_usd / mult;
+      check(
+        `${stock.ticker} share == total-return ÷ multiplier (×${mult})`,
+        approx(q.share_price_usd, expected, 1e-6),
+        `share=$${q.share_price_usd.toFixed(6)}  tr=$${q.total_return_value_usd.toFixed(6)}  ` +
+          `mult=${mult}  expected=$${expected.toFixed(6)}`,
       );
     }
     console.log("");
@@ -171,6 +250,31 @@ function syntheticChecks() {
   check("multiplier 1.05e18 ⇒ share ≈ raw/1.05", approx(rebased, raw / 1.05, 1e-4), `got $${rebased.toFixed(4)} (expected $${(raw / 1.05).toFixed(4)})`);
   check("multiplier 1.05e18 ⇒ share < raw", rebased < raw, `got $${rebased.toFixed(4)} < $${raw.toFixed(4)}`);
 
+  // 3b. THE DIVIDEND CASE — multiplier == 1.02×WAD. Not a hypothetical: this is
+  //     the exact number from Base's B20 spec, "After a dividend on a tokenized
+  //     equity, the multiplier increases to 1.02". A cash dividend is NOT
+  //     distributed to holders, it is folded into the multiplier, so this is the
+  //     scheduled, dated event that takes any ticker off 1e18. Six of our seven
+  //     pay dividends; the first ex-div date is when the live identity check
+  //     above stops being a no-op and starts doing real work.
+  //
+  //     A dropped division here is small and therefore INVISIBLE to every band in
+  //     this file: $215.33 vs $211.11 is a 2% gap, well inside even the tight
+  //     NVDA band and nowhere near the registry's wider one. That is what makes
+  //     the identity the only thing that can catch it.
+  const m102 = (102n * WAD) / 100n;
+  const afterDiv = sharePriceFromFeed(ANSWER, DECIMALS, m102);
+  check(
+    "multiplier 1.02e18 (post-dividend, per B20 spec) ⇒ share ≈ raw/1.02",
+    approx(afterDiv, raw / 1.02, 1e-4),
+    `got $${afterDiv.toFixed(4)} (expected $${(raw / 1.02).toFixed(4)})`,
+  );
+  check(
+    "a 2% dividend rebase is too small for any sane band ⇒ only the identity catches it",
+    !approx(afterDiv, raw, 1e-4) && Math.abs(afterDiv - raw) / raw < 0.05,
+    `gap=${(((raw - afterDiv) / raw) * 100).toFixed(2)}% — under every SANE_BAND width`,
+  );
+
   // 4. Fail-loud contract: a zero (or negative) multiplier MUST throw, never
   //    silently return the raw answer.
   let threwZero = false;
@@ -196,8 +300,21 @@ async function main() {
   await liveChecks();
 
   console.log("─".repeat(60));
+  // The skipped ledger prints BEFORE the verdict, always, even on a clean run.
+  // #224 was not "a check computed the wrong answer" — it was "a check quietly
+  // stopped running while the last line still said ALL CHECKS PASSED". A green
+  // summary that can't be read without also reading what didn't run is the fix.
+  if (skipped.length > 0) {
+    console.log(`⚠️  ${skipped.length} ASSERTION(S) SKIPPED — not failures, but NOT verified:`);
+    for (const s of skipped) console.log(`     • ${s}`);
+    console.log("─".repeat(60));
+  }
   if (failures === 0) {
-    console.log("✅ ALL CHECKS PASSED");
+    console.log(
+      skipped.length === 0
+        ? "✅ ALL CHECKS PASSED"
+        : `✅ ALL CHECKS PASSED (with ${skipped.length} skipped — see above)`,
+    );
     process.exit(0);
   } else {
     console.log(`❌ ${failures} CHECK(S) FAILED`);
