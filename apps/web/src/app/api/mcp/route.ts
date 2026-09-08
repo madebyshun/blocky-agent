@@ -401,11 +401,6 @@ const TOOLS = [
     description: "ERC-20 compliance (B20) role and policy detection from verified contract source.",
     inputSchema: { type: "object", properties: { contract: { type: "string", description: "Contract address 0x..." } }, required: ["contract"] },
   },
-  {
-    name: "hub_b20_launch",
-    description: "Generate complete B20 token deployment package — foundry.toml, Solidity deploy script, setup + deploy + mint commands. Supports asset and stablecoin variants.",
-    inputSchema: { type: "object", properties: { name: { type: "string", description: "Token name" }, symbol: { type: "string", description: "Token symbol, e.g. MTK" }, variant: { type: "string", enum: ["asset", "stablecoin"], description: "B20 variant" }, decimals: { type: "number", description: "Decimals (default 18)" }, supply_cap: { type: "number", description: "Max supply (optional)" }, currency_code: { type: "string", description: "Currency code for stablecoin variant, e.g. USD" } }, required: ["name", "symbol", "variant"] },
-  },
   // ── B20 calldata builders (MCP-native, free — pure encoders, non-custodial) ──
   // Return { to, data, value } ready for an EIP-5792 send_calls / Base MCP wallet
   // call. The user signs in their own wallet; we never hold keys. No x402 payment.
@@ -673,7 +668,6 @@ const HUB_MAP: Record<string, string> = {
   hub_quick_safety:         "quick-safety",
   hub_wallet_risk:          "wallet-risk",
   hub_b20_check:            "b20-check",
-  hub_b20_launch:           "b20-launch",
   hub_liquidity_depth:      "liquidity-depth",
   hub_token_distribution:   "token-distribution",
   hub_base_alpha:           "base-alpha",
@@ -725,7 +719,6 @@ const ARG_REMAP: Record<string, (a: Record<string, unknown>) => Record<string, u
   // On-chain primitives & data (new batch) — numeric coercions + defaults
   "pool-scan":               (a) => ({ ...a, limit: a.limit !== undefined ? Number(a.limit) : 10 }),
   "new-pools":               (a) => ({ ...a, hours: a.hours !== undefined ? Number(a.hours) : 24 }),
-  "b20-launch":              (a) => ({ ...a, decimals: a.decimals !== undefined ? Number(a.decimals) : undefined, supply_cap: a.supply_cap !== undefined ? Number(a.supply_cap) : undefined }),
   "cross-protocol-yield":    (a) => ({ ...a, risk_tolerance: a.risk_tolerance ?? "medium" }),
   "narrative-pulse":         (a) => ({ ...a, focus: a.focus ?? "" }),
   "base-alpha":              (a) => a,

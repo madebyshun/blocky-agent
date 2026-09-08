@@ -784,22 +784,6 @@ Testnets are reachable by full id: base-sepolia, ethereum-sepolia, robinhood-tes
     },
   },
   {
-    name: "hub_b20_launch",
-    description: "Open B20 token launch form. User fills name, symbol, variant (asset/stablecoin), optional decimals/supply_cap/currency_code. PRIMARY action: wallet-signed createB20 Factory transaction to deploy directly on Sepolia/mainnet. SECONDARY option: Foundry deployment scripts. Trigger on: 'launch b20', 'b20 launch', 'deploy b20', 'create b20', 'b20 token deploy', or any B20 deploy/launch/create intent.",
-    input_schema: {
-      type: "object",
-      properties: {
-        name:          { type: "string", description: "Token name" },
-        symbol:        { type: "string", description: "Token symbol" },
-        variant:       { type: "string", enum: ["asset", "stablecoin"] },
-        decimals:      { type: "number" },
-        supply_cap:    { type: "string" },
-        currency_code: { type: "string" },
-      },
-      required: [],
-    },
-  },
-  {
     name: "robinhood_swap",
     description: "Open a swap card for a token on ROBINHOOD CHAIN (chainId 4663) — routes through Blue Agent's own deployed RobinhoodSwapRouter (0x3bb0…d23D) against Uniswap V3 pools. Two shapes: (a) ETH↔token via { direction, token } and (b) token↔token via { token_in, token }. Trigger on any Robinhood swap intent including token↔token phrases like 'swap 50 USDC for VEX on robinhood', 'sell 100 VIRTUAL for CLAWBANK on robinhood'. Non-custodial: the card discovers the route (direct pool required for token↔token; multi-hop via WETH is a follow-up), and the user's own wallet signs each step. If no direct route exists the card shows an honest 'no route' state. NEVER use for Base tokens — use prepare_swap for Base.",
     input_schema: {
@@ -1016,8 +1000,8 @@ interface ToolCallResult {
    * ~48s second round-trip into ~0s (see the short-circuit in `veniceToolStream`).
    *
    * ONLY set this for tools whose reply never depends on fetched data: interactive
-   * "review + sign in the card" cards (prepare_*, robinhood_*, hub_b20_launch,
-   * hub_b20_manage). Do NOT set it for reader tools whose one-liner states a live
+   * "review + sign in the card" cards (prepare_*, robinhood_*, hub_b20_manage).
+   * Do NOT set it for reader tools whose one-liner states a live
    * value (check_memo / check_authorization / check_wallet) or tools that need real
    * synthesis from data (hub_hood_arrow) — those must still run Phase 2.
    */
@@ -1266,15 +1250,11 @@ async function callHubTool(
       },
     };
   }
-  if (toolName === "hub_b20_launch") {
-    // Client-rendered marker — B20LaunchCard handles form + script generation
-    // entirely in the browser. No server execution, no funds moved.
-    return {
-      text: "B20 launch form rendered. The card is pre-filled with the token details — the user can edit fields and click Generate Scripts to get the foundry.toml, deploy script, and CLI commands. Do NOT restate the fields as a table. Reply with one short line: tell the user to review the form and click Generate Scripts.",
-      staticReply: "Your B20 launch form is above — review the fields and hit **Generate Scripts** for the foundry.toml, deploy script and CLI commands.",
-      result: { kind: "b20_launch", ...args },
-    };
-  }
+  // hub_b20_launch used to live here (retired 2026-09-08). Chat has NO token
+  // deploy tool now, on purpose: deploying is /app/b20's job, and it is the only
+  // surface that reads the ActivationRegistry before letting anyone sign.
+  // Re-adding a marker here without re-adding a card is the #204 shape — the
+  // model gets a tool-shaped hole and fills it from training data.
   if (toolName === "hub_hood_arrow") {
     // T-D D2 chat consumer.
     // Resolves an arrow by (in order): arrow_id → serial → newest engine
