@@ -73,9 +73,38 @@ import { chainOf, rowKey, type Arrow, type HoodChain } from "../src/lib/blue-hoo
 import { kvWatchTicker } from "../src/lib/blue-hood/kv-keys";
 import { isValidTicker } from "../src/lib/blue-hood/watchlist";
 import { analyzeCohorts } from "../src/lib/blue-hood/cohort-stats";
-import { findByTicker } from "../src/lib/robinhood/rwa-registry";
+import { findByTicker, RWA_TOKENS } from "../src/lib/robinhood/rwa-registry";
+import { BASE_STOCKS } from "../src/lib/base-stocks/registry";
 
 const WEB = path.resolve(path.dirname(path.resolve(process.argv[1])), "..");
+
+/**
+ * A ticker that is REAL on Robinhood and ABSENT from the Base desk — derived
+ * from the two registries' own exports, never hardcoded.
+ *
+ * This was the literal string "TSLA" until 2026-09-09, when TSLA was admitted
+ * to the Base desk and the two checks below went red. Nothing was wrong with
+ * either the guard or the fix: the FIXTURE had become false. A constant that
+ * must stay absent from a deliberately GROWING allowlist is a hand-kept list
+ * wearing a different hat, and this file already says why that rots (#205's
+ * `TOOL_NAMES`, where an enumerated list quietly stopped covering its subject).
+ *
+ * The distinction worth keeping: a stale fixture here fails LOUDLY, so it costs
+ * a few minutes. The failure mode being guarded against — Base falling back to
+ * RH's contract — is silent and ships a verified claim about the wrong chain.
+ * Deriving keeps the loud failure for real regressions and removes it for desk
+ * growth, which is a planned event, not a regression.
+ *
+ * Sorted, so the ticker chosen and the failure message are identical run to run.
+ * `null` ⟹ the desks fully overlap and this property can no longer be stated;
+ * Group 1 then FAILS by name rather than skipping, because a check that quietly
+ * stops checking is the thing this whole file exists to prevent.
+ */
+const BASE_DESK_TICKERS = new Set<string>(BASE_STOCKS.map((s) => s.ticker));
+const RH_ONLY_TICKER: string | null =
+  RWA_TOKENS.filter((t) => t.kind === "stock" && !BASE_DESK_TICKERS.has(t.ticker))
+    .map((t) => t.ticker)
+    .sort()[0] ?? null;
 
 /**
  * Defensive read: a MISSING file yields "", never a throw.
@@ -188,18 +217,24 @@ async function main() {
     check("the chain label is carried so copy can never omit the desk",
       nvdaRh.chainLabel === "Robinhood Chain" && nvdaBase.chainLabel === "Base");
 
-    // THE central refusal. TSLA is a real RH token and absent from the B20
-    // allowlist, so this is exactly the case where a fallback would look helpful.
-    const tslaBase = resolveChainToken("TSLA", "base");
-    const tslaRh = resolveChainToken("TSLA", "robinhood");
-    check("a ticker missing from the Base registry resolves to NULL, not to RH's answer",
-      tslaBase.contract === null && tslaBase.verified === false && tslaBase.name === null,
-      `got contract=${tslaBase.contract} verified=${tslaBase.verified}`);
-    check("and specifically NOT the Robinhood contract",
-      tslaBase.contract !== tslaRh.contract && !!tslaRh.contract,
-      "cross-chain fallback is the bug, never the remedy");
-    check("an unresolved token still names its desk, so copy stays honest",
-      tslaBase.chainLabel === "Base" && tslaBase.chain === "base");
+    // THE central refusal. `RH_ONLY_TICKER` is a real RH token that the Base
+    // desk does not carry, so this is exactly the case where a fallback would
+    // look helpful. Derived, not hardcoded — see the constant's header.
+    check("a ticker exists that is real on RH and absent from Base — the refusal is still expressible",
+      RH_ONLY_TICKER !== null,
+      "every RH stock is now on the Base desk; this property cannot be tested and must be re-stated, not deleted");
+    if (RH_ONLY_TICKER) {
+      const onlyBase = resolveChainToken(RH_ONLY_TICKER, "base");
+      const onlyRh = resolveChainToken(RH_ONLY_TICKER, "robinhood");
+      check(`a ticker missing from the Base registry resolves to NULL, not to RH's answer (${RH_ONLY_TICKER})`,
+        onlyBase.contract === null && onlyBase.verified === false && onlyBase.name === null,
+        `got contract=${onlyBase.contract} verified=${onlyBase.verified}`);
+      check("and specifically NOT the Robinhood contract",
+        onlyBase.contract !== onlyRh.contract && !!onlyRh.contract,
+        "cross-chain fallback is the bug, never the remedy");
+      check("an unresolved token still names its desk, so copy stays honest",
+        onlyBase.chainLabel === "Base" && onlyBase.chain === "base");
+    }
 
     // `name` must come from the SAME row as `contract` — the share card prints
     // them side by side, and mixing sources captions one chain's token with the
@@ -386,10 +421,15 @@ async function main() {
   check("kvWatchTicker(NVDA, base) !== kvWatchTicker(NVDA, robinhood)",
     kvWatchTicker("NVDA", "base") !== kvWatchTicker("NVDA", "robinhood"),
     `${kvWatchTicker("NVDA", "base")} vs ${kvWatchTicker("NVDA", "robinhood")}`);
-  // TSLA is a real RH ticker and NOT in the B20 allowlist. Pre-fix this returned
-  // true and the star wrote a Base subscription for a token Base does not list.
-  check("isValidTicker(TSLA, base) === false", isValidTicker("TSLA", "base") === false);
-  check("isValidTicker(TSLA, robinhood) === true", isValidTicker("TSLA", "robinhood") === true);
+  // A real RH ticker NOT in the B20 allowlist — derived, see RH_ONLY_TICKER.
+  // Pre-fix this returned true and the star wrote a Base subscription for a
+  // token Base does not list.
+  if (RH_ONLY_TICKER) {
+    check(`isValidTicker(${RH_ONLY_TICKER}, base) === false`,
+      isValidTicker(RH_ONLY_TICKER, "base") === false);
+    check(`isValidTicker(${RH_ONLY_TICKER}, robinhood) === true`,
+      isValidTicker(RH_ONLY_TICKER, "robinhood") === true);
+  }
   check("isValidTicker(NVDA, base) === true", isValidTicker("NVDA", "base") === true);
   check("isValidTicker rejects a company NAME on both desks",
     isValidTicker("Apple", "robinhood") === false && isValidTicker("Tesla", "robinhood") === false,

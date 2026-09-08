@@ -10,9 +10,11 @@ slug has no file, or a file has no slug.
 
 `MARKS` is keyed `"base:NVDA"` / `"robinhood:NVDA"`, never `"NVDA"`. A logo is an
 assertion about identity, and a ticker does not identify a token — chain + address
-does. MEASURED against the live registries: RH lists 181 stocks, Base lists 7, and all
-7 are dual-listed, so a bare-ticker resolver would paint a real company's mark onto
-**174 tickers the Base desk has never verified**. That is the same posture that let a
+does. MEASURED against the live registries on 2026-09-09: RH lists 181 stocks, Base
+lists 8, and all 8 are dual-listed, so a bare-ticker resolver would paint a real
+company's mark onto **173 tickers the Base desk has never verified**. Both numbers
+move on every admission and nothing checks this paragraph — re-measure, don't quote.
+That is the same posture that let a
 counterfeit TSLAc — identical `symbol`, identical `name`, `isB20() == false` — look
 legitimate (#280). This is the sixth bug in that family and the most persuasive one,
 because a rendered mark *looks* like the result of a lookup.

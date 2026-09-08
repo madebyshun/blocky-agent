@@ -11,9 +11,12 @@
  * sixth bare-ticker bug in this family, and the one that is hardest to doubt,
  * because a logo *looks* like it was looked up.
  *
- * MEASURED blast radius: `RWA_TOKENS` lists 181 stocks and `BASE_STOCKS` lists
- * 7, all 7 of which are also on RH. So a bare-ticker resolver would confidently
- * mark **174 tickers** that the Base desk has never verified. Same shape as
+ * MEASURED blast radius (2026-09-09, the day TSLA was admitted): `RWA_TOKENS`
+ * lists 181 stocks and `BASE_STOCKS` lists 8, all 8 of which are also on RH. So
+ * a bare-ticker resolver would confidently mark **173 tickers** that the Base
+ * desk has never verified. Every admission moves these two numbers in opposite
+ * directions, and nothing checks this prose — read them as a dated measurement,
+ * and re-measure rather than quoting. Same shape as
  * #280's counterfeit TSLAc, which carried an identical `symbol` AND an identical
  * `name` and still answered `isB20() == false`: a near-match on one attribute is
  * not the attribute you needed.
@@ -142,11 +145,13 @@ const MARKS: Readonly<Record<string, { slug: string; accent: string }>> = {
   "base:GOOGL": { slug: "google", accent: "#4B8BF5" },
   "base:META": { slug: "meta", accent: "#6FA8ED" },
   "base:NVDA": { slug: "nvidia", accent: "#76B900" },
-  // No `base:TSLA` — `BASE_STOCKS` does not list TSLA on this branch (that is
-  // PR #436, still open). A mark for a ticker the Base desk has not admitted
-  // would be exactly the forward-claim this module refuses to make. When #436
-  // lands, `hood-logo-check` FAILS by design and names the missing key: TSLA is
-  // marked on RH, so leaving Base unmarked would show one company two ways.
+  // `base:TSLA` arrives in the SAME commit that admits TSLA to `BASE_STOCKS`,
+  // and that is not tidiness. Split across two commits, the first one FAILS
+  // `hood-logo-check` by design — MEASURED before merging: 55/56, naming the
+  // site ("HALF-MARKED: TSLA"). Admitting a ticker and giving it its mark is one
+  // decision; a desk that lists a company without marking it shows that company
+  // two ways, which is the thing this table exists to prevent.
+  "base:TSLA": { slug: "tesla", accent: "#E06666" },
 
   // ── Robinhood Chain 4663 (RHJ) ──
   "robinhood:AAPL": { slug: "apple", accent: "#FFFFFF" },
