@@ -16,6 +16,7 @@
 import { NextResponse } from "next/server";
 import { addTicker, removeTicker, getWatchlist } from "@/lib/blue-hood/watchlist";
 import type { AlertKind } from "@/lib/blue-hood/watchlist";
+import { parseHoodChain } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,9 +33,16 @@ export async function GET(req: Request) {
   return NextResponse.json({ ok: true, watchlist }, { headers: NO_STORE });
 }
 
-/** POST /api/hood/watchlist { address, ticker, kinds? } → add a ticker. */
+/**
+ * POST /api/hood/watchlist { address, ticker, chain?, kinds? } → add a watch.
+ *
+ * `chain` is optional ON THE WIRE and absent ⟹ "robinhood" inside `addTicker`,
+ * which is what every client sent before the Base desk existed. It is parsed,
+ * not cast: an unrecognised value becomes `undefined` (⟹ robinhood, the
+ * documented default) rather than being written into a KV key.
+ */
 export async function POST(req: Request) {
-  let body: { address?: string; ticker?: string; kinds?: AlertKind[] };
+  let body: { address?: string; ticker?: string; chain?: unknown; kinds?: AlertKind[] };
   try {
     body = await req.json();
   } catch {
@@ -44,7 +52,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "address and ticker are required" }, { status: 400, headers: NO_STORE });
   }
 
-  const res = await addTicker(body.address, body.ticker, { kinds: body.kinds });
+  const res = await addTicker(body.address, body.ticker, {
+    chain: parseHoodChain(body.chain),
+    kinds: body.kinds,
+  });
   if (!res.ok) {
     // bad_address / bad_ticker → 400; at_cap → 409 (a limit, not a malformed request).
     const status = res.error.code === "at_cap" ? 409 : 400;
@@ -56,9 +67,12 @@ export async function POST(req: Request) {
   );
 }
 
-/** DELETE /api/hood/watchlist { address, ticker } → remove a ticker (symmetric prune). */
+/** DELETE /api/hood/watchlist { address, ticker, chain? } → remove a watch
+ *  (symmetric prune). `chain` is parsed and defaulted EXACTLY as in POST — if
+ *  the two disagreed, un-starring would leave the reverse set populated and the
+ *  user would keep receiving DMs they had cancelled. */
 export async function DELETE(req: Request) {
-  let body: { address?: string; ticker?: string };
+  let body: { address?: string; ticker?: string; chain?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -68,7 +82,7 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ ok: false, error: "address and ticker are required" }, { status: 400, headers: NO_STORE });
   }
 
-  const res = await removeTicker(body.address, body.ticker);
+  const res = await removeTicker(body.address, body.ticker, { chain: parseHoodChain(body.chain) });
   if (!res.ok) {
     return NextResponse.json({ ok: false, error: res.error.message, code: res.error.code }, { status: 400, headers: NO_STORE });
   }

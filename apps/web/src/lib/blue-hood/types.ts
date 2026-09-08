@@ -68,6 +68,21 @@ export function chainOf(x: { chain?: HoodChain } | null | undefined): HoodChain 
 }
 
 /**
+ * Narrow an UNTRUSTED value (request body, query string, LLM tool argument) to a
+ * `HoodChain`. Anything else — including a plausible-looking `"Base"`, `"8453"`
+ * or `"ethereum"` — becomes `undefined`, NOT a default.
+ *
+ * ⚠️ Returns `undefined`, never `"robinhood"`, and the two are different
+ * questions (see `matchesChain`): "the caller named no chain" must stay
+ * distinguishable from "the caller named Robinhood", or a typo silently becomes
+ * a chain choice. Apply `chainOf` afterwards only where a row-shaped default is
+ * genuinely correct.
+ */
+export function parseHoodChain(v: unknown): HoodChain | undefined {
+  return v === "base" || v === "robinhood" ? v : undefined;
+}
+
+/**
  * Does this row belong to the desk the CALLER asked about?
  *
  * ⚠️ THE DEFAULT GOES ON THE ROW, NEVER ON THE QUERY. `chainOf` above says an

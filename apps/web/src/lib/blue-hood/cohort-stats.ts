@@ -35,6 +35,16 @@
  * because a number, once rendered, gets quoted — so we do not render one we
  * cannot stand behind.
  *
+ * CHAIN IS PART OF A COHORT'S IDENTITY. Blue Hood grades two desks — Robinhood
+ * Chain (4663) and Base (8453) — and NVDA / META / GOOGL / AAPL trade on both
+ * as separate contracts with separate pools. A cohort keyed on the bare ticker
+ * would pool two different assets and report the blend as one measured rate,
+ * which is the same fabrication this file exists to refuse, just arrived at by
+ * arithmetic instead of by an LLM. Ticker cohorts are therefore keyed by
+ * `rowKey` and the family includes a pre-registered `chain:robinhood` /
+ * `chain:base` split. See `cohortDefs` for why that pair was declared while
+ * `n_base` was still 0.
+ *
  * WINDOW: `hit-rate-gate.ts` deliberately uses a rolling 7 days for the public
  * headline. This module defaults to the FULL record, because a 7-day window
  * currently holds ~72 graded arrows and cohorts inside it would be ~10–20 —
@@ -47,7 +57,7 @@
  * argument. Every number here is computed in code — an LLM must never be
  * asked to produce or adjust one.
  */
-import type { Arrow } from "./types";
+import { chainOf, rowKey, type Arrow, type HoodChain } from "./types";
 import { HIT_RATE_MIN_SAMPLE_PER_TYPE } from "./hit-rate-gate";
 
 // ── Thresholds ───────────────────────────────────────────────────────────────
@@ -65,7 +75,14 @@ export const COHORT_FDR = 0.05;
 /** Null hypothesis: a signal with no edge closes half the time. */
 export const NULL_HIT_RATE = 0.5;
 
-export const COHORT_STATS_VERSION = "1.0.0";
+/**
+ * 1.1.0 — ticker cohorts are keyed by `rowKey` (ticker, chain) instead of a bare
+ * ticker, and a pre-registered `chain:*` pair joined the family. The key shape
+ * changed for Base rows only (`ticker:base:NVDA`); Robinhood keys are unchanged.
+ * Stamped on the output so a stored analysis can't be compared against a newer
+ * one without noticing the family grew.
+ */
+export const COHORT_STATS_VERSION = "1.1.0";
 
 // ── Statistics primitives ────────────────────────────────────────────────────
 
@@ -251,6 +268,7 @@ export type CohortDimension =
   | "deviation"
   | "liquidity"
   | "volume"
+  | "chain"
   | "ticker";
 
 export interface CohortDef {
@@ -286,11 +304,32 @@ function bucket(
  * eyeballing the data, the correction below would be meaningless: you cannot
  * honestly correct for the tests you decided not to admit to running.
  *
- * `tickers` is passed in rather than hard-coded so the family grows with the
+ * `rows` is passed in rather than hard-coded so the ticker family grows with the
  * universe, and the correction automatically accounts for the wider search.
+ *
+ * ⚠️ TICKER COHORTS ARE KEYED BY (TICKER, CHAIN), NOT BY TICKER.
+ * NVDA, META, GOOGL and AAPL exist on BOTH desks as different contracts with
+ * different pools. `match: (a) => a.ticker === t` therefore merged two assets
+ * into one cohort, and that is worse here than anywhere else in the codebase:
+ * this module is the TOOLING for the #152 question "does the Base desk generate
+ * drift the way Robinhood does?". A merged cohort answers it with a clean,
+ * confident number computed over a mixed population — Base's small drift diluted
+ * into Robinhood's larger one — and nothing in the output would reveal the mix.
+ * A wrong answer that looks rigorous is the failure mode this whole file was
+ * written to prevent, so the key comes from `rowKey`: `ticker:NVDA` (unchanged
+ * for Robinhood, which pays no migration cost) and `ticker:base:NVDA`.
+ *
+ * The `chain:*` pair is PRE-REGISTERED — declared now, while `n_base` is still
+ * 0, precisely so it is part of the fixed family before anyone has seen a Base
+ * number. Adding it later, after glancing at the data, is the ad-hoc admission
+ * this doc forbids. Below the gate it simply reports `ready: false` and a
+ * `needed` count, which is the honest state of that question today.
  */
-export function cohortDefs(tickers: string[] = []): CohortDef[] {
+export function cohortDefs(rows: { ticker: string; chain?: HoodChain }[] = []): CohortDef[] {
   const defs: CohortDef[] = [
+    { key: "chain:robinhood", label: "chain = Robinhood Chain", dimension: "chain", match: (a) => chainOf(a) === "robinhood" },
+    { key: "chain:base", label: "chain = Base", dimension: "chain", match: (a) => chainOf(a) === "base" },
+
     { key: "type:drift", label: "type = drift", dimension: "type", match: (a) => a.type === "drift" },
     { key: "type:arb", label: "type = arb", dimension: "type", match: (a) => a.type === "arb" },
 
@@ -318,12 +357,16 @@ export function cohortDefs(tickers: string[] = []): CohortDef[] {
     bucket("vol:100k+", "24h volume ≥ $100k", "volume", volumeUsd, 100_000, Infinity),
   ];
 
-  for (const t of [...new Set(tickers)].sort()) {
+  // `rowKey` on BOTH sides: it applies `chainOf`'s absent ⟹ robinhood default
+  // and returns the BARE ticker for Robinhood, so every historical cohort key
+  // (`ticker:NVDA`) is byte-identical to what it was before Base existed. Only
+  // Base rows get a new spelling — the incumbent pays no migration cost.
+  for (const k of [...new Set(rows.map(rowKey))].sort()) {
     defs.push({
-      key: `ticker:${t}`,
-      label: `ticker = ${t}`,
+      key: `ticker:${k}`,
+      label: `ticker = ${k}`,
       dimension: "ticker",
-      match: (a) => a.ticker === t,
+      match: (a) => rowKey(a) === k,
     });
   }
   return defs;
@@ -450,7 +493,9 @@ export function analyzeCohorts(
       : {}),
   };
 
-  const defs = cohortDefs(graded.map((a) => a.ticker));
+  // Whole rows, not `a.ticker` — dropping the chain here is what let a Base NVDA
+  // and a Robinhood NVDA land in one cohort.
+  const defs = cohortDefs(graded);
 
   // Members per cohort, kept as id sets so aliases can be detected exactly.
   const members = new Map<string, Arrow[]>();

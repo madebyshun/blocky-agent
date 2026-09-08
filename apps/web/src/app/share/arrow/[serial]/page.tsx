@@ -10,8 +10,17 @@
  * HONESTY: this page shows ONE arrow's evidence — it never computes a hit-rate,
  * so the aggregate gate (hit-rate-gate.ts) doesn't apply here; a single receipt
  * is always fair to show, misses included. VOID is shown clearly, never hidden.
- * "Verified on Robinhood Chain" renders ONLY when the ticker resolves in the RWA
- * registry (real contract) — never fabricated.
+ * The VERIFIED contract line renders ONLY when the ticker resolves in the
+ * registry OF THE ARROW'S OWN CHAIN (real contract) — never fabricated.
+ *
+ * ⚠️ THE CONTRACT IS RESOLVED PER-CHAIN, AND THE CHAIN IS NAMED IN THE COPY.
+ * This card used to call `findByTicker(a.ticker)` and hardcode
+ * `${RH_CHAIN.explorer}/token/…` with the label "Robinhood Chain". Since NVDA /
+ * META / GOOGL / AAPL exist on BOTH desks as different contracts, a Base arrow
+ * rendered a VERIFIED badge over Robinhood's address and linked it to
+ * Robinhood's Blockscout. This is the PUBLIC track record — the permalink people
+ * quote — so a wrong-chain token here is a verified claim about the wrong asset,
+ * not a cosmetic slip. `resolveArrowToken` cannot be called without a chain.
  *
  * The OG image is supplied by the sibling opengraph-image.tsx (Next's file
  * convention), so we deliberately do NOT set `images` in generateMetadata.
@@ -21,7 +30,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache } from "react";
 import { getPublicArrowBySerial, serialKey } from "@/lib/blue-hood/public-feed";
-import { findByTicker, RH_CHAIN } from "@/lib/robinhood/rwa-registry";
+import { resolveArrowToken } from "@/lib/blue-hood/chain-token";
 import type { Arrow } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -100,8 +109,10 @@ export default async function ArrowSharePage({
 
   if (!a) return <NotFound serial={serial} />;
 
-  const reg = findByTicker(a.ticker);
-  const explorerUrl = reg ? `${RH_CHAIN.explorer}/token/${reg.contract}` : null;
+  // The arrow's OWN chain decides the registry, the address, AND the explorer.
+  // `explorerTokenUrl` comes back already pointed at the chain that indexes it,
+  // so there is no host constant to get wrong here anymore.
+  const tok = resolveArrowToken(a);
   const oc = outcomeBadge(a);
 
   const oraclePx = a.snapshot_at_fire?.oracle_price_usd ?? a.brief?.facts_at_fire?.oracle_price_usd ?? null;
@@ -150,7 +161,11 @@ export default async function ArrowSharePage({
               </div>
               <div className="flex items-baseline gap-3">
                 <span className="text-3xl font-bold tracking-tight text-white">{a.ticker}</span>
-                {reg && <span className="text-[13px]" style={{ color: MUTED }}>{reg.name}</span>}
+                {tok.name && <span className="text-[13px]" style={{ color: MUTED }}>{tok.name}</span>}
+              </div>
+              {/* The desk, always stated: "NVDA" alone names two different tokens. */}
+              <div className="mt-1 font-mono text-[10px] tracking-widest" style={{ color: MUTED }}>
+                {tok.chainLabel.toUpperCase()}
               </div>
               <div className="mt-1.5 font-mono text-[12px]" style={{ color: "#9aa1ac" }}>
                 {signalLabel(a)} <span style={{ color: MUTED }}>· {signalPhrase(a)}</span>
@@ -213,11 +228,13 @@ export default async function ArrowSharePage({
             </div>
           )}
 
-          {/* Verified contract — only when the ticker resolves in the RWA registry */}
+          {/* Verified contract — only when the ticker resolves on the ARROW'S chain.
+              `verified` is false when this desk's registry has no such ticker, and
+              we say that instead of borrowing the other chain's address. */}
           <div className="mt-6 border-t pt-4" style={{ borderColor: BORDER }}>
-            {reg && explorerUrl ? (
+            {tok.verified && tok.contract && tok.explorerTokenUrl ? (
               <a
-                href={explorerUrl}
+                href={tok.explorerTokenUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 font-mono text-[11px] hover:underline"
@@ -229,11 +246,11 @@ export default async function ArrowSharePage({
                 >
                   VERIFIED
                 </span>
-                {shortAddr(reg.contract)} · Robinhood Chain ↗
+                {shortAddr(tok.contract)} · {tok.chainLabel} ↗
               </a>
             ) : (
               <span className="font-mono text-[11px]" style={{ color: MUTED }}>
-                Contract not in the RWA registry — quoted from Chainlink feed only.
+                Contract not in the {tok.chainLabel} registry — quoted from Chainlink feed only.
               </span>
             )}
           </div>

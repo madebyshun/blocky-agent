@@ -187,7 +187,13 @@ async function handleDrift(rest: string): Promise<string> {
   if (!ticker) {
     return `Send a ticker, e.g. <code>/drift NVDA</code>.`;
   }
-  if (!isValidTicker(ticker)) {
+  // ⚠️ EXPLICITLY "robinhood", not a default. This command reads
+  // `KV_SNAPSHOT_LATEST` below, which is the RH-only snapshot (Base rows live in
+  // `KV_BASE_ROWS_LATEST`), so Robinhood is the only desk it can answer for. The
+  // chain used to be implicit; naming it here makes the limit visible in code
+  // instead of leaving a bare-ticker lookup that reads like it covers both.
+  // Task #221 is the remaining half: SAY so in the reply, and answer for Base.
+  if (!isValidTicker(ticker, "robinhood")) {
     return `❓ <b>${esc(ticker)}</b> isn't a Robinhood Chain RWA ticker I track.`;
   }
 

@@ -47,9 +47,9 @@ import {
   ALL_KINDS,
   type AlertKind,
 } from "./watchlist";
-import { findByTicker } from "@/lib/robinhood/rwa-registry";
+import { resolveArrowToken } from "./chain-token";
 import { absoluteUrl } from "@/lib/site-url";
-import type { Arrow } from "./types";
+import type { Arrow, HoodChain } from "./types";
 import type { EngineHealth } from "./health";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -67,6 +67,14 @@ export interface HoodAlert {
   /** Aesthetic serial (`#0067`) copied from the arrow for display. */
   serial: string;
   ticker: string;
+  /**
+   * The chain the arrow fired on. Absent on records written before the Base
+   * desk existed ⟹ read with `chainOf`, which resolves absent to "robinhood".
+   * A ticker alone does NOT identify a token — NVDA/META/GOOGL/AAPL are live on
+   * both desks as different contracts — so any render of `ticker` that omits
+   * this is choosing a chain on the reader's behalf, in silence.
+   */
+  chain?: HoodChain;
   /** The arrow's kind (drift | arb | flow) — matches the watcher's opt-in. */
   kind: AlertKind;
   /** Compact human label, e.g. "DRIFT ↓", "ARB long dex". */
@@ -84,11 +92,13 @@ export interface HoodAlert {
   /** Present ONLY on a BROADCAST copy (tier-1 firehose). When set, the drain DMs
    *  this tg id directly — there is no wallet to resolve (`address` is ""). */
   tg_user_id?: string;
-  /** Canonical verified contract from the RWA registry (checksummed), or null if
-   *  the ticker isn't a canonical registry token. Never a DEX-pool / user address. */
+  /** Canonical verified contract on the ARROW'S OWN CHAIN (checksummed), or null
+   *  if that chain's registry has no such ticker. Never a DEX-pool / user
+   *  address, and never the other chain's address — see `chain-token.ts`. */
   contract?: string | null;
-  /** True iff the ticker resolved to a canonical registry token — gates the
-   *  "✓ verified canonical" DM line. NEVER label an unverified address verified. */
+  /** True iff the ticker resolved to a canonical registry token ON `chain` —
+   *  gates the "✓ verified canonical" DM line. NEVER label an unverified address
+   *  verified, and never let a cross-chain match satisfy it. */
   verified?: boolean;
   /** Fire-time facts for the DM body (snapshotted from arrow.snapshot_at_fire). */
   oracle_price_usd?: number | null;
@@ -132,11 +142,16 @@ function signalLabel(a: Arrow): string {
  *  ONCE per arrow (not per recipient) in {@link enrichFromArrow}; the drift %
  *  and the canonical contract come from CODE + the RWA registry — never an LLM. */
 interface AlertEnrichment {
-  /** Canonical verified contract (checksummed) or null when the ticker isn't a
-   *  registry token. NEVER a DEX-pool / user address. */
+  /** The chain this arrow fired on — carried so every downstream render can say
+   *  which desk it means instead of picking one silently. */
+  chain: HoodChain;
+  /** Canonical verified contract ON `chain` (checksummed) or null when that
+   *  chain's registry has no such ticker. NEVER a DEX-pool / user address, and
+   *  NEVER the other chain's answer. */
   contract: string | null;
-  /** True iff the ticker resolved to a canonical registry token. Gates the
-   *  "✓ verified canonical" DM line — do NOT claim verified without a match. */
+  /** True iff the ticker resolved to a canonical registry token ON `chain`.
+   *  Gates the "✓ verified canonical" DM line — do NOT claim verified without a
+   *  same-chain match. */
   verified: boolean;
   oracle_price_usd: number | null;
   dex_price_usd: number | null;
@@ -147,7 +162,11 @@ interface AlertEnrichment {
 
 /** Resolve the canonical contract + fire-time prices/drift for an arrow, ONCE. */
 function enrichFromArrow(arrow: Arrow): AlertEnrichment {
-  const tok = findByTicker(arrow.ticker);
+  // `resolveArrowToken`, NOT `findByTicker`: this line used to hand the ROBINHOOD
+  // contract to a Base arrow and then set `verified: true`, so the DM asserted
+  // "✓ verified canonical" over an address on a chain the arrow never touched.
+  // The resolver cannot be called without a chain, so that shape is now unwritable.
+  const tok = resolveArrowToken(arrow);
   const snap = arrow.snapshot_at_fire ?? null;
   const oracle = snap?.oracle_price_usd ?? null;
   // reference_price is the fire-time DEX baseline — a safe fallback when the
@@ -159,8 +178,9 @@ function enrichFromArrow(arrow: Arrow): AlertEnrichment {
       ? ((dex - oracle) / oracle) * 100
       : null;
   return {
-    contract: tok?.contract ?? null,
-    verified: !!tok,
+    chain: tok.chain,
+    contract: tok.contract,
+    verified: tok.verified,
     oracle_price_usd: oracle,
     dex_price_usd: dex,
     tvl_usd: tvl,
@@ -194,6 +214,10 @@ async function writeAlertRecord(args: {
     arrow_id: arrow.id,
     serial: arrow.serial,
     ticker: arrow.ticker,
+    // Persisted so a reader NEVER has to re-guess the chain from the ticker.
+    // `enrich.chain` already ran `chainOf`, so pre-migration arrows record
+    // "robinhood" explicitly rather than staying absent.
+    chain: enrich.chain,
     kind,
     signal: signalLabel(arrow),
     brief: arrow.brief?.verdict_note?.slice(0, 240) ?? null,
@@ -282,7 +306,7 @@ export async function emitAlertsForArrow(arrow: Arrow, health: AlertHealthGate):
     }
     // Observable but not ok ⇒ stale snapshot. KV IS readable, so count exactly
     // how many watchers lost this alert.
-    const recipients = await recipientsForArrow(arrow.ticker, alertKind);
+    const recipients = await recipientsForArrow(arrow, alertKind);
     console.warn(
       `[alert] skip arrow=${arrow.serial} arrow_id=${arrow.id} ticker=${arrow.ticker} ` +
         `kind=${alertKind} recipients_skipped=${recipients.length} reason=engine_stale ` +
@@ -305,7 +329,7 @@ export async function emitAlertsForArrow(arrow: Arrow, health: AlertHealthGate):
   // health path returns without counting recipients, and that must stay true.
   if (arrow.ticker_confidence?.level === "low") {
     const c = arrow.ticker_confidence;
-    const recipients = await recipientsForArrow(arrow.ticker, alertKind);
+    const recipients = await recipientsForArrow(arrow, alertKind);
     console.warn(
       `[alert] skip arrow=${arrow.serial} arrow_id=${arrow.id} ticker=${arrow.ticker} ` +
         `kind=${alertKind} recipients_skipped=${recipients.length} reason=low_ticker_confidence ` +
@@ -323,7 +347,7 @@ export async function emitAlertsForArrow(arrow: Arrow, health: AlertHealthGate):
   // enrich is computed ONCE and shared by every copy.
   const enrich = enrichFromArrow(arrow);
 
-  const watchers = await recipientsForArrow(arrow.ticker, alertKind);
+  const watchers = await recipientsForArrow(arrow, alertKind);
   const coveredTgIds = new Set<string>();
   let emitted = 0;
   for (const addr of watchers) {

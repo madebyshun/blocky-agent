@@ -3,8 +3,16 @@
  * opengraph-image convention. Every arrow permalink automatically gets its own
  * og:image + twitter:image: the PNG shows the REAL signal — ticker · serial ·
  * signal type · drift@fire · outcome badge (HIT / MISS / VOID / WATCHING) ·
- * "Blue Hood · verified" (verified only when the ticker resolves in the RWA
- * registry). HIT shows off; MISS is still shown — the misses are the point.
+ * "VERIFIED · <chain>" (verified only when the ticker resolves in the registry
+ * of the ARROW'S OWN chain). HIT shows off; MISS is still shown — the misses
+ * are the point.
+ *
+ * ⚠️ The verified pill NAMES THE CHAIN and must keep doing so. It used to be the
+ * literal string "VERIFIED · Robinhood Chain" beside a `findByTicker(a.ticker)`
+ * lookup, so a Base arrow's unfurl — the image that travels furthest, into
+ * timelines that never open the page — captioned a Base signal with Robinhood's
+ * company name and asserted Robinhood provenance. `resolveArrowToken` needs a
+ * chain, and the label comes from the same resolution as the name.
  *
  * Cache-Control is outcome-aware: a graded arrow is immutable (1y), a WATCHING
  * arrow gets a short TTL because it can settle at any time. Never throws — a
@@ -13,7 +21,7 @@
 import { ImageResponse } from "next/og";
 import { getBrandFonts, brandFonts } from "@/lib/og-font";
 import { getPublicArrowBySerial, serialKey } from "@/lib/blue-hood/public-feed";
-import { findByTicker } from "@/lib/robinhood/rwa-registry";
+import { resolveArrowToken } from "@/lib/blue-hood/chain-token";
 import type { Arrow } from "@/lib/blue-hood/types";
 
 export const runtime = "nodejs";
@@ -77,7 +85,7 @@ export default async function Image({ params }: { params: Promise<{ serial: stri
               Public track record — every signal graded, misses included.
             </div>
           </div>
-          <BottomBar f={f} verifiedName={null} />
+          <BottomBar f={f} verifiedName={null} chainLabel={null} />
         </div>
       ),
       { ...size, fonts: fontsOpt, headers: { "cache-control": "public, max-age=120, s-maxage=120" } },
@@ -85,7 +93,10 @@ export default async function Image({ params }: { params: Promise<{ serial: stri
   }
 
   const oc = outcomeBadge(a);
-  const reg = findByTicker(a.ticker);
+  // Per-chain resolution: the company name and the "VERIFIED · <chain>" pill both
+  // come from THIS arrow's desk, so the unfurl can never caption a Base signal
+  // with Robinhood's row.
+  const tok = resolveArrowToken(a);
   const oraclePx = a.snapshot_at_fire?.oracle_price_usd ?? a.brief?.facts_at_fire?.oracle_price_usd ?? null;
   const drift = oraclePx && oraclePx !== 0 ? ((a.reference_price - oraclePx) / oraclePx) * 100 : null;
 
@@ -142,7 +153,8 @@ export default async function Image({ params }: { params: Promise<{ serial: stri
           </div>
           <div style={{ display: "flex", marginTop: 6, fontFamily: f.mono, fontSize: 34, color: "#B7BECC" }}>
             {ogSignal(a)}
-            {reg ? <span style={{ color: MUTED }}>{`  ·  ${reg.name}`}</span> : null}
+            <span style={{ color: MUTED }}>{`  ·  ${tok.chainLabel}`}</span>
+            {tok.name ? <span style={{ color: MUTED }}>{`  ·  ${tok.name}`}</span> : null}
           </div>
         </div>
 
@@ -153,8 +165,9 @@ export default async function Image({ params }: { params: Promise<{ serial: stri
           <Stat f={f} label="ORACLE @ FIRE" value={fmtUsd(oraclePx)} color={WHITE} />
         </div>
 
-        {/* Bottom: verified + domain */}
-        <BottomBar f={f} verifiedName={reg ? reg.name : null} />
+        {/* Bottom: verified + domain — `verified` is per-chain, so an unresolved
+            Base ticker shows no pill rather than borrowing Robinhood's answer. */}
+        <BottomBar f={f} verifiedName={tok.verified ? tok.name : null} chainLabel={tok.chainLabel} />
       </div>
     ),
     { ...size, fonts: fontsOpt, headers: { "cache-control": cacheControl } },
@@ -207,11 +220,24 @@ function Stat({
   );
 }
 
-function BottomBar({ f, verifiedName }: { f: { display: string; mono: string }; verifiedName: string | null }) {
+/**
+ * `chainLabel` is REQUIRED whenever `verifiedName` is set — the pill asserts
+ * provenance, and provenance without a chain is the claim that was wrong. Both
+ * null on the fallback card, which asserts nothing.
+ */
+function BottomBar({
+  f,
+  verifiedName,
+  chainLabel,
+}: {
+  f: { display: string; mono: string };
+  verifiedName: string | null;
+  chainLabel: string | null;
+}) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        {verifiedName ? (
+        {verifiedName && chainLabel ? (
           <div
             style={{
               display: "flex",
@@ -224,7 +250,7 @@ function BottomBar({ f, verifiedName }: { f: { display: string; mono: string }; 
               padding: "6px 18px",
             }}
           >
-            VERIFIED · Robinhood Chain
+            VERIFIED · {chainLabel}
           </div>
         ) : null}
         <div
