@@ -28,6 +28,8 @@ import type { B20Inspection } from "@/lib/b20/inspect";
 import type { B20RolesResult } from "@/lib/b20/roles";
 import type { ScopeHashes } from "./manage-action";
 import { ConnectButton } from "@/components/ConnectModal";
+import { resolveSpend, type SpendGate } from "@/lib/wallet/read-state";
+import { UnverifiedBalance } from "@/components/wallet/UnverifiedBalance";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -53,7 +55,13 @@ export interface ManagePanelProps {
   roles:       B20RolesResult;
   scopeHashes: ScopeHashes;
   balance:     string;   // raw uint256 string (wallet token balance)
-  onRefresh?:  () => void;
+  /**
+   * Re-run the inspection. REQUIRED, not optional: this panel holds its mint
+   * buttons when the supply cap could not be read, and a gate with no way out
+   * is a broken card, not a safe one — the same reason `UnverifiedBalance`
+   * types `onRetry` as required. Both render sites already pass it.
+   */
+  onRefresh:   () => void;
   compact?:    boolean;  // true = scanner inline (fewer groups)
   initialMemo?: string;  // optional LLM/url-supplied memo to seed the mint form
 }
@@ -396,12 +404,52 @@ export default function ManagePanel({
     for (const row of batchValidRows) batchTotalWei += parseUnits(row.amount.trim(), decimals);
   } catch { batchTotalWei = 0n; }
   const batchTotalFmt = formatUnits(batchTotalWei, decimals);
-  // Headroom before the supply cap — only meaningful when capped and reads are present.
-  const batchCapRemainingWei =
-    !inspect.supplyCapUncapped && inspect.supplyCap != null && inspect.totalSupply != null
-      ? BigInt(inspect.supplyCap) - BigInt(inspect.totalSupply)
-      : null;
-  const batchOverCap = batchCapRemainingWei != null && batchTotalWei > batchCapRemainingWei;
+
+  // ── Derived — supply-cap headroom, ONE derivation for BOTH mint forms ──────
+  //
+  // A mint is gated by the cap exactly the way a swap is gated by a balance, so
+  // it resolves through the same three-outcome verdict. What used to be here was
+  // `remaining != null && total > remaining`, which is FALSE when the cap could
+  // not be read — the read failing ENABLED the button and sent the user to pay
+  // gas for a mint that reverts. Same shape as the send/swap/bridge cards, one
+  // value along: it is not the balance that is unread, it is the cap.
+  //
+  // `supplyCap`/`totalSupply` are `undefined` ONLY on a failed multicall entry:
+  // both live on the standard B20 read ABI, and both render sites gate on
+  // `inspect.isB20`, so the function is always there. Undefined means the RPC
+  // did not answer — which a refresh can fix — not "this token has no cap".
+  // Note `supplyCapUncapped` is FALSE in that case too, so it cannot stand in
+  // for "no limit"; the unread case has to be named separately.
+  //
+  // `live*` because the Update-supply-cap form below owns `capAmt`/`capUncapped`
+  // — that pair is what the admin WANTS the cap to become. These two are what
+  // the chain says it is right now, and confusing the two would gate a mint on
+  // an unsubmitted form field.
+  const liveCapUncapped = inspect.supplyCapUncapped === true;
+  const liveCapUnread   = !liveCapUncapped && (inspect.supplyCap == null || inspect.totalSupply == null);
+  const capRemainingWei: bigint | null =
+    liveCapUncapped || liveCapUnread ? null : BigInt(inspect.supplyCap!) - BigInt(inspect.totalSupply!);
+  /**
+   * The verdict for minting `amountWei`. `loading`/`received` are fixed because
+   * `inspect` arrives here already resolved — B20Client keeps this panel mounted
+   * across a refresh, so there is no in-flight state at this level and a
+   * "reading" outcome would be a lie. The one signal that varies is whether the
+   * cap read landed.
+   */
+  const capGate = (amountWei: bigint): SpendGate => resolveSpend({
+    loading:  false,
+    received: true,
+    failed:   liveCapUnread,
+    over:     capRemainingWei != null && amountWei > capRemainingWei,
+  });
+
+  const mintAmtWei = (() => {
+    try { return isAmt(mintAmt) ? parseUnits(mintAmt.trim(), decimals) : 0n; }
+    catch { return 0n; }
+  })();
+  const mintCapGate  = capGate(mintAmtWei);
+  const batchCapGate = capGate(batchTotalWei);
+  const capRemainingFmt = capRemainingWei != null ? formatUnits(capRemainingWei, decimals) : null;
 
   function addBatchRow() {
     setBatchRows(rows => [...rows, { to: "", amount: "" }]);
@@ -433,6 +481,33 @@ export default function ManagePanel({
 
   const isBusy = activeTx?.status === "pending" || activeTx?.status === "polling";
 
+  /**
+   * The cap verdict, rendered. A plain function rather than a nested component
+   * so it cannot remount its subtree on every keystroke. `"ok"` and `"reading"`
+   * render nothing — `"reading"` is unreachable here (see `capGate`) and is left
+   * to the exhaustive switch rather than assumed away.
+   */
+  function capNotice(gate: SpendGate) {
+    if (gate === "unverified") {
+      return (
+        <UnverifiedBalance
+          subject="this token's supply cap"
+          disclaimer="This says nothing about how much headroom the token has."
+          onRetry={onRefresh}
+          busy={isBusy}
+        />
+      );
+    }
+    if (gate === "insufficient" && capRemainingFmt != null) {
+      return (
+        <p className="font-mono text-[9px] text-[#EF4444]">
+          ⚠ Exceeds remaining supply-cap headroom ({capRemainingFmt} {symbol}). The tx would revert.
+        </p>
+      );
+    }
+    return null;
+  }
+
   async function exec(actionLabel: string, data: `0x${string}`, successMsg?: string) {
     if (!address || isBusy) return;
     setActiveTx({ action: actionLabel, status: "pending" });
@@ -453,7 +528,7 @@ export default function ManagePanel({
         }).then(res => res.json());
         if (rec.ok && rec.status === "success") {
           setActiveTx({ action: actionLabel, status: "success", hash, msg: successMsg });
-          onRefresh?.();
+          onRefresh();
           return;
         }
         if (rec.ok && rec.status === "reverted") {
@@ -570,8 +645,12 @@ export default function ManagePanel({
               </div>
             </div>
             <MemoField value={mintMemo} onChange={setMintMemo} disabled={isBusy} />
+            {/* Same cap verdict as Batch Mint below. This form had NO cap gate at
+                all — an absent gate is invisible to any idiom-based check, so it
+                survived every sweep that found the fail-open one next door. */}
+            {capNotice(mintCapGate)}
             <button
-              disabled={!isAddr(mintTo) || !isAmt(mintAmt) || memoTooLong(mintMemo) || isBusy}
+              disabled={!isAddr(mintTo) || !isAmt(mintAmt) || memoTooLong(mintMemo) || mintCapGate !== "ok" || isBusy}
               onClick={() => exec(
                 "Mint",
                 isValidMemo(mintMemo)
@@ -660,14 +739,10 @@ export default function ManagePanel({
                 </span>
               </div>
             )}
-            {batchOverCap && batchCapRemainingWei != null && (
-              <p className="font-mono text-[9px] text-[#EF4444]">
-                ⚠ Total exceeds remaining supply-cap headroom ({formatUnits(batchCapRemainingWei, decimals)} {symbol}). The tx would revert.
-              </p>
-            )}
+            {capNotice(batchCapGate)}
 
             <button
-              disabled={batchValidRows.length === 0 || batchOverCap || isBusy}
+              disabled={batchValidRows.length === 0 || batchCapGate !== "ok" || isBusy}
               onClick={() => exec(
                 "Batch Mint",
                 encodeFunctionData({
