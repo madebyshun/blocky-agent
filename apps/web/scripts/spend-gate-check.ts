@@ -254,6 +254,31 @@ const allSpenders = [...sources.entries()]
 
 const spenders = allSpenders.filter((f) => !(f in EXCLUDED));
 
+/**
+ * TIER B — every file that can put a transaction in front of a user, whether or
+ * not it reads a balance first. Tier A (`spenders`) is a strict subset, asserted
+ * in 1.5.
+ *
+ * Membership is read from the STRINGS-DROPPED view, and that is the one place
+ * the two tiers differ in more than their predicate. The x402 handler
+ * `rh-rwa-embed-kit.ts` ships an ENTIRE React component as a template literal —
+ * imports, `useWriteContract()`, `sendTransactionAsync`, all of it — for a user
+ * to paste into their own app. Code this app hands out is not a signature this
+ * app can produce, and counting it would put a server route in a set defined as
+ * "renders a control that signs".
+ *
+ * `docs/blue-hood/page.tsx` survives the drop anyway, because its
+ * `<code>useSendTransaction</code>` is JSX TEXT rather than a string literal. It
+ * stays in. It has no gate, so the requirement below is vacuously true there,
+ * and removing it would mean writing its name down — the hand-drawn boundary
+ * this file's header spends four paragraphs arguing against. A member that
+ * cannot fail is cheaper than an exception that can go stale.
+ */
+const signers = [...sources.entries()]
+  .filter(([, v]) => SIGNS.test(v.noStrings))
+  .map(([f]) => f)
+  .sort();
+
 // ── two derived predicates, written as parsers ──────────────────────────────
 
 /**
@@ -330,6 +355,205 @@ function discardingBalanceReads(src: string): string[] {
   return out;
 }
 
+// ── the fail-open parser: any nullable value that gates a signature ─────────
+//
+// MEASURED 2026-09-08. Everything above is scoped to a BALANCE, and that scope
+// was drawn from the first three examples rather than from the defect. The
+// defect is one expression:
+//
+//     X != null && amount > X
+//
+// When the read of X FAILS, X is null, the whole term is FALSE, "not blocking",
+// and the confirm button ENABLES. Nothing in that sentence mentions a balance.
+// `ManagePanel.tsx` had it against a token's SUPPLY CAP — an unread cap enabled
+// a mint that reverts — and the balance-scoped detector could not see it,
+// because that panel reads no balance at all: it takes one as a prop.
+//
+// So this half targets the OPERATION, not a list of names. That distinction is
+// the one lesson `literalScaleConversions` above already paid for: the check it
+// replaced targeted the NUMBER (`no bare 18`) and was false everywhere a token's
+// decimals were being CHOSEN rather than assumed. Targeting "variables called
+// cap, allowance, nonce, quota" would repeat that mistake one rung up — it would
+// pass the day someone names it `headroom`.
+//
+// The rule, in one sentence:
+//
+//   At every gate on a signature, no term may be a nullish-guarded comparison
+//   against the guarded value ITSELF, unless the null case is resolved.
+//
+// Each clause is load-bearing, and each was measured:
+//
+//   "at every gate"  — reachability is the definition, not an optimisation. The
+//     first draft skipped it and reported four false positives: two display
+//     labels (`amtLabel`, `usdLabel`), a fail-CLOSED `willSkipApprove`, and a
+//     match inside a comment. `X != null && X > 0` in a label is not a gate.
+//
+//   "against the guarded value itself" — `cap != null && amt > limit` is not
+//     this bug; the null-guard is protecting a different read. Requiring the
+//     comparison to name the SAME identifier is what took the false-positive
+//     count to zero.
+//
+//   "unless the null case is resolved" — two ways, both already in this repo,
+//     both behaviours rather than names: hand the comparison to `resolveSpend`,
+//     which owns the null and returns `unverified`; or name the null case as a
+//     sibling blocking term (`const unknown = bal === null` beside
+//     `const unaffordable = bal !== null && amt > bal`, blocking on the OR).
+//
+// Only `!= null &&` is matched, never `== null ||`. Both gate kinds have the
+// same polarity — `disabled={E}` and `if (E) return` both mean "E true ⇒ no
+// signature" — so `X == null || …` is fail-CLOSED at both, and matching it
+// flagged ToolCards' correct `if (n == null || !Number.isFinite(n)) return;`.
+
+/** The text between the delimiters opening at `open`, and the closer's index. */
+function balanced(src: string, open: number, o: string, c: string): [string, number] {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === o) depth++;
+    else if (src[i] === c) { depth--; if (depth === 0) return [src.slice(open + 1, i), i]; }
+  }
+  return ["", src.length]; // unbalanced — treat as empty rather than eat the file
+}
+
+/**
+ * Every expression that decides whether a signature can happen.
+ *
+ * Two forms, and they share a polarity: the operand of `disabled={…}`, and the
+ * condition of an `if (…) return|throw`. In both, TRUE means no signature. An
+ * `if (…)` that does anything else is not a gate — it is control flow — so the
+ * lookahead requires the statement to leave.
+ */
+function gateSites(src: string): Array<{ kind: string; expr: string }> {
+  const out: Array<{ kind: string; expr: string }> = [];
+  let m: RegExpExecArray | null;
+
+  const disabled = /\bdisabled=\{/g;
+  while ((m = disabled.exec(src))) {
+    out.push({ kind: "disabled=", expr: balanced(src, m.index + m[0].length - 1, "{", "}")[0] });
+  }
+  const ifs = /\bif\s*\(/g;
+  while ((m = ifs.exec(src))) {
+    const [cond, end] = balanced(src, m.index + m[0].length - 1, "(", ")");
+    if (/^\s*(?:\{\s*)?(?:return|throw)\b/.test(src.slice(end + 1, end + 60))) {
+      out.push({ kind: "if-guard", expr: cond });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every `const`/`let` binding of `name` in this file, as the text of its
+ * initialiser. ALL of them, not the first.
+ *
+ * `ReviewSignPanel.tsx` declares `const insufficient` twice, in two components
+ * ~880 lines apart. A first-match lookup silently answers about the wrong one,
+ * which it did during development — the shadowed binding is why this returns an
+ * array. Unioning same-named bindings is imprecise, and the imprecision runs
+ * toward over-EXEMPTING (a null case named in the other scope can quiet a gate
+ * here). It is bounded to same-named bindings inside one file, and the
+ * alternative — real scope resolution — is a TypeScript compiler, not a guard.
+ */
+function defsOf(src: string, name: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(String.raw`(?:const|let)\s+${name}\s*(?::[^=\n]+)?=\s*`, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    let i = m.index + m[0].length, depth = 0;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if ("([{".includes(c)) depth++;
+      else if (")]}".includes(c)) { if (depth === 0) break; depth--; }
+      else if (c === ";" && depth === 0) break;
+    }
+    out.push(src.slice(m.index + m[0].length, i));
+  }
+  return out;
+}
+
+/**
+ * Blank out every `resolveSpend(…)` call, arguments and all.
+ *
+ * This is exemption ①, applied by DELETION rather than by a special case in the
+ * matcher: a comparison handed to the three-outcome resolver is no longer a
+ * gate term, because the resolver reads `failed` first and returns `unverified`
+ * whatever `over` says. Removing the text is the honest encoding — after this,
+ * the fixed shape simply contains no fail-open expression to find.
+ */
+function dropResolved(src: string): string {
+  let out = src;
+  for (;;) {
+    const i = out.search(/\bresolveSpend\s*\(/);
+    if (i < 0) return out;
+    const [, end] = balanced(out, out.indexOf("(", i), "(", ")");
+    out = `${out.slice(0, i)} RESOLVED ${out.slice(end + 1)}`;
+  }
+}
+
+/**
+ * Identifiers appearing in the fail-open shape inside `expr`: nullish-guarded,
+ * then compared against themselves.
+ *
+ * Member paths are kept whole (`inspect.supplyCap`, `q?.cap`) so that guarding
+ * one field and comparing another is not read as a match.
+ */
+function failOpenOperands(expr: string): string[] {
+  const out: string[] = [];
+  const re = /([A-Za-z_$][\w$]*(?:\s*[.?]\s*[\w$]+)*)\s*!==?\s*(?:null|undefined)\s*&&/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(expr))) {
+    const id = m[1].replace(/\s+/g, "");
+    const esc = id.replace(/[.?*+^$(){}|[\]\\]/g, "\\$&");
+    // …and the SAME value must be an operand of a relational comparison in what
+    // follows. Without this, every defensive `x != null && x.foo()` is a hit.
+    if (new RegExp(String.raw`(?:${esc}\s*[<>]=?|[<>]=?\s*${esc})`).test(expr.slice(m.index + m[0].length))) {
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+/** Fail-open terms reachable from a gate on a signature, as readable findings. */
+function failOpenGates(rawCode: string): string[] {
+  const src = dropResolved(rawCode); // exemption ①
+  const defCache = new Map<string, string[]>();
+  const defs = (n: string) => {
+    let d = defCache.get(n);
+    if (!d) { d = defsOf(src, n); defCache.set(n, d); }
+    return d;
+  };
+  const hits = new Set<string>();
+
+  for (const { kind, expr } of gateSites(src)) {
+    // The gate plus everything it transitively depends on. Only names with a
+    // `const`/`let` binding in this file contribute, so imports, props and
+    // parameters drop out on their own — no cap, no silent truncation.
+    let text = expr;
+    const seen = new Set<string>();
+    const queue = [expr];
+    while (queue.length) {
+      const chunk = queue.pop()!;
+      for (const [name] of chunk.matchAll(/[A-Za-z_$][\w$]*/g)) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        for (const d of defs(name)) { text += `\n${d}`; queue.push(d); }
+      }
+    }
+    for (const id of failOpenOperands(text)) {
+      const esc = id.replace(/[.?*+^$(){}|[\]\\]/g, "\\$&");
+      // Exemption ②: the gate's own text names this value's null case as a
+      // blocking term (`bal === null`) or branches on it (`bal !== null ? … : …`).
+      // The negative lookahead keeps the fail-open `X === null || …` — a
+      // DISJUNCT that blocks — apart from a bare sibling term.
+      const resolved = new RegExp(
+        String.raw`${esc}\s*===?\s*(?:null|undefined)(?!\s*[&|]{2})` +
+        String.raw`|${esc}\s*!==?\s*(?:null|undefined)\s*\?`,
+      );
+      if (resolved.test(text)) continue;
+      hits.add(`[${kind}] \`${id}\` gates on \`${expr.replace(/\s+/g, " ").slice(0, 60)}\``);
+    }
+  }
+  return [...hits];
+}
+
 // ── the per-spender checks ──────────────────────────────────────────────────
 
 /**
@@ -378,6 +602,25 @@ const REQUIREMENTS: Array<[string, (v: View) => boolean, ((v: View) => string[])
   ],
 ];
 
+/**
+ * The ONE requirement every signer must meet, balance or no balance.
+ *
+ * Deliberately not folded into `REQUIREMENTS` above. Those six are the ceremony
+ * of reading a wallet balance — `useSpendableBalance`, `<UnverifiedBalance>`,
+ * a `parse/formatUnits` scale — and demanding them of `TopUpModal` or
+ * `ClaimClient`, which spend no balance, would be demanding ceremony for no
+ * safety. This file's own header names that failure mode: "a guard that demands
+ * ceremony is a guard someone eventually switches off." So the wider set gets
+ * the narrower rule.
+ */
+const SIGNER_REQUIREMENTS: Array<[string, (v: View) => boolean, (v: View) => string[]]> = [
+  [
+    "no gate on a signature fails open on a value it could not read",
+    (v) => failOpenGates(v.code).length === 0,
+    (v) => failOpenGates(v.code),
+  ],
+];
+
 // ── group 1: the derivation itself is sound ─────────────────────────────────
 
 // A floor, not a tally: if the shape-detector ever stops matching, the suite
@@ -409,6 +652,18 @@ for (const f of [
   check(`1.3 ${f} is detected as a spender`, spenders.includes(f));
 }
 
+// Tier B's own floor. Measured at 18 the day it landed, and it is the WIDER
+// set — 11 files here sign without reading a balance at all, which is exactly
+// the blind spot that let `ManagePanel.tsx` carry a fail-open cap gate through
+// every sweep that fixed the balance ones.
+check(`1.4 the signer detector finds signing files (found ${signers.length})`, signers.length >= 18);
+// Tier A ⊂ Tier B, by construction: a spender signs. If this ever breaks, the
+// two predicates have drifted apart and one of them is measuring the wrong
+// thing — better a loud failure than two sets that quietly stop overlapping.
+for (const f of allSpenders) {
+  check(`1.5 spender ${f} is also in the signer set (tiers must not drift)`, signers.includes(f));
+}
+
 // ── group 2: every in-scope spender meets every requirement ─────────────────
 
 for (const f of spenders) {
@@ -417,6 +672,16 @@ for (const f of spenders) {
     const passed = ok(v);
     const why = !passed && detail ? ` → ${detail(v).join(" · ")}` : "";
     check(`2 · ${f} — ${label}${why}`, passed);
+  }
+}
+
+// ── group 2b: every SIGNER — balance or not — gates fail-closed ─────────────
+
+for (const f of signers) {
+  const v = sources.get(f)!;
+  for (const [label, ok, detail] of SIGNER_REQUIREMENTS) {
+    const passed = ok(v);
+    check(`2b · ${f} — ${label}${passed ? "" : ` → ${detail(v).join(" · ")}`}`, passed);
   }
 }
 
@@ -611,6 +876,137 @@ check(
 check(
   "6.16 useReadContract is out of scope — the rule is about wallet balances",
   discardingBalanceReads("const { data } = useReadContract({ functionName: 'balanceOf' });").length === 0,
+);
+
+// ── group 7: the fail-open parser, both directions ──────────────────────────
+//
+// Same contract as group 6, and the same reason: this is a parser, and a parser
+// that returns `[]` on everything is a check that passes on everything. Every
+// MUST-FIRE case below is a shape that shipped to production at least once
+// (#215, #216, #217); every MUST-NOT-FIRE case is something the earlier drafts
+// wrongly flagged, quoted from the file that flagged it.
+
+// failOpenGates — must FIRE
+check(
+  "7.1 the shape inline in a disabled= gate is caught",
+  failOpenGates("<button disabled={cap != null && amt > cap} />").length === 1,
+);
+check(
+  "7.2 the shape one hop away, behind a const, is caught",
+  failOpenGates("const over = cap != null && amt > cap;\n<button disabled={over || busy} />").length === 1,
+);
+// The #217 shape exactly: two hops, and the guarded value is a member path.
+check(
+  "7.3 two hops and a member path are caught (this is ManagePanel's cap bug)",
+  failOpenGates(
+    "const rem = i.supplyCap != null ? BigInt(i.supplyCap) : null;\n" +
+    "const overCap = rem != null && total > rem;\n" +
+    "<button disabled={rows === 0 || overCap} />",
+  ).length === 1,
+);
+check(
+  "7.4 `!==` is caught as well as `!=`",
+  failOpenGates("<button disabled={bal !== null && amt > bal} />").length === 1,
+);
+check(
+  "7.5 a reversed comparison is caught (`cap < amt`, not just `amt > cap`)",
+  failOpenGates("<button disabled={cap != null && cap < amt} />").length === 1,
+);
+// An `if (…) return` BEFORE a signature has the same polarity as `disabled`:
+// true means no signature. So the fail-open shape there is identical, and this
+// is the form that shipped in ToolCards' pre-sign assert.
+check(
+  "7.6 an if-guard that returns is a gate too",
+  failOpenGates("function send() { if (bal != null && amt > bal) return; sign(); }").length === 1,
+);
+check(
+  "7.7 `undefined` is guarded no differently from `null`",
+  failOpenGates("<button disabled={cap !== undefined && amt > cap} />").length === 1,
+);
+
+// failOpenGates — must NOT fire
+// Exemption ①: handed to the three-outcome resolver, which reads `failed` first.
+check(
+  "7.8 a comparison handed to resolveSpend is resolved, not fail-open",
+  failOpenGates(
+    'const gate = resolveSpend({ loading, received, failed, over: bal != null && amt > bal });\n' +
+    '<button disabled={gate !== "ok"} />',
+  ).length === 0,
+);
+// Exemption ②: the null case named as its own blocking term — ReviewSignPanel's
+// shape, where `unknown` is OR'd in beside `unaffordable`.
+check(
+  "7.9 a sibling `=== null` blocking term resolves the null case",
+  failOpenGates(
+    "const unaffordable = bal !== null && amt > bal;\n" +
+    "const unknown = bal === null;\n" +
+    "const insufficient = unaffordable || unknown;\n" +
+    "<button disabled={insufficient} />",
+  ).length === 0,
+);
+// …but the exemption must not be satisfied by a fail-OPEN disjunct. `X === null
+// || …` inside the same expression is not a sibling term naming the null case,
+// it IS the shape — the lookahead in `resolved` is what tells them apart.
+check(
+  "7.10 a `=== null ||` disjunct does not count as naming the null case",
+  failOpenGates(
+    "const over = bal != null && amt > bal;\n" +
+    "const ok = bal === null || !over;\n" +
+    "<button disabled={over} />",
+  ).length === 1,
+);
+// Reachability. The same expression in a LABEL gates nothing — this exact shape
+// (`amtLabel`, `usdLabel`) is what the no-reachability draft false-flagged.
+check(
+  "7.11 the shape in a display label is not a gate",
+  failOpenGates('const label = cap != null && amt > cap ? "over cap" : "";\n<span>{label}</span>').length === 0,
+);
+// The operand rule. Guarding one value and comparing a DIFFERENT one is a
+// defensive null-check, not this bug.
+check(
+  "7.12 a guard on one value comparing another is not the bug",
+  failOpenGates("<button disabled={cap != null && amt > limit} />").length === 0,
+);
+check(
+  "7.13 a nullish guard with no comparison at all is not the bug",
+  failOpenGates("<button disabled={addr != null && !isValid(addr)} />").length === 0,
+);
+// Polarity. `X == null || …` BLOCKS when the read failed — it is the fix, not
+// the defect — and matching it flagged ToolCards' correct pre-sign assert.
+check(
+  "7.14 the fail-CLOSED `== null ||` form is not flagged",
+  failOpenGates("function send() { if (n == null || !Number.isFinite(n) || n <= 0) return; sign(); }").length === 0,
+);
+// A ternary that branches on the null case has answered it.
+check(
+  "7.15 a `!== null ? … : …` branch resolves the null case",
+  failOpenGates("<button disabled={bal !== null ? amt > bal : true} />").length === 0,
+);
+// An `if` that does not leave is control flow, not a gate.
+check(
+  "7.16 an if that does not return or throw is not a gate site",
+  gateSites("if (cap != null && amt > cap) setWarn(true);").length === 0,
+);
+check(
+  "7.17 an if that DOES return is a gate site",
+  gateSites("if (x) return;").length === 1,
+);
+// The stripper runs first, so a historical comment describing the OLD bug is
+// not evidence of the bug. `signFlow → walletBalance` in ReviewSignPanel matched
+// exactly this and nothing else.
+check(
+  "7.18 the shape quoted in a comment is not counted",
+  failOpenGates(code("// used to be: bal != null && amt > bal\n<button disabled={busy} />")).length === 0,
+);
+// Shadowing: two bindings of one name must BOTH be found, or a lookup silently
+// answers about the wrong one — measured in ReviewSignPanel, which has two.
+check(
+  "7.19 defsOf returns every binding of a shadowed name, not the first",
+  defsOf("const insufficient = a;\nfunction f() { const insufficient = b; }", "insufficient").length === 2,
+);
+check(
+  "7.20 dropResolved removes the whole call including nested parens",
+  !/bal/.test(dropResolved("const g = resolveSpend({ over: f(bal != null && amt > bal) });")),
 );
 
 // ── report ──────────────────────────────────────────────────────────────────
