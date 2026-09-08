@@ -68,12 +68,23 @@ export const KV_BASE_ROWS_LATEST = "bh:base:rows:latest";
  *
  * NO TTL, deliberately — this is the archive, not a cache.
  *
- * MEASURED COST at the current 4-ticker `BASE_STOCKS` registry: ~0.4 KB per
- * hourly point (the RH archive measures 2.6 KB at 24 tickers), so ~10 KB/day
- * and under 4 MB/year. Request budget is ~288 reads/day (one per 5-min cycle)
- * plus ~24–40 writes — roughly 2% of the 500K/month Upstash cap that starved
- * this engine in task #123. Same order as the RH archive already deemed
- * affordable; revisit if `BASE_STOCKS` grows past ~20 tickers.
+ * MEASURED COST at a 4-ticker `BASE_STOCKS` registry: ~0.4 KB per hourly point
+ * (the RH archive measures 2.6 KB at 24 tickers), so ~10 KB/day, under 4 MB/year.
+ *
+ * The registry is now SEVEN tickers (AMZN/MSFT/MSTR admitted 2026-09-08), so
+ * that 0.4 KB is history. Storage scales linearly with ticker count — DERIVED,
+ * not re-measured: ~0.7 KB/point, ~17 KB/day, under 7 MB/year. Re-measure
+ * before quoting it as fact.
+ *
+ * The REQUEST budget is unchanged by admissions and that is the number that
+ * matters here: ~288 reads/day (one per 5-min cycle) plus ~24–40 writes,
+ * regardless of how many tickers each cycle carries — roughly 2% of the
+ * 500K/month Upstash cap that starved this engine in task #123. Admitting a
+ * ticker costs bytes, not requests, so it does not move the constraint that
+ * has actually suspended this project three times.
+ *
+ * Same order as the RH archive already deemed affordable; revisit if
+ * `BASE_STOCKS` grows past ~20 tickers (7 now, so ~13 to go).
  */
 export const kvBaseSeriesDay = (yyyymmdd: string) => `bh:base:series:day:${yyyymmdd}`;
 
