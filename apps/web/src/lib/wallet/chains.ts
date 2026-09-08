@@ -42,6 +42,36 @@ export interface WalletChainCfg {
   stable: `0x${string}`;
   stableSymbol: "USDC" | "USDG";
   stableDecimals: number;
+  /**
+   * Which money-moving paths actually WORK on this chain — declared per chain,
+   * not asked as `network === "base"` at each call site.
+   *
+   * This replaces a prose comment in BankClient that enumerated five things
+   * which "would keep answering in Base" if Robinhood were ever made
+   * selectable. A list in a comment is not enforced by anything; a required
+   * field is. Adding a fourth chain now fails to compile until someone answers
+   * these four questions, which is the only version of that list that cannot
+   * drift away from the code it describes.
+   *
+   * Each flag is about a DEPENDENCY that is chain-pinned, not about taste:
+   *   fiat     Coinbase Onramp/Offramp pin `defaultNetwork=base` in the URL and
+   *            `blockchains: ["base"]` in the session.
+   *   send     SendCard types its network as `YieldNetwork` and reads anything
+   *            that is not "base" as baseSepolia — so a third chain does not
+   *            degrade, it silently retargets to a testnet.
+   *   swap     SwapCard routes through the 0x API on Base mainnet and
+   *            force-switches the wallet there before signing.
+   *   txHistory  /api/wallet/transactions is Moralis, which does not index 4663.
+   *
+   * A false flag means the UI must SAY the path is unavailable here. It must
+   * never mean the UI quietly does the Base thing under another chain's label.
+   */
+  can: {
+    fiat: boolean;
+    send: boolean;
+    swap: boolean;
+    txHistory: boolean;
+  };
 }
 
 /**
@@ -66,6 +96,8 @@ export const WALLET_CHAINS: Record<WalletChain, WalletChainCfg> = {
     stable: getAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
     stableSymbol: "USDC",
     stableDecimals: 6,
+    // The chain every one of those four paths was written against.
+    can: { fiat: true, send: true, swap: true, txHistory: true },
   },
   baseSepolia: {
     chainId: baseSepolia.id,
@@ -77,6 +109,10 @@ export const WALLET_CHAINS: Record<WalletChain, WalletChainCfg> = {
     stable: getAddress("0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f"),
     stableSymbol: "USDC",
     stableDecimals: 6,
+    // `send` is TRUE and `swap`/`fiat` are false, and the asymmetry is the
+    // point: SendCard genuinely supports Sepolia, while the onramp and the 0x
+    // router would spend REAL money under a page captioned "no real value".
+    can: { fiat: false, send: true, swap: false, txHistory: true },
   },
   robinhood: {
     chainId: robinhoodMainnet.id,
@@ -88,20 +124,35 @@ export const WALLET_CHAINS: Record<WalletChain, WalletChainCfg> = {
     stable: getAddress("0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"),
     stableSymbol: "USDG",
     stableDecimals: 6,
+    // Read-only for now, and every one of these is a real dependency rather
+    // than caution: Moralis does not index 4663, the 0x router is not deployed
+    // there, Coinbase's onramp does not list it, and SendCard cannot even
+    // REPRESENT it — its network type is `YieldNetwork`, so being handed
+    // "robinhood" makes it render a Base Sepolia form. Balances, holdings and
+    // the explorer all work, which is why the chain is selectable at all.
+    can: { fiat: false, send: false, swap: false, txHistory: false },
   },
 };
 
 /**
- * The order the network switcher renders — deliberately narrower than
- * `WALLET_CHAINS`. Defining a chain is not the same as shipping it in the UI,
- * and keeping the two separate means adding a chain to the switcher is a
- * one-line change to a list rather than an edit spread across a component.
+ * The order the network switcher renders. Still narrower than `WALLET_CHAINS`
+ * in principle — defining a chain is not the same as shipping it — but all
+ * three are listed now.
  *
- * Robinhood is configured but not yet listed: the wallet's balance reads, send
- * and swap paths are still Base-shaped, so surfacing it before those are ready
- * would offer the user a chain the buttons cannot actually transact on.
+ * Robinhood used to be excluded on the grounds that "the wallet's balance
+ * reads, send and swap paths are still Base-shaped". Half of that stopped
+ * being true: balances read fine (wagmi has a 4663 transport, and `stable`
+ * above is the real USDG address), /api/wallet/rh-holdings reads the chain
+ * through Blockscout, and StockTable has been returning an RH leg on every
+ * call since it shipped. So the wallet was already SHOWING two chains while
+ * offering to switch between one — the omission had stopped protecting anyone
+ * and had started hiding a whole chain's holdings behind an external link.
+ *
+ * The half that IS still true is now `can` above, per chain, instead of an
+ * all-or-nothing absence from this list. Being listed means "you can look at
+ * this chain here"; `can` decides what you may DO once you are looking.
  */
-export const WALLET_CHAIN_ORDER: readonly WalletChain[] = ["base", "baseSepolia"];
+export const WALLET_CHAIN_ORDER: readonly WalletChain[] = ["base", "robinhood", "baseSepolia"];
 
 /** Reverse lookup for a numeric chainId, e.g. decoding an EIP-681 URI. */
 export function walletChainByChainId(chainId: number): WalletChain | undefined {

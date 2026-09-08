@@ -180,15 +180,15 @@ export default function BankPage() {
   const net         = WALLET_CHAINS[network];
   const chainId     = net.chainId;
   const isTestnet   = net.testnet;
-  // Not the same question as `!isTestnet`, even though they return the same
-  // answer today. Onramp, offramp and swap are pinned to Base MAINNET by their
-  // own URLs and routers — they need "am I on 8453", and they were asking "is
-  // this play money". Those coincide only because WALLET_CHAIN_ORDER happens to
-  // hold exactly base + baseSepolia; the moment a third mainnet is listed, an
-  // `isTestnet` guard waves real funds through to the wrong chain. Asking the
-  // question the code actually depends on costs one line and removes a trap
-  // that would otherwise be armed by an edit in a different file.
-  const isBaseMainnet = network === "base";
+  // The trap this line used to describe has now been sprung and defused. It
+  // read `const isBaseMainnet = network === "base"`, with a comment warning
+  // that an `isTestnet` guard "waves real funds through to the wrong chain the
+  // moment a third mainnet is listed" — and this commit lists one. So the
+  // guards move from a chain NAME to the capability they actually depend on,
+  // declared per chain in lib/wallet/chains.ts. `network === "base"` was right
+  // for two of the three call sites by coincidence; `can.fiat` and `can.swap`
+  // are right by construction, and a fourth chain has to answer them.
+  const can = net.can;
 
   // ⚠️ EARN-ONLY — the wallet's last dependency on the yield module, deliberately
   // narrowed to these three lines so removing Earn is a delete, not a hunt.
@@ -251,9 +251,16 @@ export default function BankPage() {
     setActionOpen(true);
   }
 
-  // Receive request
+  // Receive request.
+  //
+  // `reqAsset` is the EIP-681 key, not a display string: `"USDC"` means "this
+  // chain's dollar", which `buildPaymentUri` resolves to `cfg.stable`. That
+  // indirection is why the QR was already correct on Robinhood while every
+  // label around it said USDC. `reqSymbol` is the display half, resolved from
+  // the same config, so the two can no longer disagree.
   const [reqAmount, setReqAmount] = useState("");
   const [reqAsset, setReqAsset] = useState<"USDC" | "ETH">("USDC");
+  const reqSymbol = reqAsset === "USDC" ? net.stableSymbol : "ETH";
 
   // Coinbase Onramp — add cash.
   //
@@ -267,7 +274,7 @@ export default function BankPage() {
   const [onrampMsg, setOnrampMsg]   = useState("");
   async function addCash() {
     if (!acct) return;
-    if (!isBaseMainnet) { setOnrampMsg(`Deposit is Base mainnet only — you are on ${net.short}.`); return; }
+    if (!can.fiat) { setOnrampMsg(`Deposit is Base mainnet only — you are on ${net.short}.`); return; }
     setOnrampBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -283,7 +290,7 @@ export default function BankPage() {
   const [cashOutBusy, setCashOutBusy] = useState(false);
   async function cashOut() {
     if (!acct) return;
-    if (!isBaseMainnet) { setOnrampMsg(`Cash out is Base mainnet only — you are on ${net.short}.`); return; }
+    if (!can.fiat) { setOnrampMsg(`Cash out is Base mainnet only — you are on ${net.short}.`); return; }
     setCashOutBusy(true); setOnrampMsg("");
     try {
       const j = await fetch(`/api/onramp/session?address=${acct}`).then(r => r.json());
@@ -347,12 +354,25 @@ export default function BankPage() {
   //
   // ── Real wallet history (Moralis) ────────────────────────────────────────
   type TxStats = { transferCountMonth: number; netFlowUsdcMonth: number; gasSavedUsd: number | null; ethUsdPrice: number | null };
-  const [txData, setTxData] = useState<{ transactions: WalletTx[]; stats?: TxStats; needsKey?: boolean; error?: string } | null>(null);
+  // `unsupported` is a THIRD outcome alongside data and error, and it is the
+  // route telling us it refused rather than failed. Moralis does not index
+  // Robinhood 4663, so there is no history to fetch and no amount of retrying
+  // will produce one. Keeping it distinct from `error` is what stops the
+  // Activity tab offering a Retry button for a permanent gap — see the
+  // `can.txHistory` flag and the route's own header comment, which explains why
+  // it now REFUSES an unlisted chain instead of defaulting to `"base"` and
+  // handing back a Base transaction list under a Robinhood heading.
+  const [txData, setTxData] = useState<{ transactions: WalletTx[]; stats?: TxStats; needsKey?: boolean; unsupported?: boolean; error?: string } | null>(null);
   const [txLoading, setTxLoading] = useState(false);
   const [txError, setTxError]     = useState(false);
   const [txReload, setTxReload]   = useState(0);
   useEffect(() => {
     if (!acct) { setTxData(null); return; }
+    // Do not even ask for a chain the route cannot answer for. The fetch would
+    // succeed and come back `unsupported`, which renders the same — but this
+    // way the network switcher does not fire a request per chain flip that is
+    // known in advance to return nothing.
+    if (!can.txHistory) { setTxData(null); setTxLoading(false); setTxError(false); return; }
     let off = false;
     setTxLoading(true); setTxError(false);
     fetch(`/api/wallet/transactions?address=${acct}&network=${network}`)
@@ -360,7 +380,7 @@ export default function BankPage() {
       .then(d => { if (!off) { setTxData(d); setTxLoading(false); } })
       .catch(() => { if (!off) { setTxError(true); setTxLoading(false); } });
     return () => { off = true; };
-  }, [acct, network, txReload]);
+  }, [acct, network, txReload, can.txHistory]);
 
   // ── How much of the balance did we actually READ? ────────────────────────
   //
@@ -671,8 +691,12 @@ export default function BankPage() {
   const TABS: { id: Panel; label: string; icon: string; desc: string }[] = [
     { id: "positions", label: "Positions", icon: "📊", desc: "Your yield" },
     ...(noPositions ? [] : [{ id: "withdraw" as Panel, label: "Withdraw", icon: "↩︎", desc: "Exit yield" }]),
+    // `receive` is labelled "Deposit" so the tab matches the ACTIONS button
+    // that opens it, and its `desc` names all three things the panel now
+    // holds — QR, card, bank — because the cash-out exit lives inside it and a
+    // tab that says only "Get paid" would hide the way out.
     { id: "send",      label: "Send",      icon: "➡",  desc: "Pay anyone" },
-    { id: "receive",   label: "Receive",   icon: "⬇",  desc: "Get paid" },
+    { id: "receive",   label: "Deposit",   icon: "⬇",  desc: "QR · card · bank" },
     { id: "convert",   label: "Convert",   icon: "⇅",  desc: "Swap tokens" },
   ];
 
@@ -987,86 +1011,66 @@ export default function BankPage() {
             (Explicitly NOT the fix: putting a balance back up here. See the
             note at the top of this aside — the survivor bred once already.) */}
 
-        {/* 7. Chains — the two this wallet reads, and what each one carries.
-            Titled NETWORK (singular) over one switchable chain, while the stock
-            table below has been reading a second one all along: readStockHoldings
-            returns `legs: [base, rh]` on every call, unconditionally. So the
-            wallet already spanned two chains and said so nowhere.
+        {/* 7. Chains — a real switcher over every chain this wallet reads.
+            Robinhood used to be a ROW here, not a button: an outbound link to
+            Blockscout, captioned "tokens · tokenized stocks · read-only ↗". The
+            argument was that making it selectable would repoint `chainId` at
+            4663 while five things downstream kept answering in Base. Three of
+            those five have since been fixed or were never true of the current
+            code, and the remaining two are now DECLARED rather than avoided:
 
-            Robinhood is a ROW, not a button, and that asymmetry is deliberate —
-            it is not `WALLET_CHAIN_ORDER` being conservative for its own sake.
-            Making it selectable would repoint `chainId` at 4663, and three
-            things downstream would keep answering in Base:
+              transactions   fixed — the route refuses an unindexed chain
+                             instead of `CHAIN[network] ?? "base"`.
+              holdings       moot — TokenTable and RhTokenTable now mount by
+                             chain, so the Base reader is never on screen under
+                             an RH heading.
+              addCash/cashOut, SwapCard, SendCard
+                             still Base-only, and each one is gated on
+                             `net.can.*` with a message naming the chain.
 
-              /api/wallet/transactions  CHAIN[network] ?? "base"  → Base txs
-              /api/wallet/holdings      same shape                → Base tokens
-              TokenTable                84532 ? sepolia : base    → labelled Base
-
-            (RH holdings themselves are no longer among them: /api/wallet/rh-holdings
-            reads chain 4663 through Blockscout and mounts unconditionally on
-            mainnet. That closed the read gap; the five below are about MOVING
-            money, and they are why this is still a row and not a button.)
-
-            …and two would still MOVE REAL MONEY on Base: addCash/cashOut pin
-            `defaultNetwork=base` in the Coinbase Onramp URL, and SwapCard
-            force-switches the wallet to mainnet before signing. A picker that
-            silently sends Base data and Base money under a Robinhood heading is
-            the "testnet balances under a Base label" bug with the chains
-            swapped. Until those five are chain-aware, the honest surface is the
-            one below: name the chain, say what is actually read from it, and
-            offer the only control that works there — its own explorer. */}
+            The link was the worse option all along, and not because it was
+            conservative: it sent the user OFF the product to see holdings this
+            page had already fetched. RhTokenTable and StockTable's RH leg were
+            both mounted three sections below it, so the wallet was reading the
+            chain and then advertising an external explorer for the same data.
+            A switcher shows what we already have. */}
         <div className="px-3 pb-3">
           <div className="font-mono text-[9px] text-slate-600 mb-1.5">CHAINS</div>
-          {testnetUnlocked ? (
-            <div className="flex gap-1">
-              {WALLET_CHAIN_ORDER.map(nk => (
+          {/* Sepolia is filtered rather than the whole switcher being hidden.
+              Before, `testnetUnlocked ? buttons : static-label` meant a normal
+              user got NO switcher at all — fine when the only mainnet was Base,
+              and wrong the moment a second one is listed, because it would have
+              hidden Robinhood behind a developer escape hatch. */}
+          <div className="flex flex-col gap-1">
+            {WALLET_CHAIN_ORDER.filter(nk => testnetUnlocked || !WALLET_CHAINS[nk].testnet).map(nk => {
+              const c = WALLET_CHAINS[nk];
+              const on = network === nk;
+              // What this chain is FOR, from `can` — not a hand-written caption
+              // per chain, which is how the old one ended up promising "cash ·
+              // send · swap" on whichever network happened to be selected.
+              const caps = [c.can.fiat && "cash", c.can.send && "send", c.can.swap && "swap"].filter(Boolean);
+              return (
                 <button key={nk} onClick={() => setNetwork(nk)}
-                  className="flex-1 font-mono text-[10px] py-1.5 rounded-md transition-colors"
-                  style={network === nk
-                    ? WALLET_CHAINS[nk].testnet
+                  className="text-left font-mono text-[10px] py-1.5 px-2 rounded-md transition-colors"
+                  style={on
+                    ? c.testnet
                       ? { background: "#F59E0B15", color: "#F59E0B", border: "1px solid #F59E0B30" }
                       : { background: "#4FC3F715", color: "#4FC3F7", border: "1px solid #4FC3F730" }
-                    : { color: "#64748b", border: "1px solid #1A1A2E" }}>
-                  {WALLET_CHAINS[nk].short}
+                    : { color: "#94a3b8", border: "1px solid #1A1A2E" }}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0"
+                      style={on
+                        ? { background: c.testnet ? "#F59E0B" : "#4FC3F7" }
+                        : { border: "1px solid #475569" }} />
+                    {c.label}
+                  </div>
+                  <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
+                    {caps.length ? `${caps.join(" · ")} · ` : ""}holdings
+                  </div>
                 </button>
-              ))}
-            </div>
-          ) : (
-            <div className="font-mono text-[10px] py-1.5 px-2 rounded-md"
-              style={{ background: "#4FC3F70d", color: "#4FC3F7", border: "1px solid #4FC3F725" }}>
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#4FC3F7]" />
-                {net.label}
-              </div>
-              <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
-                cash · send · swap · agent payments
-              </div>
-            </div>
-          )}
-          {/* Gated on the SAME predicate as the RH tables' mount, so this row can
-              never claim a leg the page is not reading. On testnet both are
-              absent (no B20 or RWA testnet twin), so this is too. */}
-          {!isTestnet && (
-            // `?tab=tokens`, not the bare address page. The subtitle under this
-            // row promises "tokens · tokenized stocks", and Blockscout's default
-            // address view is the TRANSACTION list — so the link answered a
-            // question it had not been asked, and an RH holder following it saw
-            // transfers where they were told they would see holdings.
-            // Same URL RhTokenTable.tsx:151 already builds for its "full list on
-            // Blockscout" escape hatch; this row was the one place that dropped
-            // the tab and landed somewhere else.
-            <a href={`${WALLET_CHAINS.robinhood.explorer}/address/${acct}?tab=tokens`}
-              target="_blank" rel="noopener noreferrer"
-              className="block mt-1.5 font-mono text-[10px] py-1.5 px-2 rounded-md border border-[#1A1A2E] hover:border-[#4FC3F730] transition-colors">
-              <div className="flex items-center gap-1.5 text-slate-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#1A1A2E] border border-slate-700" />
-                {WALLET_CHAINS.robinhood.label}
-              </div>
-              <div className="font-mono text-[9px] text-slate-600 mt-0.5 pl-3">
-                tokens · tokenized stocks · read-only ↗
-              </div>
-            </a>
-          )}
+              );
+            })}
+          </div>
         </div>
 
         {/* 8. Account chip — `mt-auto` is the moved spacer. Same pin, one
@@ -1176,17 +1180,37 @@ export default function BankPage() {
             </div>
           )}
 
-          {/* ── Section 1: Balance | Actions | Health ─────────────────────── */}
+          {/* ── Section 1: Account (balance + actions) | Health ─────────────
+              This was three equal columns: Balance | Actions | Health. The
+              middle card held a 2×2 grid plus a two-button row, and once the
+              controls dropped to three the column became a short box with a
+              column of empty space under it — the gap in the screenshot.
+
+              The fix is a merge rather than a filler. A balance and the buttons
+              that move it are ONE thing (which is how Bankr's wallet reads: the
+              figure and Deposit/Send/Swap share a header, they are not
+              neighbouring widgets), so they now share a card, side by side on
+              desktop and stacked on a phone. The card spans two columns and
+              Health keeps the third. Nothing is stretched to fill; there is
+              simply one less box that had to be as tall as its tallest
+              neighbour. */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 items-start">
 
-            {/* Balance card */}
-            <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
+            {/* Account card — balance, breakdown, and the three controls */}
+            <div className="md:col-span-2 rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
+             <div className="flex flex-col sm:flex-row sm:justify-between gap-4">
+              <div className="min-w-0 flex-1">
               {/* Was "TOTAL BALANCE" — over a stablecoins-only figure, with an
                   "ETH (gas)" row listed underneath it that the total excludes.
                   A heading is a claim about what was summed. Then "USDC + YIELD"
                   while the wallet sold yield; the rows below still itemise a
-                  supplied position when there is one, so "USDC" covers it. */}
-              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">USDC</div>
+                  supplied position when there is one, so "USDC" covers it.
+
+                  It reads `net.stableSymbol`, not the literal "USDC", because
+                  Robinhood Chain settles in USDG — and the figure underneath is
+                  read from `net.stable`, which IS the USDG contract there. The
+                  number was already right; only the heading over it was lying. */}
+              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">{net.stableSymbol}</div>
               {/* White, not the accent — colour is decoration on a figure the
                   eye already finds; the three semantic colours are reserved
                   for claims. (This used to read "same reason as the sidebar
@@ -1215,7 +1239,7 @@ export default function BankPage() {
               ) : balanceRead.body === "failed" ? (
                 <div className="flex items-start justify-between gap-2 mt-1">
                   <span className="font-mono text-[9px] text-amber-500/80 leading-relaxed">
-                    Couldn&apos;t read your USDC balance on {net.short}. Unknown — not zero.
+                    Couldn&apos;t read your {net.stableSymbol} balance on {net.short}. Unknown — not zero.
                   </span>
                   <RetryRead onRetry={retryBalance} busy={rereading} />
                 </div>
@@ -1227,10 +1251,47 @@ export default function BankPage() {
                   <RetryRead onRetry={retryBalance} busy={rereading} />
                 </div>
               ) : null}
-              <div className="flex flex-col gap-1.5 mt-3">
+              </div>
+
+              {/* Actions — the same three controls, now inside the card whose
+                  number they change.
+
+                  NOTHING was deleted to get from six to three; every path still
+                  has an entrance, it just stopped competing for one 2×2 grid:
+                    Receive → renamed "Deposit" (same panel, `openAction("receive")`)
+                    💵 Add  → a button INSIDE that panel, next to the QR, where
+                              "put money in" actually belongs
+                    🏦 Out  → beside it, under a "card ↔ bank" heading. It is an
+                              EXIT from real funds, so it keeps a route by rule:
+                              a user who cannot find "cash out" has money
+                              stranded, not a missing button.
+                    📷 Scan → already Send's first control, unchanged.
+
+                  `disabledReason` is a STRING, not a boolean, and it comes from
+                  `can` rather than from `network === "base"`. A disabled button
+                  that cannot say why reads as a bug; one that says "Swaps route
+                  through Base mainnet" reads as a fact about the chain the user
+                  just picked. */}
+              <div className="sm:w-[13.5rem] sm:shrink-0">
+                <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">ACTIONS</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <ActionButton icon="⬇" label="Deposit" onClick={() => openAction("receive")} />
+                  <ActionButton icon="➡" label="Send" primary onClick={() => openAction("send")}
+                    disabledReason={can.send ? null : `Not on ${net.short}`} />
+                  <ActionButton icon="⇅" label="Swap" onClick={() => openAction("convert")}
+                    disabledReason={can.swap ? null : `Base only`} />
+                </div>
+                {onrampMsg && <div className="font-mono text-[9px] text-amber-400 mt-2">{onrampMsg}</div>}
+              </div>
+             </div>
+
+              {/* The breakdown spans the full card width, under both columns —
+                  it itemises the figure above it, so it belongs to neither the
+                  number nor the buttons alone. */}
+              <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-[#13131f]">
                 {(walletUsdc ?? 0) > 0 && (
                   <div className="flex justify-between font-mono text-[10px]">
-                    <span className="text-slate-500">USDC</span>
+                    <span className="text-slate-500">{net.stableSymbol}</span>
                     <span className="text-slate-300">${usd(walletUsdc)}</span>
                   </div>
                 )}
@@ -1273,51 +1334,6 @@ export default function BankPage() {
                   <div className="font-mono text-[9px] text-amber-400">⚠ Low — get ETH for gas</div>
                 )}
               </div>
-            </div>
-
-            {/* Actions card */}
-            <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
-              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-3">ACTIONS</div>
-              <div className="grid grid-cols-2 gap-2 mb-2">
-                <button onClick={() => openAction("receive")}
-                  className="font-mono text-[11px] font-bold py-2.5 px-3 rounded-xl transition-colors"
-                  style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
-                  ⬇ Receive
-                </button>
-                <button onClick={() => openAction("send")}
-                  className="font-mono text-[11px] font-bold py-2.5 px-3 rounded-xl hover:opacity-90 transition-opacity"
-                  style={{ background: "#4FC3F7", color: "#050508" }}>
-                  ➡ Send
-                </button>
-                <button onClick={addCash} disabled={onrampBusy || !isConnected || !isBaseMainnet}
-                  title={!isBaseMainnet ? "Base mainnet only" : undefined}
-                  className="font-mono text-[11px] font-bold py-2.5 px-3 rounded-xl disabled:opacity-40 transition-opacity hover:opacity-80"
-                  style={{ background: "#34D39910", color: "#34D399", border: "1px solid #34D39930" }}>
-                  {onrampBusy ? "…" : "💵 Add"}
-                </button>
-                <button onClick={cashOut} disabled={cashOutBusy || !isConnected || !isBaseMainnet}
-                  title={!isBaseMainnet ? "Base mainnet only" : undefined}
-                  className="font-mono text-[11px] py-2.5 px-3 rounded-xl text-slate-400 disabled:opacity-40 transition-opacity hover:text-slate-200"
-                  style={{ border: "1px solid #1A1A2E" }}>
-                  {cashOutBusy ? "…" : "🏦 Out"}
-                </button>
-              </div>
-              {/* 🌾 Earn used to lead this row. Supplying into Aave/Morpho is
-                  deferred to phase 2, so the control that starts a deposit is
-                  gone; the withdraw path lives on the Positions panel. */}
-              <div className="flex gap-1.5">
-                <button onClick={() => openAction("convert")}
-                  className="flex-1 font-mono text-[10px] py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
-                  style={{ border: "1px solid #1A1A2E" }}>
-                  ⇅ Swap
-                </button>
-                <button onClick={() => setScanOpen(true)}
-                  className="flex-1 font-mono text-[10px] py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
-                  style={{ border: "1px solid #1A1A2E" }}>
-                  📷 Scan
-                </button>
-              </div>
-              {onrampMsg && <div className="font-mono text-[9px] text-amber-400 mt-2">{onrampMsg}</div>}
             </div>
 
             {/* Health card */}
@@ -1688,26 +1704,79 @@ export default function BankPage() {
             ))}
           </div>
 
-          {view === "portfolio" && (
-            <>
-              <TokenTable address={acct} onQuickSell={quickSell} />
-              {/* Mainnet-only by construction: B20 stocks exist on Base 8453 and
-                  the RWA registry on RH 4663, and neither has a testnet twin. On
-                  a testnet dashboard this would show mainnet positions under a
-                  banner saying "no real value", so it is absent instead — the
-                  same refusal the Convert panel makes.
+          {/* TOKENS + STOCKS for the chain the switcher is pointing at — and
+              ONLY that chain.
 
-                  RH crypto sits between the two tables deliberately: it is the
-                  same KIND of thing as the Base tokens above it (spot balances),
-                  while the stock table below spans both chains at once. Reading
-                  top to bottom you get Base tokens → RH tokens → equities, and
-                  every one of the three names its own chain. */}
-              {!isTestnet && <RhTokenTable address={acct} />}
-              {!isTestnet && <StockTable address={acct} />}
+              This used to stack all three tables unconditionally: Base tokens,
+              then RH tokens, then a stock table showing both venues at once.
+              Two chains' holdings were on screen simultaneously while the
+              sidebar claimed one was selected, so the network switcher changed
+              a heading and nothing underneath it. Picking Robinhood is now a
+              question ("what do I hold on 4663?") that the page answers with
+              4663 data alone.
+
+              Each branch is written out rather than derived from a map, because
+              the three tables are NOT interchangeable — they have different data
+              sources (Moralis / Blockscout / registry+RPC), different trust
+              models, and different reasons to be absent. `network` is switched
+              exhaustively so a fourth chain fails to compile here too. */}
+          {view === "portfolio" && network === "base" && (
+            <>
+              <TokenTable address={acct} network="base" onQuickSell={quickSell} />
+              <StockTable address={acct} venue="base" />
+            </>
+          )}
+          {view === "portfolio" && network === "robinhood" && (
+            <>
+              <RhTokenTable address={acct} />
+              <StockTable address={acct} venue="robinhood" />
+            </>
+          )}
+          {view === "portfolio" && network === "baseSepolia" && (
+            <>
+              <TokenTable address={acct} network="baseSepolia" />
+              {/* No stock table, and this is a fact rather than caution: B20
+                  shares live on Base 8453 and the RWA registry on RH 4663, and
+                  neither venue has a testnet deployment. Mounting it here would
+                  render MAINNET positions under a page captioned "no real
+                  value". `quickSell` is dropped for the same reason it is
+                  disabled inside TokenTable — 0x has no testnet liquidity. */}
+              <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4 mt-4">
+                <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-1.5">STOCKS</div>
+                <p className="font-mono text-[10px] text-slate-600 leading-relaxed">
+                  Tokenized shares are issued on Base mainnet and Robinhood Chain only — there is no
+                  testnet deployment to read. Switch to Base or Robinhood to see equity holdings.
+                </p>
+              </div>
             </>
           )}
 
-          {view === "activity" && (
+          {/* A chain with no history INDEX is not a chain with no history. This
+              branch says which is which, and offers the explorer instead of a
+              Retry — retrying a source that structurally cannot answer is a
+              button that wastes the user's time and implies the gap is
+              temporary. The link is the honest exit: the transactions exist,
+              just not in anything we can query. */}
+          {view === "activity" && !can.txHistory && (
+            <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-5">
+              <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">ACTIVITY · {net.short}</div>
+              <p className="font-mono text-[11px] text-slate-300 mb-1.5">
+                Transaction history is not available for {net.label}.
+              </p>
+              <p className="font-mono text-[10px] text-slate-500 leading-relaxed mb-3">
+                Our history index (Moralis) does not cover chain {net.chainId}. This is a gap in the data
+                source, not in your wallet — your transactions are on-chain and readable on the explorer.
+              </p>
+              {acct && (
+                <a href={`${net.explorer}/address/${acct}`} target="_blank" rel="noopener noreferrer"
+                  className="inline-block font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg transition-opacity hover:opacity-80"
+                  style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
+                  View on {net.explorerName} ↗
+                </a>
+              )}
+            </div>
+          )}
+          {view === "activity" && can.txHistory && (
             <TransactionHistory
               transactions={txData?.transactions ?? []}
               loading={txLoading}
@@ -1789,8 +1858,14 @@ export default function BankPage() {
                     SwapCard force-switches the wallet to mainnet before signing.
                     Rendering it while the dashboard is on testnet would move REAL
                     funds under a page captioned "no real value" — exactly the
-                    class of mismatch this PR removes. Refuse instead. */}
-                {panel === "convert" && (!isBaseMainnet
+                    class of mismatch this PR removes. Refuse instead.
+
+                    The guard asks `can.swap`, not `network === "base"`. Those
+                    were the same predicate while the switcher offered two
+                    chains and were about to stop being the same: Robinhood is
+                    not a testnet, so an `isTestnet`-shaped test would have
+                    waved it through to a router that is not deployed on 4663. */}
+                {panel === "convert" && (!can.swap
                   ? <div className="rounded-lg px-3.5 py-3" style={{ background: "#F59E0B10", border: "1px solid #F59E0B40" }}>
                       <div className="font-mono text-[11px] font-bold" style={{ color: "#F59E0B" }}>Convert is Base mainnet only</div>
                       <div className="font-mono text-[9px] text-slate-400 mt-1 leading-relaxed">
@@ -1803,8 +1878,35 @@ export default function BankPage() {
                       </button>
                     </div>
                   : <SwapCard account={acct} preset={sellPreset} />)}
-                {panel === "send" && (
-                  <div>
+                {/* SendCard cannot REPRESENT a chain outside {base, baseSepolia}:
+                    it types its own network as `YieldNetwork` and initialises it
+                    with `result.network === "base" ? "base" : "baseSepolia"`, so
+                    handing it "robinhood" does not degrade — it renders a BASE
+                    SEPOLIA send form under a Robinhood heading. That is the
+                    fail-open shape again, one component down, and it is why
+                    `can.send` is false on 4663.
+
+                    The scan path is inside this guard on purpose. A QR can carry
+                    its own `network`, and `scanPrefill.network` is passed straight
+                    through, so leaving the scanner reachable here would let a
+                    scanned code re-open the very door the flag closes. */}
+                {panel === "send" && (!can.send
+                  ? <div className="rounded-lg px-3.5 py-3" style={{ background: "#F59E0B10", border: "1px solid #F59E0B40" }}>
+                      <div className="font-mono text-[11px] font-bold" style={{ color: "#F59E0B" }}>Send is not available on {net.short} yet</div>
+                      <div className="font-mono text-[9px] text-slate-400 mt-1 leading-relaxed">
+                        This wallet can read your {net.short} balances and holdings, but the send form only
+                        supports Base. Switch to Base to send, or move {net.stableSymbol} from your{" "}
+                        <a href={`${net.explorer}/address/${acct}`} target="_blank" rel="noopener noreferrer"
+                          className="text-[#4FC3F7] underline underline-offset-2">{net.explorerName}</a>{" "}
+                        account directly.
+                      </div>
+                      <button onClick={() => setNetwork("base")}
+                        className="font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg mt-2.5 transition-opacity hover:opacity-80"
+                        style={{ background: "#F59E0B", color: "#050508" }}>
+                        Switch to Base
+                      </button>
+                    </div>
+                  : <div>
                     <button onClick={() => setScanOpen(true)}
                       className="w-full font-mono text-[11px] font-bold py-2 rounded-xl mb-3 flex items-center justify-center gap-2"
                       style={{ background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F730" }}>
@@ -1827,7 +1929,16 @@ export default function BankPage() {
                 )}
                 {panel === "receive" && (
                   <div>
-                    <div className="font-mono text-[10px] text-slate-500 tracking-widest mb-3">RECEIVE · {net.short}</div>
+                    <div className="font-mono text-[10px] text-slate-500 tracking-widest mb-3">DEPOSIT · {net.short}</div>
+                    {/* The picker's two options are "the chain's dollar" and
+                        "the chain's gas token", NOT two fixed tickers. The
+                        state key stays `"USDC"` because that is the contract
+                        `buildPaymentUri` reads (and it already resolves it to
+                        `cfg.stable`, so the QR was right on Robinhood while the
+                        BUTTON said USDC) — but the label is `net.stableSymbol`,
+                        so on 4663 it reads USDG, which is what a payer would
+                        actually be sending. ETH needs no such treatment: RH's
+                        nativeCurrency is Ether too. */}
                     <div className="flex items-center gap-1.5 mb-3">
                       <div className="flex gap-1">
                         {(["USDC", "ETH"] as const).map(a => (
@@ -1836,7 +1947,7 @@ export default function BankPage() {
                             style={reqAsset === a
                               ? { background: "#4FC3F712", color: "#4FC3F7", border: "1px solid #4FC3F730" }
                               : { color: "#64748b", border: "1px solid #1A1A2E" }}>
-                            {a}
+                            {a === "USDC" ? net.stableSymbol : a}
                           </button>
                         ))}
                       </div>
@@ -1852,7 +1963,7 @@ export default function BankPage() {
                         <QRCodeSVG value={acct ? buildPaymentUri({ to: acct, amount: reqAmount, asset: reqAsset, network }) : ""} size={180} bgColor="#ffffff" fgColor="#0a0a0f" level="M" />
                       </div>
                       {parseFloat(reqAmount) > 0 && (
-                        <div className="font-mono text-[12px] text-[#34D399] mt-3 font-bold">requesting {reqAmount} {reqAsset}</div>
+                        <div className="font-mono text-[12px] text-[#34D399] mt-3 font-bold">requesting {reqAmount} {reqSymbol}</div>
                       )}
                       {name && <div className="font-mono text-[13px] text-[#4FC3F7] mt-2">{name}</div>}
                       <div className="font-mono text-[9px] text-slate-400 mt-1.5 break-all px-2">{acct}</div>
@@ -1865,11 +1976,47 @@ export default function BankPage() {
                         </button>
                       </div>
                     </div>
-                    <div className="rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-2.5 mt-4">
+                    {/* The two fiat rails, moved here from the ACTIONS card.
+                        They travel TOGETHER and neither was deleted.
+
+                        💵 Add was an entrance and 🏦 Out is an EXIT from real
+                        funds — the exit is the one that must not be dropped for
+                        tidiness, because a user who cannot find "cash out" has
+                        money stranded, not a missing button. Both are the same
+                        Coinbase rail and the same `can.fiat` dependency, so the
+                        place to look for one is the place to find the other;
+                        that is what the "card ↔ bank" heading is for.
+
+                        The refusal is TEXT, not a `title` tooltip. The old
+                        version disabled both buttons with title="Base mainnet
+                        only" — invisible on touch, on a wallet whose wedge is a
+                        phone. */}
+                    <div className="rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-3 mt-4">
+                      <div className="font-mono text-[9px] text-slate-500 tracking-widest mb-2">CASH · CARD ↔ BANK</div>
+                      <div className="flex gap-2">
+                        <button onClick={addCash} disabled={onrampBusy || !isConnected || !can.fiat}
+                          className="flex-1 font-mono text-[11px] font-bold py-2.5 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-opacity hover:opacity-80"
+                          style={{ background: "#34D39910", color: "#34D399", border: "1px solid #34D39930" }}>
+                          {onrampBusy ? "opening…" : `💵 Buy ${net.stableSymbol}`}
+                        </button>
+                        <button onClick={cashOut} disabled={cashOutBusy || !isConnected || !can.fiat}
+                          className="flex-1 font-mono text-[11px] py-2.5 rounded-xl text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity hover:text-white"
+                          style={{ border: "1px solid #1A1A2E" }}>
+                          {cashOutBusy ? "opening…" : "🏦 Cash out"}
+                        </button>
+                      </div>
+                      {!can.fiat && (
+                        <div className="font-mono text-[9px] text-slate-600 mt-2 leading-relaxed">
+                          Coinbase Onramp and Offramp settle on Base mainnet only — not {net.short}. Switch to
+                          Base to move cash in or out.
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-[#1A1A2E] bg-[#0d0d12] p-2.5 mt-3">
                       <p className="font-mono text-[9px] text-slate-500 leading-relaxed">
                         {parseFloat(reqAmount) > 0
-                          ? <>Payment-request QR — a payer scanning it (Wallet <b className="text-slate-300">Scan to pay</b>, or any EIP-681 wallet) gets <b className="text-slate-300">{reqAmount} {reqAsset}</b> prefilled.</>
-                          : <>Scan the QR with any wallet, or set an amount above to make a payment request. <b className="text-slate-300">USDC / ETH on {net.label}</b> only.</>}
+                          ? <>Payment-request QR — a payer scanning it (Wallet <b className="text-slate-300">Scan to pay</b>, or any EIP-681 wallet) gets <b className="text-slate-300">{reqAmount} {reqSymbol}</b> prefilled.</>
+                          : <>Scan the QR with any wallet, or set an amount above to make a payment request. <b className="text-slate-300">{net.stableSymbol} / ETH on {net.label}</b> only.</>}
                       </p>
                     </div>
                   </div>
@@ -2043,6 +2190,42 @@ function IdentityChip({ label, active, color }: { label: string; active: boolean
         : { background: "#0d0d12", border: "1px solid #1A1A2E", color: "#475569" }}>
       {active && <span className="text-[8px]">✓</span>}
       {label}
+    </div>
+  );
+}
+
+// One of the three top-level money controls (Deposit / Send / Swap).
+//
+// It takes `disabledReason: string | null` rather than `disabled: boolean`
+// because of what the wallet learned from the network switcher: a control that
+// is off for a chain-specific reason must SAY the reason at the point of
+// refusal. The old version of this row disabled two buttons with
+// `title="Base mainnet only"` — a native tooltip, invisible on touch, on a
+// wallet whose whole VN scan-to-pay wedge is a phone. So the reason renders as
+// text under the button, always, and `title` is a bonus rather than the only
+// copy of it.
+//
+// A null reason means enabled. There is deliberately no way to disable this
+// button without supplying one.
+function ActionButton({ icon, label, onClick, primary, disabledReason }: {
+  icon: string; label: string; onClick: () => void; primary?: boolean; disabledReason?: string | null;
+}) {
+  const off = !!disabledReason;
+  return (
+    <div className="flex flex-col">
+      <button onClick={onClick} disabled={off} title={disabledReason ?? undefined}
+        className="font-mono text-[11px] font-bold py-3 px-2 rounded-xl flex flex-col items-center gap-1 transition-opacity hover:opacity-90 disabled:opacity-35 disabled:cursor-not-allowed"
+        style={off
+          ? { background: "#0d0d12", color: "#475569", border: "1px solid #1A1A2E" }
+          : primary
+            ? { background: "#4FC3F7", color: "#050508" }
+            : { background: "#4FC3F710", color: "#4FC3F7", border: "1px solid #4FC3F740" }}>
+        <span className="text-[15px] leading-none">{icon}</span>
+        {label}
+      </button>
+      {off && (
+        <div className="font-mono text-[8px] text-slate-600 mt-1 text-center leading-tight">{disabledReason}</div>
+      )}
     </div>
   );
 }

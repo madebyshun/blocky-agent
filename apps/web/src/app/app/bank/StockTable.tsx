@@ -20,7 +20,7 @@
 // absence and a scan count larger than what had actually been read.
 
 import { useEffect, useState } from "react";
-import type { StockPortfolio, StockLeg, StockHolding } from "@/lib/wallet/stock-holdings";
+import type { StockPortfolio, StockLeg, StockHolding, StockVenue } from "@/lib/wallet/stock-holdings";
 import { resolveRead } from "@/lib/wallet/read-state";
 
 const fmtUsd = (n: number | null | undefined) =>
@@ -158,7 +158,20 @@ function Leg({ leg }: { leg: StockLeg }) {
   );
 }
 
-export default function StockTable({ address }: { address?: `0x${string}` }) {
+/**
+ * `venue` narrows the table to ONE chain — the wallet's network switcher now
+ * covers Base and Robinhood, and a page showing "Base" above a table listing RH
+ * equities is the ticker-string confusion this file's header warns about, made
+ * visual. Omitting it keeps the both-venues rendering (still used anywhere the
+ * question really is "everything you hold").
+ *
+ * The filter is applied to the LEGS, after the fetch, and deliberately not
+ * pushed into the request: each leg carries its own `status` / `unread`, so
+ * dropping one at render time cannot alter what the other one reports. Fetching
+ * per-venue would have made the two legs' completeness depend on which tab the
+ * user was looking at.
+ */
+export default function StockTable({ address, venue }: { address?: `0x${string}`; venue?: StockVenue }) {
   const [data, setData] = useState<StockPortfolio | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -176,7 +189,11 @@ export default function StockTable({ address }: { address?: `0x${string}` }) {
 
   if (!address) return null;
 
-  const legs = data?.legs ?? [];
+  // Filtered BEFORE `resolveRead` below, so "how many venues did we get" is
+  // asked of the venues actually on screen. Reading it off the unfiltered list
+  // would report a Base-only table as complete on the strength of an RH leg the
+  // user cannot see.
+  const legs = (data?.legs ?? []).filter(l => venue == null || l.venue === venue);
   const anyHeld = legs.some(l => l.holdings.length > 0);
 
   // The OUTER read: did we get a portfolio at all? Its rows are the legs, not
@@ -200,18 +217,23 @@ export default function StockTable({ address }: { address?: `0x${string}` }) {
       </div>
 
       {read.body === "pending" ? (
-        <div className="py-6 text-center font-mono text-[10px] text-slate-600">reading both chains…</div>
+        <div className="py-6 text-center font-mono text-[10px] text-slate-600">
+          reading {venue == null ? "both chains" : venue === "base" ? "Base" : "Robinhood Chain"}…
+        </div>
       ) : read.body === "failed" ? (
         <div className="py-6 text-center font-mono text-[10px] text-amber-500/80">
           Couldn&apos;t load stock holdings — {data?.error}
         </div>
       ) : read.body === "empty" || read.body === "partial" ? (
         // Zero legs from a read that did not error. `readStockHoldings` always
-        // returns both venues, so this is unreachable today — kept, and worded
-        // as a gap in OUR answer rather than as a fact about the wallet,
-        // because "No data" read as if the user held nothing.
+        // returns both venues, so with no filter this stays unreachable — but
+        // `venue` made it REACHABLE, for the case where the response is missing
+        // the one leg being asked for. Either way it is worded as a gap in OUR
+        // answer rather than as a fact about the wallet, because "No data" read
+        // as if the user held nothing.
         <div className="py-6 text-center font-mono text-[10px] text-slate-600">
-          No venues were checked — this says nothing about what you hold.
+          {venue == null ? "No venues were checked" : "This venue was not in the response"} —
+          this says nothing about what you hold.
         </div>
       ) : (
         <>

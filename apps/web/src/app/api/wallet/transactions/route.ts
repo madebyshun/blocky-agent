@@ -14,6 +14,16 @@ import { NextResponse } from "next/server";
 
 const MORALIS = "https://deep-index.moralis.io/api/v2.2";
 // Moralis chain slug per BlueBank network. Base Sepolia = 0x14a34 (84532).
+//
+// ⚠️ NOT exhaustive over `WalletChain`, and that is a fact about Moralis rather
+// than an omission: it does not index Robinhood Chain 4663, so there is no slug
+// to put here. The lookup below therefore REFUSES an unlisted network instead
+// of defaulting. It used to read `CHAIN[network] ?? "base"`, which meant that
+// asking for a chain Moralis cannot see returned a full list of BASE
+// transactions — rendered by the caller under whichever chain heading the user
+// had selected. Wrong rows are worse than no rows: an empty list invites a
+// retry, a Base list invites the user to believe they moved money on a chain
+// they have never touched.
 const CHAIN: Record<string, string> = { base: "base", baseSepolia: "0x14a34" };
 
 interface Transfer {
@@ -118,11 +128,20 @@ export async function GET(req: Request) {
   const u = new URL(req.url);
   const address = u.searchParams.get("address") ?? "";
   const network = u.searchParams.get("network") ?? "base";
-  const chain = CHAIN[network] ?? "base";
+  const chain = CHAIN[network];
   const key = process.env.MORALIS_API_KEY ?? "";
 
   if (!/^0x[a-fA-F0-9]{40}$/.test(address))
     return NextResponse.json({ transactions: [], stats: emptyStats(), error: "invalid address" });
+  // Says which chain went unread, so the caller can name it too. `unsupported`
+  // is a separate flag from `error` because it is not a failure the user can
+  // retry away — it is a permanent gap in this data source, and the UI should
+  // offer the block explorer rather than a Retry button.
+  if (!chain)
+    return NextResponse.json({
+      transactions: [], stats: emptyStats(), unsupported: true,
+      error: `transaction history is not available for ${network}`,
+    });
   if (!key)
     return NextResponse.json({ transactions: [], stats: emptyStats(), needsKey: true });
 
