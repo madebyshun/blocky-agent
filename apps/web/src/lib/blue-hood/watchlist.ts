@@ -21,6 +21,29 @@
  * Every add SADDs the reverse set; every remove SREMs it. A removed ticker can
  * NEVER leave an orphaned subscriber that keeps getting alerts — that silent
  * "fail open" is the exact class of bug this codebase has been bitten by twice.
+ *
+ * ── A WATCH IS (TICKER, CHAIN), NEVER A TICKER ────────────────────────────────
+ * This module had ZERO mentions of `chain` until the Base desk had been live 16
+ * days. That was not an omission — it was correct while Robinhood was the only
+ * desk. It stopped being correct the moment NVDA / META / GOOGL / AAPL existed
+ * on BOTH Robinhood Chain (4663) and Base (8453) as different contracts: ★ on
+ * the Base NVDA row and ★ on the Robinhood NVDA row wrote the same forward
+ * entry and the same reverse set, so watching a Base row subscribed the user to
+ * ROBINHOOD arrows for a token they had not looked at. Nothing errored; they
+ * simply got the wrong desk's alerts.
+ *
+ * So the identity of an entry is `rowKey` (`NVDA` on RH, `base:NVDA` on Base) —
+ * the same function the board keys its rows by, so the UI and the subscription
+ * agree by construction rather than by convention. `chain` is OPTIONAL on the
+ * stored record and absent ⟹ "robinhood" via `chainOf`, which makes every list
+ * already in KV correct as written: they were all Robinhood. Reads go through
+ * `entryKey`, writes stamp `chain` explicitly, and `chainSeg("robinhood")` is
+ * the empty string, so no live key or subscription changes name.
+ *
+ * Validity is per chain (`isChainTicker`): the RH desk admits the 205-token RWA
+ * registry, the Base desk admits ONLY the hand-verified B20 allow-list. A Base
+ * ticker outside that list is refused rather than silently accepted against
+ * Robinhood's list — cross-chain fallback is the bug, not the remedy.
  */
 
 import {
@@ -49,7 +72,8 @@ import {
   watchlistTier,
   type WatchlistTierName,
 } from "@/lib/blue-hood/watchlist-config";
-import { RWA_TOKENS } from "@/lib/robinhood/rwa-registry";
+import { isChainTicker, CHAIN_LABEL } from "@/lib/blue-hood/chain-token";
+import { chainOf, rowKey, type HoodChain } from "@/lib/blue-hood/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,9 +82,23 @@ export type AlertKind = "drift" | "arb" | "flow";
 export const ALL_KINDS: readonly AlertKind[] = ["drift", "arb", "flow"] as const;
 
 export interface WatchEntry {
-  ticker: string;        // UPPERCASE, guaranteed ∈ RWA_TOKENS
+  ticker: string;        // UPPERCASE, valid on `chain` (see isChainTicker)
+  /** Which desk this watch is for. ABSENT ⟹ "robinhood" (`chainOf`) — every
+   *  entry written before the Base desk existed really was Robinhood, so the
+   *  default makes stored lists correct as written rather than needing a
+   *  migration. New writes always stamp it explicitly. */
+  chain?: HoodChain;
   kinds: AlertKind[];    // non-empty; defaults to ALL_KINDS
   addedAt: string;       // ISO
+}
+
+/**
+ * The identity of a watch: `NVDA` on Robinhood, `base:NVDA` on Base. Same
+ * function the /hood board keys its rows by, so a ★ on a row and the entry it
+ * creates cannot disagree. Comparing `e.ticker` alone is the bug this replaces.
+ */
+function entryKey(e: { ticker: string; chain?: HoodChain }): string {
+  return rowKey({ ticker: e.ticker.trim().toUpperCase(), chain: chainOf(e) });
 }
 
 export interface Watchlist {
@@ -113,11 +151,17 @@ export type RemoveResult =
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
-/** Uppercase set of every registry ticker — the allow-list. Built once at module load. */
-const VALID_TICKERS: ReadonlySet<string> = new Set(RWA_TOKENS.map((t) => t.ticker.toUpperCase()));
-
-export function isValidTicker(ticker: string): boolean {
-  return VALID_TICKERS.has(ticker.trim().toUpperCase());
+/**
+ * Is this a watchable ticker ON `chain`?
+ *
+ * The chain is REQUIRED and has no default. It used to be a bare-ticker check
+ * against the Robinhood registry alone, which answered `true` for a Base ticker
+ * that happens to share a name with an RH one and `false` for a Base-only
+ * ticker — both wrong, and neither visible. The per-chain allow-lists live in
+ * `chain-token.ts` so this module never touches a single-chain registry.
+ */
+export function isValidTicker(ticker: string, chain: HoodChain): boolean {
+  return isChainTicker(ticker, chain);
 }
 
 function normAddress(address: string): string | null {
@@ -211,10 +255,12 @@ export async function getWatchlist(address: string): Promise<Watchlist> {
   };
 }
 
-/** The alert engine's hot read: every address subscribed to a ticker. One SET read. */
-export async function watchersForTicker(ticker: string): Promise<string[]> {
-  if (!isValidTicker(ticker)) return [];
-  return kvSMembers(kvWatchTicker(ticker));
+/** The alert engine's hot read: every address subscribed to a ticker ON ONE
+ *  CHAIN. One SET read. Base NVDA and Robinhood NVDA are different subscriptions
+ *  because they are different tokens. */
+export async function watchersForTicker(ticker: string, chain: HoodChain): Promise<string[]> {
+  if (!isValidTicker(ticker, chain)) return [];
+  return kvSMembers(kvWatchTicker(ticker, chain));
 }
 
 /**
@@ -231,16 +277,26 @@ export async function watchersForTicker(ticker: string): Promise<string[]> {
  * arrow fires — there is no poll loop and arrows are dedup+cooldown-capped to a
  * handful/day, so this is bounded, not a hot read (Req 4). Never throws: every
  * KV helper it calls swallows and returns a safe empty on failure.
+ *
+ * ⚠️ Takes the ARROW, not its ticker. Passing `arrow.ticker` is exactly how a
+ * Base arrow used to fan out to Robinhood watchers: the chain was available at
+ * every call site and dropped on the way in. `chainOf` applies the documented
+ * absent ⟹ robinhood default, so the pre-migration arrows resolve unchanged.
  */
-export async function recipientsForArrow(ticker: string, kind: AlertKind): Promise<string[]> {
-  const T = ticker.trim().toUpperCase();
-  if (!isValidTicker(T)) return [];
-  const addrs = await watchersForTicker(T);
+export async function recipientsForArrow(
+  arrow: { ticker: string; chain?: HoodChain },
+  kind: AlertKind,
+): Promise<string[]> {
+  const chain = chainOf(arrow);
+  const T = arrow.ticker.trim().toUpperCase();
+  if (!isValidTicker(T, chain)) return [];
+  const addrs = await watchersForTicker(T, chain);
   if (addrs.length === 0) return [];
+  const key = rowKey({ ticker: T, chain });
   const out: string[] = [];
   for (const a of addrs) {
     const wl = await getWatchlist(a);
-    const entry = wl.entries.find((e) => e.ticker === T);
+    const entry = wl.entries.find((e) => entryKey(e) === key);
     if (entry && entry.kinds.includes(kind)) out.push(a);
   }
   return out;
@@ -249,10 +305,13 @@ export async function recipientsForArrow(ticker: string, kind: AlertKind): Promi
 // ── Write (symmetric dual-write) ─────────────────────────────────────────────
 
 /**
- * Add a ticker to a wallet's watchlist. Validates the ticker against the RWA
- * registry, dedupes, applies the cap policy, then writes the forward record AND
- * the reverse index + global index in lockstep.
+ * Add a (ticker, chain) watch to a wallet's list. Validates the ticker against
+ * THAT CHAIN's registry, dedupes on `rowKey`, applies the cap policy, then
+ * writes the forward record AND the reverse index + global index in lockstep.
  *
+ * @param opts.chain — which desk. Absent ⟹ "robinhood" through `chainOf`, the
+ *   one place that default lives, so an older caller that predates the Base desk
+ *   keeps its exact meaning instead of silently landing on the wrong chain.
  * @param opts.blueBalance — the wallet's $BLUE balance for tier resolution. Omit
  *   (or pass undefined) until 1.1 WalletProvider can supply it; the gate then
  *   resolves everyone to "free" and, with enforcement off, never blocks.
@@ -260,15 +319,22 @@ export async function recipientsForArrow(ticker: string, kind: AlertKind): Promi
 export async function addTicker(
   address: string,
   ticker: string,
-  opts?: { kinds?: AlertKind[]; blueBalance?: number },
+  opts?: { chain?: HoodChain; kinds?: AlertKind[]; blueBalance?: number },
 ): Promise<AddResult> {
   const a = normAddress(address);
   if (!a) return { ok: false, error: { code: "bad_address", message: "not a 0x… address" } };
 
+  const chain = chainOf(opts);
   const T = ticker.trim().toUpperCase();
-  if (!isValidTicker(T)) {
-    return { ok: false, error: { code: "bad_ticker", message: `${T} is not a Robinhood Chain RWA ticker` } };
+  if (!isValidTicker(T, chain)) {
+    // Name the CHAIN in the rejection. "NVDA is not a ticker" would be a lie on
+    // a desk where it is one; the honest message is which desk we checked.
+    return {
+      ok: false,
+      error: { code: "bad_ticker", message: `${T} is not a ${CHAIN_LABEL[chain]} ticker Blue Hood tracks` },
+    };
   }
+  const key = rowKey({ ticker: T, chain });
 
   const wlRead = await readWatchlistForWrite(a);
   if (wlRead === "unavailable") return { ok: false, error: KV_UNAVAILABLE_ERR };
@@ -276,14 +342,18 @@ export async function addTicker(
   const kinds = normalizeKinds(opts?.kinds);
 
   // Already watching → idempotent: refresh kinds, no double-count, no cap hit.
-  const existing = wl.entries.find((e) => e.ticker === T);
+  const existing = wl.entries.find((e) => entryKey(e) === key);
   if (existing) {
     existing.kinds = kinds;
+    // Stamp the chain on an entry stored before this field existed. It resolves
+    // to the same value via `chainOf`, so this is a no-op in meaning — it just
+    // stops the record depending on a default.
+    existing.chain = chain;
     wl.updatedAt = new Date().toISOString();
     await kvSet(kvWatchlist(a), wl);
     // Reverse index is a set — re-adding is a harmless no-op, but do it so a
     // repaired list heals a previously-missing reverse entry.
-    await kvSAdd(kvWatchTicker(T), a);
+    await kvSAdd(kvWatchTicker(T, chain), a);
     await kvSAdd(KV_WATCH_INDEX, a);
     return { ok: true, watchlist: wl, decision: evaluateAdd(wl.entries.length - 1, watchlistTier(opts?.blueBalance)), added: false };
   }
@@ -296,31 +366,41 @@ export async function addTicker(
   if (decision.wouldBlock) {
     // Enforcement is off, so we let it through but leave a breadcrumb — this is
     // the signal that flips to a hard block once the gate goes live.
-    console.warn(`[watchlist] would-block ${a} +${T}: ${decision.reason} (enforce off)`);
+    console.warn(`[watchlist] would-block ${a} +${key}: ${decision.reason} (enforce off)`);
   }
 
-  wl.entries.push({ ticker: T, kinds, addedAt: new Date().toISOString() });
+  wl.entries.push({ ticker: T, chain, kinds, addedAt: new Date().toISOString() });
   wl.updatedAt = new Date().toISOString();
 
   await kvSet(kvWatchlist(a), wl);
-  await kvSAdd(kvWatchTicker(T), a);   // reverse index
-  await kvSAdd(KV_WATCH_INDEX, a);     // global index (first non-empty write registers the wallet)
+  await kvSAdd(kvWatchTicker(T, chain), a);   // reverse index (per chain)
+  await kvSAdd(KV_WATCH_INDEX, a);            // global index (first non-empty write registers the wallet)
 
   return { ok: true, watchlist: wl, decision, added: true };
 }
 
 /**
- * Remove a ticker from a wallet's watchlist. SYMMETRIC to addTicker: it SREMs
- * the address from the ticker's reverse set so no orphaned subscriber survives.
- * When the wallet's last ticker is removed, its forward key is deleted and the
- * wallet drops out of the global index too — it disappears from every reverse
- * set it was ever in (each removal already pruned its own ticker set).
+ * Remove a (ticker, chain) watch from a wallet's list. SYMMETRIC to addTicker:
+ * it SREMs the address from THAT CHAIN's reverse set so no orphaned subscriber
+ * survives. When the wallet's last watch is removed, its forward key is deleted
+ * and the wallet drops out of the global index too — it disappears from every
+ * reverse set it was ever in (each removal already pruned its own set).
+ *
+ * `chain` is absent ⟹ "robinhood" for the same reason as `addTicker`: symmetry.
+ * If the two disagreed on the default, un-starring would leave the reverse set
+ * populated and the user would keep getting DMs they had cancelled.
  */
-export async function removeTicker(address: string, ticker: string): Promise<RemoveResult> {
+export async function removeTicker(
+  address: string,
+  ticker: string,
+  opts?: { chain?: HoodChain },
+): Promise<RemoveResult> {
   const a = normAddress(address);
   if (!a) return { ok: false, error: { code: "bad_address", message: "not a 0x… address" } };
 
+  const chain = chainOf(opts);
   const T = ticker.trim().toUpperCase();
+  const key = rowKey({ ticker: T, chain });
   // ⚠ Must be the strict read: the `entries.length === 0` branch below DELETES
   // the watchlist key and deregisters the wallet globally. An unreadable list
   // reaching that branch as "empty" wipes a real one. See #150.
@@ -328,12 +408,12 @@ export async function removeTicker(address: string, ticker: string): Promise<Rem
   if (wlRead === "unavailable") return { ok: false, error: KV_UNAVAILABLE_ERR };
   const wl = wlRead;
   const before = wl.entries.length;
-  wl.entries = wl.entries.filter((e) => e.ticker !== T);
+  wl.entries = wl.entries.filter((e) => entryKey(e) !== key);
   const removed = wl.entries.length < before;
 
   // Always SREM the reverse set — even if the forward record didn't list it,
   // this heals a stale reverse entry. SREM is idempotent, so it's safe.
-  await kvSRem(kvWatchTicker(T), a);
+  await kvSRem(kvWatchTicker(T, chain), a);
 
   if (wl.entries.length === 0) {
     // Empty list: delete the forward key and deregister from the global index.

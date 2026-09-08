@@ -16,12 +16,21 @@
  * Not mounted by default: wire <WatchlistProvider> in only on a surface that
  * actually renders the list, so an idle /hood view never pays for a read it
  * doesn't use.
+ *
+ * ⚠️ EVERY METHOD TAKES A CHAIN, AND NONE OF THEM DEFAULTS IT. A watch is
+ * (ticker, chain): the board lists NVDA twice — once on Robinhood Chain, once on
+ * Base — as different contracts. While these took a bare ticker, ★ on the Base
+ * NVDA row reported the RH star's state, wrote the RH subscription, and un-★
+ * removed the RH one. Nothing errored; the user simply got a different desk's
+ * alerts. The chain is right there in the row (`chainOf(r)`), so requiring it
+ * costs a call site nothing and makes the silent version unwritable.
  */
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useAccount } from "wagmi";
 import type { Watchlist, WatchEntry, AlertKind } from "@/lib/blue-hood/watchlist";
+import { rowKey, type HoodChain } from "@/lib/blue-hood/types";
 
 /** Result of an add/remove — carries the server's reason so the UI can show a cap/validation message. */
 export type WatchlistMutation = { ok: true } | { ok: false; error: string; code?: string };
@@ -31,10 +40,10 @@ type WatchlistState = {
   watchlist: Watchlist | null;
   /** true until the first fetch for the current address resolves. */
   loading: boolean;
-  /** Convenience: is this ticker currently watched? */
-  isWatching: (ticker: string) => boolean;
-  add: (ticker: string, kinds?: AlertKind[]) => Promise<WatchlistMutation>;
-  remove: (ticker: string) => Promise<WatchlistMutation>;
+  /** Convenience: is this ticker watched ON THIS CHAIN? Both args required. */
+  isWatching: (ticker: string, chain: HoodChain) => boolean;
+  add: (ticker: string, chain: HoodChain, kinds?: AlertKind[]) => Promise<WatchlistMutation>;
+  remove: (ticker: string, chain: HoodChain) => Promise<WatchlistMutation>;
   refresh: () => Promise<void>;
 };
 
@@ -84,13 +93,13 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const add = useCallback(
-    async (ticker: string, kinds?: AlertKind[]): Promise<WatchlistMutation> => {
+    async (ticker: string, chain: HoodChain, kinds?: AlertKind[]): Promise<WatchlistMutation> => {
       if (!address) return { ok: false, error: "connect a wallet first" };
       try {
         const res = await fetch("/api/hood/watchlist", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address, ticker, kinds }),
+          body: JSON.stringify({ address, ticker, chain, kinds }),
         });
         const body = (await res.json()) as { ok: boolean; watchlist?: Watchlist; error?: string; code?: string };
         if (!body.ok) return { ok: false, error: body.error ?? "could not add", code: body.code };
@@ -104,13 +113,15 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   );
 
   const remove = useCallback(
-    async (ticker: string): Promise<WatchlistMutation> => {
+    async (ticker: string, chain: HoodChain): Promise<WatchlistMutation> => {
       if (!address) return { ok: false, error: "connect a wallet first" };
       try {
         const res = await fetch("/api/hood/watchlist", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address, ticker }),
+          // Same `chain` the add sent — an asymmetric remove leaves the reverse
+          // set populated and the DMs keep coming after the ★ goes dark.
+          body: JSON.stringify({ address, ticker, chain }),
         });
         const body = (await res.json()) as { ok: boolean; watchlist?: Watchlist; error?: string; code?: string };
         if (!body.ok) return { ok: false, error: body.error ?? "could not remove", code: body.code };
@@ -124,9 +135,12 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   );
 
   const isWatching = useCallback(
-    (ticker: string) => {
-      const T = ticker.trim().toUpperCase();
-      return !!watchlist?.entries.some((e: WatchEntry) => e.ticker === T);
+    (ticker: string, chain: HoodChain) => {
+      // `rowKey` on BOTH sides — the stored entry's `chain` is absent on records
+      // written before the Base desk, and `rowKey` runs `chainOf`, so those
+      // resolve to the Robinhood key exactly as they always did.
+      const key = rowKey({ ticker: ticker.trim().toUpperCase(), chain });
+      return !!watchlist?.entries.some((e: WatchEntry) => rowKey(e) === key);
     },
     [watchlist],
   );

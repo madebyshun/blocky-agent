@@ -1048,7 +1048,7 @@ function DriftRow({
               · held
             </span>
           )}
-          <WatchToggle ticker={r.ticker} />
+          <WatchToggle ticker={r.ticker} chain={chainOf(r)} />
         </td>
         <td className="px-3 py-2 text-right text-[#E7E9EE]">
           <FlashCell value={r.oracle_usd} />
@@ -1156,11 +1156,15 @@ function DriftRow({
 //   • watchable    → ☆, tooltip "watch for alerts"
 // Lives inside a <tr onClick> that expands the detail panel, so EVERY handler
 // stops propagation — a click here must never toggle the row.
-function WatchToggle({ ticker }: { ticker: string }) {
+// `chain` is REQUIRED, not optional with a default. The row already knows it —
+// the <ChainTag> two lines above this star renders `chainOf(r)` — and dropping
+// it here is what made ★ on the Base NVDA row subscribe to ROBINHOOD NVDA
+// arrows: a different contract on a chain the user never asked about.
+function WatchToggle({ ticker, chain }: { ticker: string; chain: HoodChain }) {
   const { isConnected } = useAccount();
   const { watchlist, isWatching, add, remove } = useWatchlist();
   const [busy, setBusy] = useState(false);
-  const watching = isWatching(ticker);
+  const watching = isWatching(ticker, chain);
   const count = watchlist?.entries.length ?? 0;
   const atCap = !watching && count >= WATCHLIST_LIMITS.free.maxEntries;
 
@@ -1184,8 +1188,8 @@ function WatchToggle({ ticker }: { ticker: string }) {
     if (busy || atCap) return;
     setBusy(true);
     try {
-      if (watching) await remove(ticker);
-      else await add(ticker); // no kinds → server defaults to ALL_KINDS
+      if (watching) await remove(ticker, chain);
+      else await add(ticker, chain); // no kinds → server defaults to ALL_KINDS
     } finally {
       setBusy(false);
     }

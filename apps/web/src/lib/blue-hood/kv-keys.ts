@@ -263,19 +263,33 @@ export const TTL_POLL_HEARTBEAT = 60 * 60 * 24; // 24h — keep last-fired reada
 //
 // Shape:
 //   • bh:watch:{address}        → Watchlist (forward, source of truth; UI edits this)
-//   • bh:watch:ticker:{TICKER}  → Redis SET of addresses (reverse index; the alert
-//                                 engine reads ONE key when an arrow fires instead
-//                                 of scanning every watcher). Kept in sync by a
-//                                 SYMMETRIC dual-write — a remove SREMs the address,
+//   • bh:watch:ticker:{TICKER}          → Redis SET of addresses watching that
+//   • bh:watch:ticker:base:{TICKER}       ticker ON THAT CHAIN (reverse index; the
+//                                 alert engine reads ONE key when an arrow fires
+//                                 instead of scanning every watcher). Kept in sync by
+//                                 a SYMMETRIC dual-write — a remove SREMs the address,
 //                                 so no orphaned subscriber ever keeps getting alerts.
+//                                 RH keeps the unqualified name (chainSeg) so live
+//                                 subscriptions survive; see `kvWatchTicker`.
 //   • bh:watch:index            → Redis SET of addresses with a non-empty list
 //                                 (enumeration / rebuild / a cheap watcher-count signal).
 
 /** Forward key: one wallet's alert watchlist. No TTL — a list shouldn't evaporate; bloat is bounded by an entry cap, not by expiry. */
 export const kvWatchlist = (address: string) => `bh:watch:${address.toLowerCase()}`;
 
-/** Reverse index: SET of addresses watching a ticker. The alert engine's hot read. */
-export const kvWatchTicker = (ticker: string) => `bh:watch:ticker:${ticker.toUpperCase()}`;
+/**
+ * Reverse index: SET of addresses watching a ticker ON ONE CHAIN. The alert
+ * engine's hot read.
+ *
+ * ⚠️ CHAIN-QUALIFIED, same rule as the arrow keys above. Before this, ★ on the
+ * Base NVDA row and ★ on the Robinhood NVDA row wrote the SAME key, so watching
+ * Base NVDA subscribed you to Robinhood NVDA arrows — a subscription to a
+ * different token on a chain you never looked at. `chainSeg("robinhood")` is the
+ * empty string, so every set already in KV keeps its exact name and every
+ * existing watcher keeps their alerts; only Base pays the migration cost.
+ */
+export const kvWatchTicker = (ticker: string, chain: HoodChain = "robinhood") =>
+  `bh:watch:ticker:${chainSeg(chain)}${ticker.toUpperCase()}`;
 
 /** SET of every address that currently has a non-empty watchlist. */
 export const KV_WATCH_INDEX = "bh:watch:index";
