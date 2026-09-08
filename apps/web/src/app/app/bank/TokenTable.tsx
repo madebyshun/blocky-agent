@@ -5,10 +5,23 @@
 // /api/wallet/holdings (Moralis, spam-filtered, usd_value already priced). Value
 // renders "—" whenever Moralis has no price for a token — we NEVER fabricate one.
 //
-// Chain: Base mainnet by default (matches the connected wallet), or Base Sepolia
-// when the wallet is on 84532. The per-row quick-sell (25/50/100%) only shows on
-// Base mainnet (0x has no testnet liquidity) — it just pre-fills + opens the
-// Convert panel via onQuickSell; the user still reviews and signs there.
+// Chain: told, not guessed. `network` is a REQUIRED prop supplied by whichever
+// surface mounts this table.
+//
+// It used to be derived here from `useChainId()` — the CONNECTED WALLET's chain
+// — as `chainId === 84532 ? "baseSepolia" : "base"`, and that was wrong twice
+// over. (1) The wallet's chain and the dashboard's selected chain are different
+// things that routinely diverge; BankClient renders a whole `chainMismatch`
+// banner about it, then this table quietly answered for the other one. A wallet
+// left on Sepolia would fill the Base portfolio with testnet rows. (2) It is the
+// `X ?? default` fail-open shape: every chain that is not 84532 collapsed to
+// "base", so a wallet on Robinhood Chain 4663 got a full list of BASE holdings
+// under whatever heading the page was showing. The caller knows which chain it
+// is asking about; asking wagmi was asking the wrong object.
+//
+// The per-row quick-sell (25/50/100%) only shows on Base mainnet (0x has no
+// testnet liquidity) — it just pre-fills + opens the Convert panel via
+// onQuickSell; the user still reviews and signs there.
 //
 // This table is Base-ONLY and its header chip says so, because Moralis does not
 // index Robinhood Chain. RH crypto is a separate table (`RhTokenTable`, via
@@ -25,7 +38,6 @@
 // an impostor gets NO trade control, and it does not count toward the total.
 
 import { useEffect, useState } from "react";
-import { useChainId } from "wagmi";
 import type { WalletHolding } from "@/lib/wallet/holdings";
 import { canQuickSell, countsTowardTotal, TRUST_BADGE } from "@/lib/wallet/token-trust";
 import { resolveRead } from "@/lib/wallet/read-state";
@@ -73,16 +85,19 @@ function SellControl({ h, onQuickSell }: { h: WalletHolding; onQuickSell: (h: Wa
   );
 }
 
-export default function TokenTable({ address, onQuickSell }: {
+// `network` is narrowed to the two chains /api/wallet/holdings can actually
+// answer for. Robinhood is deliberately NOT in this union: Moralis does not
+// index 4663, RhTokenTable reads it through Blockscout instead, and a type that
+// could accept "robinhood" would let a caller re-create the bug in the header
+// by passing it here and receiving Base rows.
+export default function TokenTable({ address, network, onQuickSell }: {
   address?: `0x${string}`;
+  network: "base" | "baseSepolia";
   onQuickSell?: (h: WalletHolding, pct: number) => void;
 }) {
-  const chainId = useChainId();
   const [data, setData] = useState<HoldingsResp | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Base mainnet portfolio unless the wallet is explicitly on Base Sepolia.
-  const network    = chainId === 84532 ? "baseSepolia" : "base";
   const chainLabel = network === "baseSepolia" ? "Base Sepolia" : "Base";
   // Quick-sell only on Base mainnet (0x has no testnet liquidity).
   const showSell = !!onQuickSell && network === "base";

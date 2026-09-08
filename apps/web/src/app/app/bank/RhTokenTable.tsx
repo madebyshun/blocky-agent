@@ -1,7 +1,7 @@
 "use client";
 
-// Robinhood Chain crypto holdings — the third table in the Portfolio view,
-// under TokenTable (Base crypto) and beside StockTable (equities, both chains).
+// Robinhood Chain crypto holdings — the TOKENS table of the Portfolio view
+// while the network switcher is on Robinhood, above StockTable's RH leg.
 //
 // WHY IT EXISTS: TokenTable is fed by Moralis, and Moralis does not index RH
 // 4663. So the wallet used to show a holder's RH *stocks* and silently omit
@@ -15,9 +15,14 @@
 // (0x, Base-only) cannot settle here. A Sell button that cannot fill is worse
 // than no button.
 //
-// Read-only on purpose. WALLET_CHAIN_ORDER deliberately omits Robinhood because
-// the send/swap/onramp paths are still Base-shaped; this table shows what is
-// held and links to Blockscout, and offers no control that would move funds.
+// Read-only on purpose — but no longer for the reason this comment used to
+// give. It said "WALLET_CHAIN_ORDER deliberately omits Robinhood because the
+// send/swap/onramp paths are still Base-shaped", and both halves have moved:
+// Robinhood IS in WALLET_CHAIN_ORDER now (a chain you can look at), and the
+// Base-shaped write paths are declared per chain as `can.{fiat,send,swap}` in
+// lib/wallet/chains.ts, where the wallet's own controls read them and say so by
+// name. This table stays read-only because none of those flags is true on 4663,
+// not because the chain is hidden.
 
 import { useEffect, useState } from "react";
 import type { RhHoldingsResult } from "@/lib/wallet/rh-holdings";
