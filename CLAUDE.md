@@ -250,9 +250,18 @@ POST /token-launches/deploy  → 403
 
 Identical on `?chain=base` and `?chain=robinhood`. The suspension is on the **ACCOUNT**, not on one hostname — so the old hedge ("a different endpoint from the 403-banned `llm.bankr.bot`, verify before relying on a payout run") resolves in the pessimistic direction: **every Bankr WRITE is banned, including the Wallet API a payout would use.** Do not schedule or promise an `aeon-distribute-tokens` run through Bankr; it will 403 at the transfer.
 
-**READS still work** — same day, `GET /token-launches?limit=3` → `200` with live data, exactly as the 403 body promises ("you can still view"). So `lib/bankr-usage.ts`, `/badge/[type]/[handle]`, `_handlers/b20-tracker.ts`, and the `/api/my-tokens` + `/api/claim-fees` creator-fee path are fine and **must stay** — that last one is how a creator withdraws fees they already earned, and closing it would strand their money. `BANKR_API_KEY` therefore stays SET in Vercel. **Write ≠ read: measure the specific verb before declaring either dead.**
+**READS still work** — same day, `GET /token-launches?limit=3` → `200` with live data, exactly as the 403 body promises ("you can still view"). So the three read-only consumers are fine and **must stay**: `lib/bankr-usage.ts` and `/badge/[type]/[handle]` (the only two that read `process.env.BANKR_API_KEY`), plus `_handlers/b20-tracker.ts` (hits the public `token-launches` URL with no key at all). `BANKR_API_KEY` therefore stays SET in Vercel — measured 2026-09-07, those two importers are its whole live surface. **Write ≠ read: measure the specific verb before declaring either dead.**
 
-The deploy path that this 403 killed (`/api/launch-token` + the `prepare_token_launch` chat card) was retired 2026-09-06 — see `apps/web/scripts/action-card-inventory-check.ts`, which fails if any of it comes back.
+**The Bankr launch/fee surface is fully retired — do not rebuild any of it.** Two commits, both driven by the 403 above:
+
+- **2026-09-06** — the deploy path (`/api/launch-token` + the `prepare_token_launch` chat card).
+- **2026-09-07** — everything that existed to *sell* it: `/api/my-tokens` and `/api/claim-fees` (thin proxies to Bankr's `doppler/creator-fees` + `doppler/build-claim`), the `/app/launches` showcase page that was their only caller, and `/api/launches` + `/api/robinhood/explore`, which that page's deletion left with zero callers.
+
+  An earlier revision of this file argued the fee path "must stay… closing it would strand their money." **That is no longer true and was never quite right:** the fees live in Bankr's own contracts, not in ours, and ShunTr closed #208 by claiming through Bankr's UI directly. Deleting our proxy removes a button, not an entitlement. Per the retiring law above, the payment path went in the same commit as the product it sold.
+
+  KV launch records (`bluechat:launches`) were **deliberately kept** — user state is evidence, not clutter. `/launches` and `/app/launches` 301 via `archivedRedirect()` because they were published in `/docs/blue-chat`.
+
+Both removals are locked by `apps/web/scripts/action-card-inventory-check.ts`, which fails if any of it comes back — and, because an absence assertion alone would pass by deleting everything, each one is paired there with a presence assertion on the surviving self-hosted path (`/app/b20hub/claim`, `/api/b20hub/register`, `/api/b20hub/tokens`).
 
 ---
 

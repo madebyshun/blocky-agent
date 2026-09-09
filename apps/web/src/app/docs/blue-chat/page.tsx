@@ -119,8 +119,10 @@ export default function BlueChatDoc() {
       <Callout color="#94a3b8" title="The Bankr launchpad is gone">
         A second flow used to deploy through Bankr&apos;s launchpad (100B supply, sponsored gas, creator-fee split). Bankr
         suspended the account it ran on, so every deploy returned 403; the path was removed on 2026-09-06 rather than left
-        to fail at the confirm step. Tokens it already deployed are real and still on-chain — they stay listed at{" "}
-        <Link href="/app/launches" className="text-[#4FC3F7] underline">/app/launches</Link>.
+        to fail at the confirm step. Its companion surfaces — the showcase page and the creator-fee claim button — were
+        removed on 2026-09-07. Tokens it already deployed are real and still on-chain, and their launch records are kept;
+        there is simply no page in this product that lists them any more. Any fees those tokens earned are claimed
+        through Bankr&apos;s own interface, not here.
       </Callout>
 
       <H2 id="hub-tools">Hub tools in chat</H2>

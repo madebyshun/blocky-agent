@@ -40,8 +40,12 @@ export const maxDuration = 15;
  * launcher tag; once every record carries a launcherAddress we'll switch
  * to an exact-match filter (see follow-up ticket in the layout comment).
  *
- * Response shape mirrors /api/launches (with market enrichment) so the
- * feed grid can reuse the /app/launches Launch type.
+ * Response shape carries the same market enrichment the retired /api/launches
+ * did; the `Launch` type it used to share now lives in FeedGrid.tsx, since
+ * /api/launches and /app/launches went out with the Bankr launch/fee surface
+ * on 2026-09-07. This route is now the ONLY reader that renders launch records,
+ * and it filters to `0xb200…` on Base — see the header of lib/launches.ts for
+ * what that means for the rows it does not show.
  */
 export interface B20HUBFeedResponse {
   ok: boolean;

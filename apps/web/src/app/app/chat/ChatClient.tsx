@@ -41,8 +41,8 @@ function ChatShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { setContextual } = useAppChrome();
 
-  // Deep-link prefill: other surfaces (e.g. the /app/launches "Trade" button)
-  // route here as /app/chat?prefill=<message> to seed — NOT auto-send — the
+  // Deep-link prefill: other surfaces route here as
+  // /app/chat?prefill=<message> to seed — NOT auto-send — the
   // composer with a token-trade prompt. The user reviews/edits, then sends.
   // Runs once on mount; we strip the param afterwards so a refresh won't re-seed.
   useEffect(() => {

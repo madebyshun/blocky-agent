@@ -149,21 +149,32 @@ Vercel auto-build preview trong ~2-3 phút.
 
 Open preview URL sau khi Vercel build xong:
 ```
-https://blueagent-web-new-git-dev-madebyshuns-projects.vercel.app/app/launches
+https://<preview-deployment>.vercel.app/app/b20hub/launch
 ```
 
-1. Click **Launch Token** button (top right)
-2. Chọn tab **"B20HUB · Base"** (blue tab thứ 3)
-3. Điền:
+> ⚠️ **URL đổi 2026-09-07.** Runbook này viết khi form launch là một modal
+> (**Launch Token** → tab *"B20HUB · Base"*) trên `/app/launches`. Trang đó đã bị
+> gỡ cùng đường launch/fee Bankr — nó tồn tại để bán claim creator-fee của Bankr,
+> xem CLAUDE.md. **B20HUB không bị gỡ**: nó là launchpad tự host của mình, giờ có
+> trang riêng `/app/b20hub/launch`, không còn tab nào để chọn. `/app/launches`
+> 301 về `/chat` chứ không 404.
+
+1. Điền:
    - Token name: `Sepolia Test`
    - Ticker: `STEST`
-4. Click **🚀 Launch $STEST on B20HUB**
-5. Metamask popup → sign tx
-6. Wait ~2s cho block confirm
+2. Click **🚀 Launch $STEST →**
+3. Metamask popup → sign tx
+4. Wait ~2s cho block confirm
 
-⚠️ Tab hiện tại hard-code `chain: "base"` (mainnet). Cần đổi tạm sang `"base-sepolia"` để test:
+⚠️ Trang hard-code Base **mainnet**. Để test Sepolia phải sửa tạm **cả ba** chỗ
+trong `src/app/app/b20hub/launch/LaunchClient.tsx` — sửa thiếu một chỗ là ký
+nhầm chain:
 
-Trong `LaunchesClient.tsx` tìm dòng `chain: "base",` trong `launchB20HUB()` → tạm đổi `"base-sepolia"`, commit, test, rồi revert lại.
+- `chain: "base"` (payload gửi `/api/b20hub/prepare`) → `"base-sepolia"`
+- `switchChainAsync({ chainId: 8453 })` → `84532`
+- `sendTransactionAsync({ …, chainId: 8453 })` → `84532`
+
+Commit, test, rồi revert lại.
 
 ### 3.3 Verify onchain
 
@@ -266,8 +277,8 @@ Wait for Vercel preview green → merge PR → prod live.
 
 ### 6.2 Launch
 
-Vào `https://blueagent.dev/app/launches` → Launch Token → B20HUB · Base tab
-→ điền name + symbol → Launch → sign tx.
+Vào `https://app.blueagent.dev/b20hub/launch` → điền name + symbol → Launch →
+sign tx. (Xem note ở 3.2: URL cũ `/app/launches` đã gỡ 2026-09-07, giờ 301.)
 
 ### 6.3 Verify flywheel
 
