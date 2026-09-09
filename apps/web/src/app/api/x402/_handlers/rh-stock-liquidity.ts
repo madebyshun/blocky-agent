@@ -48,6 +48,13 @@ export default async function handler(req: Request): Promise<Response> {
     }
 
     // Deepest pool drives the slippage estimate.
+    // anchor-debt(#231): deepest of ANY counterparty. The slippage curve itself
+    // survives — xy=k depth is a property of the pool, not of what it is quoted
+    // against — but `trade_size_usd` does not: on a stock-vs-stock pool the
+    // "USD" one-side depth is GT's valuation of the other stock, so a $10k row
+    // is answering "how much does $10k of THAT stock move this pool". Callers
+    // read these as dollar sizes. `total_tvl_usd` below sums every pool for the
+    // same reason and is likewise not a dollar-market figure.
     const deepest = pools[0];
     // xy=k first-order slippage uses ONE-SIDE USD depth (≈ TVL / 2 for a
     // balanced pool), NOT the total TVL. Using TVL under-estimates by ~2×.

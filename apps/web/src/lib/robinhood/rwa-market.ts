@@ -6,6 +6,8 @@
 //     within a single warm invocation this collapses N calls to 1 network.
 //   • honest null-returns on error (never guess numbers)
 
+import { RH_PRICE_SOURCE } from "./rwa-price";
+
 const GT = "https://api.geckoterminal.com/api/v2/networks/robinhood";
 
 type Cache<T> = { at: number; data: T };
@@ -94,6 +96,17 @@ export type PoolMeta = {
   dex: string;
   base_token: string;         // lowercased addr, no chain prefix
   quote_token: string;        // lowercased addr, no chain prefix
+  /**
+   * The side of this pool that is NOT the token we queried — i.e. the asset
+   * `price_usd` is implicitly denominated in. Derived from `token_is_base`, so
+   * it is correct whichever side our token landed on, and it is the ONLY field
+   * the anchor rule should ever be applied to (#227). Checking `quote_token`
+   * alone silently skips every pool where our token sits on the quote side.
+   *
+   * When `poolFromItem` is called without `forToken` (`topPools`), our token is
+   * by definition the base side, so this is the quote token.
+   */
+  counterparty_token: string;
   price_usd: number;          // ALWAYS for the token we queried
   /** The counterparty token's USD price (WETH ~$1800, USDG ~$1). Not a
    *  liquidity value — renamed from `counterparty_usd` for clarity. */
@@ -176,6 +189,7 @@ function poolFromItem(p: PoolItem, forToken?: string): PoolMeta | null {
     dex: p.relationships?.dex?.data?.id ?? "unknown",
     base_token: baseId,
     quote_token: quoteId,
+    counterparty_token: isQuoteSide ? baseId : quoteId,
     price_usd: price,
     counterparty_token_price_usd: cpVal,
     counterparty_usd: cpVal, // deprecated alias
@@ -190,44 +204,126 @@ function poolFromItem(p: PoolItem, forToken?: string): PoolMeta | null {
   };
 }
 
+// ─── The quote-asset anchor, on the paid tool path (#227) ──────────────────
+//
+// A pool price is an EXCHANGE RATE, not a share price. `NVDA/USDG` says what a
+// share costs; `AI/NVDA` says what a share costs *in AI*, and calling that a
+// dollar price is only correct if AI is a dollar. Depth does not fix this — a
+// deep pool against a memecoin is still a deep pool.
+//
+// #223/PR #435 established this rule and applied it to `dexPrice` in
+// `rwa-price.ts`, the reader the Blue Hood desk polls. It did NOT reach this
+// module, which is the reader the PAID x402 handlers call — so the same defect
+// stayed live on the surface that charges money for the answer.
+//
+// MEASURED 2026-09-09 on the live GT endpoint, and the sharpest case is not the
+// documented fallback but the OPTION:
+//
+//   `preferUsdgQuote: false` — passed by rh-stock-swap-quote, rh-stock-swap-
+//   prepare and rh-rwa-dca on every `denom=WETH` call — skipped the USDG bucket
+//   entirely and returned `pools[0]`, the deepest pool of ANY quote asset. So a
+//   WETH-denominated quote took the unanchored path even when a perfectly good
+//   USDG pool existed. That is how RH NVDA resolves to the `AI / NVDA` pool
+//   (#435 measured it at $21.9M liq / $3.2M vol against the real NVDA/USDG
+//   $6.4M / $31.9M — depth 3.4x overstated, volume 10x understated).
+//
+// The rule is stated against `counterparty_token`, never `quote_token`, because
+// our token can sit on either side of a GT pool — see that field's note.
+//
+// WHY AN EMPTY ANCHORED BUCKET RETURNS `null` RATHER THAN FALLING THROUGH:
+// falling back to an unanchored pool is the entire bug. The honest answer for a
+// token with no dollar market is "no price", not a memecoin exchange rate. Every
+// caller already handles `pool: null` (that is the `no_pool_found` path), so the
+// degraded behaviour is a tool that declines to quote — not one that lies.
+//
+// The anchor set is READ FROM `RH_PRICE_SOURCE.anchors`, deliberately not
+// re-declared here: one production definition per chain, so this module and the
+// desk reader cannot drift apart again the way they just did. (The independent
+// duplicate lives in `scripts/dex-anchor-check.ts`, where being a duplicate is
+// the point — see its header.)
+const RH_ANCHORS = RH_PRICE_SOURCE.anchors;
+const USDG_LOWER = "0x5fc5360d0400a0fd4f2af552add042d716f1d168".toLowerCase();
+
+/** Is this pool's non-our-token side a USD-anchored asset? */
+export function isUsdAnchored(p: PoolMeta): boolean {
+  return RH_ANCHORS.has(p.counterparty_token);
+}
+
+/**
+ * The subset of `pools` whose price is denominated in dollars, order preserved
+ * (so a deepest-first input stays deepest-first). Use this anywhere a pool is
+ * about to become a USD claim — price, TVL, volume, or a candle series.
+ *
+ * NOT for routing. `rh-stock-swap-route` and `rh-usdg-route` legitimately need
+ * unanchored pools: a token→token hop is a real route, and USDG's own pools are
+ * all quoted against stocks, so anchoring them would return the empty set.
+ */
+export function anchoredPools(pools: PoolMeta[]): PoolMeta[] {
+  return pools.filter(isUsdAnchored);
+}
+
 // ─── Shared primary-pool selector ──────────────────────────────────────────
-// Rule the whole tool catalog should follow:
-//   1. Prefer a USDG-quoted pool (stable USD frame, no double conversion).
-//   2. Among USDG pools, pick deepest TVL.
-//   3. If no USDG pool, pick the overall deepest pool.
+// Rule the whole tool catalog follows:
+//   1. Discard every pool whose counterparty is not USD-anchored (above).
+//   2. Prefer a USDG-quoted pool (stable USD frame, no double conversion).
+//   3. Among those, pick deepest TVL.
+//   4. If no USDG pool, pick the deepest remaining ANCHORED pool (WETH).
+//   5. If nothing is anchored, return null — never an unanchored pool.
 // This gives M1/M2/M5/L1 the SAME pool for the same ticker so an agent
 // composing tools sees consistent price fields, and so pool_ref itself
 // is a stable identifier across tool calls.
-const USDG_LOWER = "0x5fc5360d0400a0fd4f2af552add042d716f1d168".toLowerCase();
-
 export async function resolvePrimaryPool(
   contract: string,
   opts: { preferUsdgQuote?: boolean } = {},
 ): Promise<{
   pool: PoolMeta | null;
   selection: string;
-  /** Number of RH-Chain pools discovered for this token (all quote sides). */
+  /** Number of RH-Chain pools discovered for this token (all quote sides,
+   *  anchored or not) — i.e. "how many pools exist", not "how many count". */
   pool_count: number;
-  /** SUM of reserve_usd across every pool for this token. This is the
-   *  honest "how deep is the token in aggregate" — critical for the dust
-   *  gate, because a $21M bankr-robinhood WETH pool + a $850k USDG pool
-   *  should NOT be gated as dust just because the primary (USDG-quoted)
-   *  pool is thin. */
+  /** How many of those were USD-anchored, i.e. eligible to be `pool`. */
+  anchored_pool_count: number;
+  /** SUM of reserve_usd across every **anchored** pool for this token. This is
+   *  the honest "how deep is the token's DOLLAR market in aggregate" — critical
+   *  for the dust gate, because a $21M WETH pool + a $850k USDG pool should NOT
+   *  be gated as dust just because the primary (USDG-quoted) pool is thin.
+   *
+   *  ⚠️ Changed in #227: this used to sum ALL pools. Unanchored depth is not
+   *  dollar depth — counting the $21.9M `AI / NVDA` pool toward NVDA's dollar
+   *  liquidity is what let a dust gate pass on liquidity that cannot be sold
+   *  for dollars. `unanchored_tvl_usd` still reports it, separately. */
   total_tvl_usd: number;
+  /** Depth we deliberately excluded, so nothing is hidden by the change above. */
+  unanchored_tvl_usd: number;
 }> {
   const pools = await poolsForToken(contract);
-  const total_tvl_usd = pools.reduce((sum, p) => sum + (p.reserve_usd || 0), 0);
-  if (!pools.length) return { pool: null, selection: "no_pool_found", pool_count: 0, total_tvl_usd: 0 };
-  const preferUsdg = opts.preferUsdgQuote !== false;
-  if (preferUsdg) {
-    const usdgPools = pools.filter(
-      (p) => p.base_token === USDG_LOWER || p.quote_token === USDG_LOWER,
-    );
+  const anchored = anchoredPools(pools);
+  const total_tvl_usd = anchored.reduce((sum, p) => sum + (p.reserve_usd || 0), 0);
+  const unanchored_tvl_usd = pools
+    .filter((p) => !isUsdAnchored(p))
+    .reduce((sum, p) => sum + (p.reserve_usd || 0), 0);
+  const counts = {
+    pool_count: pools.length,
+    anchored_pool_count: anchored.length,
+    total_tvl_usd,
+    unanchored_tvl_usd,
+  };
+
+  if (!pools.length) {
+    return { pool: null, selection: "no_pool_found", ...counts };
+  }
+  if (!anchored.length) {
+    // Pools exist, but every one prices this token against something that is not
+    // a dollar. Not an outage — an honest "no dollar market". See header.
+    return { pool: null, selection: "no_usd_anchored_pool", ...counts };
+  }
+  if (opts.preferUsdgQuote !== false) {
+    const usdgPools = anchored.filter((p) => p.counterparty_token === USDG_LOWER);
     if (usdgPools.length) {
-      return { pool: usdgPools[0], selection: "deepest_usdg_pool", pool_count: pools.length, total_tvl_usd };
+      return { pool: usdgPools[0], selection: "deepest_usdg_pool", ...counts };
     }
   }
-  return { pool: pools[0], selection: "deepest_pool_no_usdg_available", pool_count: pools.length, total_tvl_usd };
+  return { pool: anchored[0], selection: "deepest_anchored_pool", ...counts };
 }
 
 // ─── Market-hours helper (used by M5 arb + A4 brief) ───────────────────────

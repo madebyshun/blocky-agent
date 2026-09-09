@@ -101,6 +101,9 @@ export default async function handler(req: Request): Promise<Response> {
     // Legacy GT probe kept for `directGt` route-hint on the response.
     const gtPools = await poolsForToken(token.contract);
     const denomLower = quoteAddr.toLowerCase();
+    // anchor-exempt(#227): `denomLower` is USDG or WETH — both anchors — so the
+    // predicate already constrains this to an anchored pair. This is a ROUTE hint
+    // (can we swap directly against the chosen denom?), not a price claim.
     const directGt = gtPools.find(
       (p) => (p.base_token === denomLower || p.quote_token === denomLower) && p.reserve_usd > 0,
     );
@@ -122,7 +125,15 @@ export default async function handler(req: Request): Promise<Response> {
     //    a price the pool doesn't trade at → V3/V4 swap reverts because
     //    the amountOutMinimum was set against oracle, not pool basis.
     //    Fix: pool_spot_usd is authoritative. Oracle is a sanity check.
-    const pool_spot_usd: number | null = primaryPool?.price_usd ?? gtPools[0]?.price_usd ?? null;
+    //
+    // ⚠️ #227 — there used to be a `?? gtPools[0]?.price_usd` tail here. That
+    // was a SECOND entrance that bypassed the selector above: `gtPools` is the
+    // raw depth-sorted list, so the moment `resolvePrimaryPool` correctly
+    // declined to quote (no USD-anchored pool), this line quoted the deepest
+    // unanchored pool anyway and the fix would have appeared to work while
+    // changing nothing. Falling back to Chainlink is the honest degradation and
+    // it already exists below (`spot_source === "chainlink"` raises a warning).
+    const pool_spot_usd: number | null = primaryPool?.price_usd ?? null;
     const chainlink_spot_usd: number | null = oracle && !oracle.is_stale ? oracle.price_usd : null;
     const spot_usd = pool_spot_usd ?? chainlink_spot_usd;
     const spot_source: "pool" | "chainlink" | null =
@@ -148,6 +159,8 @@ export default async function handler(req: Request): Promise<Response> {
         const ethQuote = await chainlinkLatest(RH_CHAINLINK_ETH_USD, 86400);
         let weth_usd: number | null = ethQuote?.price_usd ?? null;
         if (!weth_usd) {
+          // anchor-exempt(#227): the predicate IS the anchor (WETH on one side), and
+          // what we read off it is WETH's OWN usd price, not the stock's.
           const wethPool = gtPools.find((p) => p.base_token === ROBINHOOD_MAINNET_VERIFIED_WETH9.toLowerCase() || p.quote_token === ROBINHOOD_MAINNET_VERIFIED_WETH9.toLowerCase());
           weth_usd = wethPool?.counterparty_token_price_usd ?? wethPool?.price_usd ?? null;
         }
@@ -192,7 +205,12 @@ export default async function handler(req: Request): Promise<Response> {
     // A $93 trade in a $28.7k one-side pool ≈ 0.32% additional impact
     // beyond the quoted spot. min_out must account for BOTH user slippage
     // AND the trade-impact term so the on-chain swap doesn't revert.
-    const one_side_usd = primaryPool?.one_side_usd ?? ((gtPools[0]?.reserve_usd ?? 0) / 2);
+    // #227 — same second entrance as `pool_spot_usd` above: the old
+    // `?? gtPools[0].reserve_usd / 2` tail sized min_out against the depth of
+    // an unanchored pool. 0 is the correct unknown here — `trade_impact_pct`
+    // guards on `> 0`, so an unknown depth contributes no impact term instead
+    // of a fabricated one.
+    const one_side_usd = primaryPool?.one_side_usd ?? 0;
     const notional_usd = denomIn === "USDG"
       ? (side === "buy" ? amount : (expected_out ?? amount))
       : ((expected_out ?? amount) * (spot_usd ?? 0));

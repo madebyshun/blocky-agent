@@ -37,6 +37,12 @@ export default async function handler(req: Request): Promise<Response> {
       token.chainlinkFeed ? chainlinkLatest(token.chainlinkFeed, token.chainlinkHeartbeat ?? 86400) : Promise.resolve(null),
       poolsForToken(token.contract),
     ]);
+    // anchor-debt(#231): deepest pool of ANY counterparty, and every `dex_*`
+    // field below is copied out of it into the FACTS block the LLM is told not
+    // to contradict. If that pool is stock-vs-stock, an exchange rate enters
+    // the prompt labelled `dex_price_usd` and the model will faithfully build a
+    // report on it — the no-fabrication rule protects the number's provenance,
+    // not its denomination.
     const deepestPool = pools[0] ?? null;
     const facts = {
       ticker: token.ticker,

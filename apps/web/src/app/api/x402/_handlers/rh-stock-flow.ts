@@ -47,6 +47,15 @@ export default async function handler(req: Request): Promise<Response> {
       });
     }
 
+    // anchor-debt(#231): `pools[0]` is the deepest pool of ANY counterparty, so
+    // the BUY_HEAVY/SELL_HEAVY verdict can be computed from a stock-vs-stock
+    // pair — flow BETWEEN two stocks, not dollar flow into this one — and every
+    // `volume_in_usd` in it is GT's valuation of the counterparty rather than a
+    // dollar market. Second hazard on the same line, tracked in #231: GT's
+    // `kind` is oriented to the pool's BASE token, so when this token is the
+    // quote side (`token_is_base === false`) buy and sell are swapped and the
+    // verdict inverts. Neither is fixed here; #227's scope is the five
+    // `resolvePrimaryPool` callers.
     const pool = pools[0];
     let trades: Trade[] = [];
     let gt_status: string | null = null;

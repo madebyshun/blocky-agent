@@ -77,7 +77,13 @@ export default async function handler(req: Request): Promise<Response> {
           t.chainlinkFeed ? chainlinkLatest(t.chainlinkFeed, t.chainlinkHeartbeat ?? 86400) : Promise.resolve(null),
           poolsForToken(t.contract).catch(() => []),
         ]);
+        // anchor-debt(#231): `pools[0]` is the deepest pool of ANY quote asset, so
+        // the "dex-spot" fallback can price a constituent off a stock-vs-stock pair
+        // and fold that number straight into the basket's aggregate. Constituents
+        // without a fresh Chainlink feed are exactly the ones that take this path.
         const price_usd = oracle && !oracle.is_stale ? oracle.price_usd : (pools[0]?.price_usd ?? null);
+        // anchor-debt(#231): same `pools[0]`, and this is the line that LABELS
+        // the unanchored number "dex-spot" for the caller.
         const price_source: "chainlink" | "dex-spot" | null = oracle && !oracle.is_stale ? "chainlink" : pools[0] ? "dex-spot" : null;
         const total_tvl_usd = pools.reduce((s, p) => s + p.reserve_usd, 0);
         return { token: t, price_usd, price_source, total_tvl_usd };

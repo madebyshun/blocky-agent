@@ -56,6 +56,14 @@ export default async function handler(req: Request): Promise<Response> {
           const pools = await poolsForToken(rwa.contract);
           if (!pools.length) return null;
           // Deepest pool that reports a 24h change becomes the mover source.
+          // anchor-debt(#231): "reports a change" is not "reports a change in
+          // dollars". On a stock-vs-stock pool `change_24h` is the move in the
+          // EXCHANGE RATE between two equities, so a token can rank as a top
+          // gainer while its own dollar price fell — the counterparty just fell
+          // harder. The note at the map() below ("already for OUR token") is
+          // about which SIDE the number describes and is correct; it says
+          // nothing about what the number is denominated in, and the two get
+          // read as the same guarantee.
           const best = pools.find((p) => p.change_24h !== null) ?? null;
           if (!best) return null;
           return { rwa, pool: best };

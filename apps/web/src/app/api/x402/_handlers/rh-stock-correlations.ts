@@ -36,6 +36,12 @@ export default async function handler(req: Request): Promise<Response> {
       tokens.map(async (t) => {
         const pools = await poolsForToken(t.contract);
         if (!pools.length) return { token: t, closes: [] as { t: number; c: number }[] };
+        // anchor-debt(#231): picks the series by SIDE (is our token the base?), not
+        // by quote asset, so a token whose deepest pool is stock-vs-stock yields a
+        // close series denominated in that other stock. The header argues Pearson is
+        // scale-invariant — true for a CONSTANT scale, but the counterparty stock's
+        // own price moves, so the "constant" is a second time series. Two such
+        // tokens sharing a counterparty would correlate through it.
         const basePool = pools.find((p) => p.token_is_base) ?? pools[0];
         const invert = !basePool.token_is_base;
         const mul = invert ? (basePool.counterparty_usd ?? 1) : 1;

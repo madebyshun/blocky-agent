@@ -33,6 +33,10 @@ export default async function handler(req: Request): Promise<Response> {
     if (fromAsset === "WETH" || fromAsset === "ETH") {
       // The USDG contract has WETH pools on GT.
       const gt = await poolsForToken(USDG_ADDR);
+      // anchor-exempt(#227): the predicate IS the anchor — this elects a pool only
+      // if WETH is on one of its sides. Also, `anchoredPools()` would be wrong here
+      // by construction: the subject token is USDG itself, and USDG's own pools are
+      // quoted against stocks, so anchoring them returns the empty set.
       const wethPool = gt.find((p) => p.base_token === ROBINHOOD_MAINNET_VERIFIED_WETH9.toLowerCase() || p.quote_token === ROBINHOOD_MAINNET_VERIFIED_WETH9.toLowerCase());
       const v3Pools = await findWethPools(USDG_ADDR).catch(() => []);
       const v3Deepest = bestPool(v3Pools);
@@ -52,6 +56,9 @@ export default async function handler(req: Request): Promise<Response> {
     const rwaMatch = findByTicker(fromAsset);
     if (rwaMatch && rwaMatch.kind !== "stable" && rwaMatch.kind !== "wrapped") {
       const gt = await poolsForToken(rwaMatch.contract);
+      // anchor-exempt(#227): the predicate IS the anchor — USDG must be on one side,
+      // which is stricter than `anchoredPools()` (that would also admit WETH pairs,
+      // and this path is specifically "sell RWA → USDG").
       const usdgPool = gt.find((p) => p.base_token === USDG_ADDR.toLowerCase() || p.quote_token === USDG_ADDR.toLowerCase());
       rwaPath = {
         via: `Sell ${rwaMatch.ticker} → USDG on deepest pool`,

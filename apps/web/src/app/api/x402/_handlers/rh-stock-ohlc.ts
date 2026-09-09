@@ -55,7 +55,16 @@ export default async function handler(req: Request): Promise<Response> {
           timestamp,
         });
       }
+      // anchor-debt(#231): both lines select by SIDE, never by counterparty.
+      // `token_is_base` only says our token is the numerator; the denominator
+      // can be another stock, and then every candle is a stock/stock ratio
+      // labelled as a price. The quote-side branch below is worse in a
+      // measurable way: `usd_multiplier: chosen.counterparty_usd` is a single
+      // CURRENT scalar applied to a whole historical series, so even a properly
+      // USD-anchored inverted pool gets today's rate stamped on last month's
+      // candles. Same defect family as #227, different entry point.
       const basePool = pools.find((p) => p.token_is_base);
+      // anchor-debt(#231): the `?? pools[0]` tail — see the block above.
       const chosen = basePool ?? pools[0];
       poolAddress = chosen.address;
       if (!chosen.token_is_base) {
