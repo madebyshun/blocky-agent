@@ -40,6 +40,7 @@ import HoodSidebar from "./HoodSidebar";
 import TickerDetailPanel from "./TickerDetailPanel";
 import ArrowBriefBlock from "./ArrowBriefBlock";
 import ReviewSignPanel from "@/components/blue-hood/ReviewSignPanel";
+import StockMark from "@/components/blue-hood/StockMark";
 import PositionsStrip, { usePositions, positionsHeldMap } from "@/components/blue-hood/PositionsStrip";
 import EnableAlertsButton from "./inbox/EnableAlertsButton";
 import { HealthProvider, HealthBanner } from "./HealthProvider";
@@ -960,6 +961,7 @@ function DriftRow({
         style={{ borderColor: "#0f1218" }}
       >
         <td className="px-3 py-2 text-left">
+          <StockMark ticker={r.ticker} chain={chainOf(r)} size={22} className="mr-2 align-middle" />
           <a
             href={tokenExplorerUrl(r)}
             target="_blank"
@@ -1027,6 +1029,7 @@ function DriftRow({
       >
         <td className="px-3 py-2 text-left">
           <span style={{ color: MUTED, marginRight: 4 }}>{chevron}</span>
+          <StockMark ticker={r.ticker} chain={chainOf(r)} size={22} className="mr-2 align-middle" />
           <a
             href={tokenExplorerUrl(r)}
             target="_blank"
