@@ -152,6 +152,39 @@ async function handle(req: NextRequest) {
     }
     const baseErrored = baseRows.filter((r) => r.verdict === "ERROR").length;
 
+    // #224-residue — roll up the share-price identity verdict every Base row now
+    // carries (`base_identity_*`, set in base-poller.ts). This is the scheduled
+    // RUNNER the probe's unconditional identity never had: a manual npm script
+    // that no workflow invokes only runs on the days someone remembers, which is
+    // the same self-silencing shape as the assertion it replaced.
+    //
+    // A cron cannot "exit non-zero", so the failure has to surface some other
+    // way — and it must do so WITHOUT stopping the cycle, because Blue Hood is
+    // under "dừng build, giữ chạy" and the poll is the heartbeat. So: a loud
+    // console.error per offending ticker (in b20-quote.ts), the marker on the
+    // row (which reaches KV and `/api/hood/snapshot` on a write that already
+    // happens), and this counter. Zero extra Upstash — #148's constraint holds.
+    //
+    // `ok + mismatch + unchecked` MUST equal `baseRows.length`; a shortfall means
+    // a row lost its marker, which is itself the bug this whole task is about, so
+    // it is reported rather than assumed away.
+    const identityOf = (r: (typeof baseRows)[number]) =>
+      r.warnings.find((w) => w.startsWith("base_identity_"))?.slice("base_identity_".length) ?? null;
+    const baseIdentity = {
+      ok: baseRows.filter((r) => identityOf(r) === "ok").length,
+      mismatch: baseRows.filter((r) => identityOf(r) === "mismatch").length,
+      unchecked: baseRows.filter((r) => identityOf(r) === "unchecked").length,
+      unmarked: baseRows.filter((r) => identityOf(r) === null).length,
+      offenders: baseRows.filter((r) => identityOf(r) !== "ok").map((r) => `${r.ticker}:${identityOf(r) ?? "unmarked"}`),
+    };
+    if (baseIdentity.mismatch > 0 || baseIdentity.unmarked > 0) {
+      console.error(
+        `[poller] BASE SHARE-PRICE IDENTITY: ${baseIdentity.mismatch} mismatch, ` +
+          `${baseIdentity.unmarked} unmarked, ${baseIdentity.unchecked} unchecked ` +
+          `of ${baseRows.length} rows — ${baseIdentity.offenders.join(", ") || "none"}`,
+      );
+    }
+
     // 2. Rule engine — fires arrows for any row (RH or Base) that matches
     //    drift/arb rules. The engine is chain-agnostic; Base rows carry
     //    `chain:"base"` so fireArrow/grader qualify their KV keys and never
@@ -223,6 +256,11 @@ async function handle(req: NextRequest) {
         watched: baseRows.length,
         errored: baseErrored,
         gradeable: baseRows.filter((r) => r.verdict !== "INSUFFICIENT_DATA" && r.verdict !== "ERROR").length,
+        /** #224-residue. Reported on GREEN runs too, not only on failure: a
+         *  counter that appears only when something breaks cannot distinguish
+         *  "never broke" from "stopped checking". `ok == watched` is the daily
+         *  proof the identity is still being evaluated. */
+        identity: baseIdentity,
         rows: baseRows.map((r) => ({
           ticker: r.ticker,
           verdict: r.verdict,

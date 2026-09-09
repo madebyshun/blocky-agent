@@ -25,6 +25,14 @@
  *   • sequencer — Base is an OP-stack L2; if its sequencer is down or only just
  *                 recovered (< grace), feeds may be stale/frozen → don't fire.
  *   • multiplier— unreadable or ≤ 0 → hazard block (see above).
+ *   • identity  — `share == total_return ÷ (multiplier / 1e18)` is re-derived on
+ *                 EVERY read and must hold, or the row is suppressed. This is
+ *                 #224's assertion given a RUNNER: the probe that owns it is a
+ *                 manual npm script no workflow invokes, so it only ran on days
+ *                 someone remembered. The Base poll reads `multiplier()` every 5
+ *                 minutes regardless, so the check rides along for free. Read
+ *                 `verifySharePriceIdentity` for what it does and does not catch
+ *                 while every multiplier still reads exactly 1e18.
  *   • pause     — isPaused(TRANSFER) true (or unreadable) → suppress.
  *   • staleness — Chainlink `is_stale` (older than 2× heartbeat) → suppress.
  *                 ⚠️ Coinbase equity feeds DO NOT tick while US markets are
@@ -125,6 +133,116 @@ export function sharePriceFromFeed(
   return Number(sharePriceRaw) / 10 ** feedDecimals;
 }
 
+/** Outcome of the `share == total_return ÷ (multiplier / 1e18)` cross-check.
+ *  Three states on purpose — "unchecked" is NOT a pass. See
+ *  `verifySharePriceIdentity` for why the third state exists. */
+export type SharePriceIdentity = {
+  status: "ok" | "mismatch" | "unchecked";
+  /** Evidence. Always populated for `mismatch` and `unchecked`. */
+  detail: string | null;
+  /** multiplier as a plain factor (1 == no rebase); null when unreadable. */
+  multiplier_x: number | null;
+  /** What `share_price_usd` should have been, recomputed independently. */
+  expected_share_usd: number | null;
+};
+
+/** Relative tolerance. The two sides are computed by different arithmetic
+ *  (integer WAD division vs float), so they agree to rounding, not to the bit. */
+const IDENTITY_TOL = 1e-6;
+
+/**
+ * #224-residue — the division identity, verified IN PRODUCTION on every read.
+ *
+ * `scripts/base-stocks-probe.ts` already asserts `share == total_return ÷
+ * (multiplier / 1e18)` unconditionally, and that fix was right. What it did not
+ * come with was a RUNNER: the probe is a manual `npm run test:base-stocks`, it
+ * does not match `run-tests.ts`'s `*-check.ts` discovery pattern, and no
+ * workflow invokes it. A check nobody schedules is a check that runs on the days
+ * someone remembers — which is the same failure mode as the self-retiring
+ * assertion it replaced, one level up. So the identity moves to where the inputs
+ * already are: the Base desk poll, which reads `multiplier()` every 5 minutes
+ * anyway (`readTokenState`). No 7th cron, no extra KV traffic.
+ *
+ * ── WHAT THIS ACTUALLY CATCHES, AND WHEN ─────────────────────────────────────
+ * Be precise about this, because the honest answer has two halves.
+ *
+ * TODAY (every registered multiplier reads exactly 1e18) the identity reduces to
+ * `share == total_return`, and the two sides are still computed by INDEPENDENT
+ * routes — production goes `(raw_answer × WAD) / multiplier` in bigint then
+ * scales by `10^feed_decimals`; this function divides `chainlinkLatest`'s
+ * float `price_usd`. So a decimals mix-up, a truncation fault, a bigint
+ * overflow, or a rewiring of `total_return_value_usd` shows up NOW.
+ *
+ * It does NOT catch the WAD-substitution bug today — a call site passing `WAD`
+ * instead of `tok.multiplier` produces an identical number while the real
+ * multiplier is 1e18, so no arithmetic anywhere can see it. That is a property
+ * of the bug, not a weakness of this check, and it is exactly why the check must
+ * be UNCONDITIONAL and CONTINUOUS: Base's B20 spec folds cash dividends into the
+ * multiplier ("the multiplier increases to 1.02") rather than distributing them,
+ * so the first ex-dividend date on any of the eight tickers arms this check by
+ * itself. A check that has to be remembered is not armed on a date nobody
+ * diarised.
+ *
+ * ── WHY THIS IS NOT A TAUTOLOGY ──────────────────────────────────────────────
+ * It would be, if it re-ran `sharePriceFromFeed` and compared. It does not: it
+ * never touches `raw_answer` or `feed_decimals`, and reaches the same quantity
+ * through the feed's already-scaled USD price and a float multiplier. Two routes,
+ * one answer — that is a cross-check. (Contrast the probe's SANE_BAND note, which
+ * refuses to derive its bands from the registry's for the same reason.)
+ *
+ * ── WHY "unchecked" IS A STATE AND NOT A SILENT PASS ─────────────────────────
+ * #224 was never "a check computed the wrong answer". It was "a check quietly
+ * stopped running while the summary still said PASSED". Collapsing `unchecked`
+ * into `ok` would rebuild that exact hole inside the fix for it. Every
+ * `unchecked` today also has a louder sibling (`multiplier_invalid`,
+ * `feed_unavailable`, `share_price_unavailable`) — but *inferring* the hole from
+ * a neighbouring field is precisely the reasoning that let the old assertion
+ * disappear, so it is named here rather than deduced.
+ */
+export function verifySharePriceIdentity(args: {
+  share_price_usd: number | null;
+  total_return_value_usd: number | null;
+  multiplier: bigint | null;
+}): SharePriceIdentity {
+  const { share_price_usd, total_return_value_usd, multiplier } = args;
+
+  if (multiplier === null || multiplier <= 0n) {
+    return {
+      status: "unchecked",
+      detail: `multiplier ${multiplier === null ? "unreadable" : `= ${multiplier}`} — nothing to divide by`,
+      multiplier_x: null,
+      expected_share_usd: null,
+    };
+  }
+  const multiplier_x = Number(multiplier) / Number(WAD);
+
+  if (share_price_usd === null || total_return_value_usd === null) {
+    return {
+      status: "unchecked",
+      detail:
+        `no price to check (share=${share_price_usd === null ? "null" : "ok"}, ` +
+        `total_return=${total_return_value_usd === null ? "null" : "ok"})`,
+      multiplier_x,
+      expected_share_usd: null,
+    };
+  }
+
+  const expected_share_usd = total_return_value_usd / multiplier_x;
+  const holds =
+    Math.abs(share_price_usd - expected_share_usd) <= Math.abs(expected_share_usd) * IDENTITY_TOL + 1e-9;
+
+  return {
+    status: holds ? "ok" : "mismatch",
+    detail: holds
+      ? null
+      : `share=$${share_price_usd.toFixed(6)} but total_return=$${total_return_value_usd.toFixed(6)} ` +
+        `÷ ${multiplier_x} = $${expected_share_usd.toFixed(6)} ` +
+        `(off by ${(((share_price_usd - expected_share_usd) / expected_share_usd) * 100).toFixed(4)}%)`,
+    multiplier_x,
+    expected_share_usd,
+  };
+}
+
 // The B20-specific reads (isB20 / multiplier / isPaused) use ABIs rwa-price
 // doesn't expose, but we deliberately run them on rwa-price's SHARED client
 // (`clientForSource`) rather than a private one: same cache key ⇒ viem batches
@@ -223,6 +341,11 @@ export type BaseStockQuote = {
   multiplier: string | null;
   /** true when multiplier == 1e18 (the division is a no-op). */
   multiplier_is_unit: boolean;
+  /** #224-residue — the `share == total_return ÷ multiplier` cross-check, run on
+   *  EVERY read rather than in a probe nobody schedules. `"unchecked"` is not a
+   *  pass; see `verifySharePriceIdentity`. Anything other than `"ok"` forces
+   *  `can_fire: false`, structurally (see the `can_fire` expression below). */
+  share_price_identity: SharePriceIdentity;
   feed_answer_raw: string | null;
   feed_decimals: number | null;
   feed_updated_at: number | null;
@@ -308,6 +431,30 @@ export async function readBaseStockQuote(
     }
   }
 
+  // #224-residue — verify the division identity RIGHT HERE, every read, rather
+  // than in a probe that only runs when a human types `npm run test:base-stocks`.
+  // The 5-minute Base desk poll already reads `multiplier()` (readTokenState
+  // above), so this rides a call that is happening anyway: no 7th cron, no extra
+  // KV traffic, nothing new to schedule (#148's budget constraint holds).
+  const share_price_identity = verifySharePriceIdentity({
+    share_price_usd,
+    total_return_value_usd,
+    multiplier: tok.multiplier,
+  });
+  if (share_price_identity.status === "mismatch") {
+    console.error(
+      `[base-stocks] SHARE-PRICE IDENTITY VIOLATED for ${stock.ticker} @ ${stock.token}: ` +
+        `${share_price_identity.detail} — refusing to fire`,
+    );
+  } else if (share_price_identity.status === "unchecked") {
+    // Named, not inferred. Every `unchecked` today also trips a louder gate, but
+    // deducing "it must have been fine" from a neighbouring field is exactly the
+    // reasoning #224 was about. Say it out loud instead.
+    console.warn(
+      `[base-stocks] share-price identity UNCHECKED for ${stock.ticker}: ${share_price_identity.detail}`,
+    );
+  }
+
   const dex_price_usd = dex?.price_usd ?? null;
   const drift_pct =
     share_price_usd !== null && share_price_usd > 0 && dex_price_usd !== null
@@ -339,6 +486,11 @@ export async function readBaseStockQuote(
   let suppressed_reason: string | null = null;
   if (!impostor_ok) suppressed_reason = "impostor_gate";
   else if (!multiplier_ok) suppressed_reason = "multiplier_invalid";
+  // Same hazard family as `multiplier_invalid` — a share price that does not
+  // reconcile with its own feed answer and multiplier — so it sits next to it,
+  // ahead of staleness/pause. It can never mask a more fundamental cause:
+  // anything more fundamental leaves the identity `unchecked`, not `mismatch`.
+  else if (share_price_identity.status === "mismatch") suppressed_reason = "share_price_identity_mismatch";
   else if (!feed) suppressed_reason = "feed_unavailable";
   else if (feed_is_stale) suppressed_reason = "feed_stale";
   else if (!sequencer_ok) suppressed_reason = seq === null ? "sequencer_unreadable" : seq.up ? "sequencer_warming" : "sequencer_down";
@@ -347,7 +499,15 @@ export async function readBaseStockQuote(
   else if (share_price_usd === null) suppressed_reason = "share_price_unavailable";
   else if (!price_in_band) suppressed_reason = "price_out_of_band";
 
-  const can_fire = suppressed_reason === null && drift_pct !== null;
+  // `share_price_identity.status === "ok"` is redundant with the ladder TODAY,
+  // and that redundancy is the point: it is the same belt-and-braces shape the
+  // rest of this file uses (see the header's "two INDEPENDENT guards"). The
+  // ladder supplies the REASON an operator reads; this conjunct supplies the
+  // SAFETY, so deleting or reordering a ladder line cannot silently re-arm
+  // firing on a price that failed to reconcile. It also folds `unchecked` in:
+  // an identity we could not verify is not an identity we verified.
+  const can_fire =
+    suppressed_reason === null && drift_pct !== null && share_price_identity.status === "ok";
 
   return {
     ticker: stock.ticker,
@@ -357,6 +517,7 @@ export async function readBaseStockQuote(
     total_return_value_usd,
     multiplier: tok.multiplier !== null ? tok.multiplier.toString() : null,
     multiplier_is_unit: tok.multiplier === WAD,
+    share_price_identity,
     feed_answer_raw: feed?.raw_answer ?? null,
     feed_decimals: feed?.feed_decimals ?? null,
     feed_updated_at: feed?.updated_at ?? null,

@@ -85,6 +85,20 @@ export function baseQuoteToSnapshot(
   // behaviour, identical to an RH row with null total_tvl_usd.
   const tvl = q.dex_liquidity_usd;
 
+  // #224-residue — the identity verdict travels ON THE ROW, so it reaches
+  // `KV_BASE_ROWS_LATEST` (a write that already happens every cycle) and out
+  // through `/api/hood/snapshot`. That matters for a reason beyond display:
+  // a check that only logs on failure cannot be distinguished from a check that
+  // stopped running, which is the #224 defect rebuilt inside its own fix. An
+  // `identity=ok` marker on every healthy row is the liveness proof — absence of
+  // the marker is then evidence, not silence.
+  //
+  // Deliberately emitted on BOTH branches below rather than folded into the
+  // `base_suppressed_*` warning: a mismatch suppresses, but `unchecked` may
+  // arrive on a row suppressed for some unrelated reason, and "we never verified
+  // this price" must not be inferable only from what else went wrong.
+  const identityWarning = `base_identity_${q.share_price_identity.status}`;
+
   if (!q.can_fire) {
     // Suppressed quote ⟹ UNGRADEABLE. verdict INSUFFICIENT_DATA makes
     // detectCandidate early-return; drift_pct null makes it return again even
@@ -106,7 +120,10 @@ export function baseQuoteToSnapshot(
       pool_ref: q.dex_pool_address,
       is_v4_pool_id: false, // Aerodrome pool address, not a Uniswap-v4 poolId
       market,
-      warnings: q.suppressed_reason ? [`base_suppressed_${q.suppressed_reason}`] : [],
+      warnings: [
+        ...(q.suppressed_reason ? [`base_suppressed_${q.suppressed_reason}`] : []),
+        identityWarning,
+      ],
       polled_at_ms,
       data_age_s: q.feed_age_seconds,
       // Carried on the SUPPRESSED row too, not just the healthy one: a row
@@ -140,7 +157,11 @@ export function baseQuoteToSnapshot(
     pool_ref: q.dex_pool_address,
     is_v4_pool_id: false,
     market,
-    warnings: [],
+    // A healthy row is `can_fire`, which structurally requires identity == "ok"
+    // (see the `can_fire` expression in b20-quote.ts), so this is always
+    // `base_identity_ok` here. Emitted anyway — it is the per-cycle liveness
+    // proof that the check RAN, which is the whole residue of #224.
+    warnings: [identityWarning],
     polled_at_ms,
     data_age_s: q.feed_age_seconds,
     oracle_updated_at: q.feed_updated_at,
@@ -174,7 +195,12 @@ function baseErrorRow(
     pool_ref: null,
     is_v4_pool_id: false,
     market,
-    warnings: [],
+    // The read threw, so the identity was definitively NOT verified. Marking it
+    // keeps the invariant that EVERY Base row carries exactly one
+    // `base_identity_*` warning, which lets the cron roll-up assert
+    // `ok + mismatch + unchecked == rows` — a conservation identity. Without it,
+    // a row that silently lost its marker would look like a row that was fine.
+    warnings: ["base_identity_unchecked"],
     error: message,
     polled_at_ms,
     data_age_s: null,
@@ -212,7 +238,8 @@ export async function pollBaseStocks(cycleStart: number): Promise<BaseTickerSnap
       console.log(
         `[base-poller] ticker=${row.ticker} verdict=${row.verdict}` +
           ` can_fire=${q.can_fire} drift=${row.drift_pct === null ? "—" : row.drift_pct.toFixed(3)}%` +
-          ` reason=${q.suppressed_reason ?? "—"}`,
+          ` reason=${q.suppressed_reason ?? "—"}` +
+          ` identity=${q.share_price_identity.status}`,
       );
       rows.push(row);
     } catch (e) {
