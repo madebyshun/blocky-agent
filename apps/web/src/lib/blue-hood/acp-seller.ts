@@ -50,6 +50,7 @@ import {
   recordJobSeen,
   updateJobStatus,
   acquireSubmitLock,
+  type AcpSubjectChain,
 } from "@/lib/blue-hood/acp-jobs";
 import { computeExecutionPlan, type ExecPlan } from "@/lib/blue-hood/execution-plan";
 import { findByTicker } from "@/lib/robinhood/rwa-registry";
@@ -156,12 +157,37 @@ function lenientJson(raw: string): Record<string, unknown> | null {
 }
 
 /**
- * Pull the `{ ticker, size_usd }` requirement from a session. Tries the job
- * description first (populated by hydration), then the latest requirement-shaped
- * message entry. Returns null when the payload is missing or malformed → the
- * caller reject-incompletes.
+ * Pull the `{ ticker, size_usd, chain? }` requirement from a session. Tries the
+ * job description first (populated by hydration), then the latest
+ * requirement-shaped message entry. Returns null when the payload is missing or
+ * malformed → the caller reject-incompletes.
+ *
+ * ⚠️ `chain` is PARSED, not assumed. A ticker string does not identify a token:
+ * NVDA, META, GOOGL and TSLA exist as tradeable tokens on BOTH Robinhood Chain
+ * (4663) and Base (8453), and the two chains share no state. This offering can
+ * only answer for RH — every datum in `computeExecutionPlan` comes from the RH
+ * registry and RH pools — so a bare ticker here would silently sell a Robinhood
+ * plan to a buyer who meant the Base B20. That is the #161/#206/#219 bug family
+ * (four sites so far), and it is worse here than anywhere it has appeared
+ * before, because here the buyer PAYS for the wrong-chain answer and the escrow
+ * releases on delivery.
+ *
+ * Absent `chain` defaults to `"robinhood"` — the only desk this offering serves
+ * — but it is written onto the object so the value is explicit at every use
+ * site and can be gated on, rather than being an unstated assumption that reads
+ * as correct until a Base buyer arrives.
  */
-function extractRequirement(session: JobSession): { ticker: string; size_usd: number } | null {
+function normalizeChain(v: unknown): AcpSubjectChain {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return "robinhood"; // absent → this offering's only desk (stated, not assumed)
+  if (s === "robinhood" || s === "robinhoodchain" || s === "rh" || s === "4663") return "robinhood";
+  if (s === "base" || s === "8453") return "base";
+  return "unknown";
+}
+
+function extractRequirement(
+  session: JobSession,
+): { ticker: string; size_usd: number; chain: AcpSubjectChain } | null {
   const sources: string[] = [];
   const desc = session.job?.description;
   if (desc) sources.push(desc);
@@ -180,7 +206,8 @@ function extractRequirement(session: JobSession): { ticker: string; size_usd: nu
     if (!obj) continue;
     const ticker = String(obj.ticker ?? obj.symbol ?? "").trim();
     const size = Number(obj.size_usd ?? obj.sizeUsd ?? obj.size);
-    if (ticker && Number.isFinite(size) && size > 0) return { ticker, size_usd: size };
+    const chain = normalizeChain(obj.chain ?? obj.chain_id ?? obj.chainId);
+    if (ticker && Number.isFinite(size) && size > 0) return { ticker, size_usd: size, chain };
   }
   return null;
 }
@@ -191,11 +218,21 @@ function grossUsdcFromJob(session: JobSession): number | undefined {
   return typeof amt === "number" && Number.isFinite(amt) ? amt : undefined;
 }
 
-/** The paid deliverable: the execution plan wrapped with light provenance. */
+/**
+ * The paid deliverable: the execution plan wrapped with light provenance.
+ *
+ * `chain` is part of that provenance and is not decorative — the buyer is
+ * paying for pool depth, slippage and a route, and every one of those numbers
+ * is meaningless without the chain it was measured on. A receipt that names the
+ * ticker but not the desk is the same claim the OG "VERIFIED" pill used to make
+ * before it was made to name the chain.
+ */
 function buildDeliverable(cfg: AcpSellerConfig, plan: ExecPlan): string {
   return JSON.stringify({
     offering: cfg.offeringName,
-    version: "1.0",
+    version: "1.1",
+    chain: "robinhood",
+    chain_id: 4663,
     generated_at: new Date().toISOString(),
     plan,
   });
@@ -225,6 +262,11 @@ async function handleSession(
     offering: cfg.offeringName,
     buyer: buyer ?? undefined,
     ticker: req?.ticker,
+    // Recorded on FIRST SIGHT, before any gate runs — so a rejected wrong-chain
+    // job still leaves behind what desk was asked for. If we only stamped it on
+    // the accept path, the ledger could show a rejection with no way to tell
+    // whether the buyer meant Base or sent junk.
+    subject_chain: req?.chain,
     size_usd: req?.size_usd,
     price_usdc: cfg.price,
   });
@@ -238,6 +280,22 @@ async function handleSession(
         tally.rejected_input++;
         return;
       }
+      // SUBJECT chain, which is not the settlement chain. `chainId` above is
+      // where the USDC escrow lives (ACP runs on Base); `req.chain` is which
+      // desk the ticker trades on. They are legitimately different values and
+      // conflating them is how a Base job gets a Robinhood answer.
+      if (req.chain !== "robinhood") {
+        await session.reject(
+          `unsupported chain "${req.chain}" — Offering #1 covers Robinhood Chain (4663) only; ` +
+            `"${req.ticker}" may also exist on Base (8453), and this desk cannot price that token`,
+        );
+        await updateJobStatus(jobId, "rejected", {
+          error: "unsupported_chain",
+          subject_chain: req.chain,
+        });
+        tally.rejected_input++;
+        return;
+      }
       if (!findByTicker(req.ticker)) {
         await session.reject(`unknown ticker "${req.ticker}" — not a Robinhood-Chain RWA token`);
         await updateJobStatus(jobId, "rejected", { error: "unknown_ticker" });
@@ -246,7 +304,11 @@ async function handleSession(
       }
       // Valid → propose our fixed price (USDC on the job's own chain).
       await session.setBudget(AssetToken.usdc(cfg.price, chainId));
-      await updateJobStatus(jobId, "budget_set", { ticker: req.ticker, size_usd: req.size_usd });
+      await updateJobStatus(jobId, "budget_set", {
+        ticker: req.ticker,
+        size_usd: req.size_usd,
+        subject_chain: req.chain,
+      });
       tally.budget_proposed++;
       return;
     }
@@ -255,6 +317,22 @@ async function handleSession(
       if (!req) {
         await session.reject("invalid requirement at funding: expected JSON { ticker, size_usd }");
         await updateJobStatus(jobId, "rejected", { error: "bad_requirement" });
+        tally.rejected_input++;
+        return;
+      }
+      // The chain gate is REPEATED here, not inherited from "open". A job
+      // created and funded inside one 2-min gap is first seen at `funded`, so a
+      // gate that only ran on the `open` branch would not run at all for
+      // exactly the jobs that reach delivery fastest. A gate on one path is not
+      // a gate (#215/#216).
+      if (req.chain !== "robinhood") {
+        await session.reject(
+          `unsupported chain "${req.chain}" at funding — Offering #1 covers Robinhood Chain (4663) only`,
+        );
+        await updateJobStatus(jobId, "rejected", {
+          error: "unsupported_chain",
+          subject_chain: req.chain,
+        });
         tally.rejected_input++;
         return;
       }

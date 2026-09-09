@@ -58,14 +58,28 @@ export type AcpJobStatus =
 
 const TERMINAL: ReadonlySet<AcpJobStatus> = new Set(["completed", "rejected", "expired"]);
 
+/**
+ * Which desk the SUBJECT of the job trades on — deliberately NOT the same axis
+ * as `chain_id` below, and named so the two can never be read as synonyms.
+ *
+ * `chain_id` is where the USDC escrow settles (ACP runs on Base, 8453).
+ * `subject_chain` is where the ticker lives (Robinhood Chain, 4663, for this
+ * offering). A Base-settled job asking about a Robinhood token is the NORMAL
+ * case, so storing one number for both would make the wrong-chain answer
+ * unprovable after the fact. NVDA, META, GOOGL and TSLA exist on both chains and
+ * the chains share no state, so the ledger has to record which one was answered.
+ */
+export type AcpSubjectChain = "robinhood" | "base" | "unknown";
+
 /** One job's durable record. Only public routing + economic facts — never a key. */
 export interface AcpJobRecord {
   job_id: string;
-  chain_id: number;
+  chain_id: number; // SETTLEMENT chain (escrow) — see AcpSubjectChain
   offering: string; // e.g. "execution-plan"
   status: AcpJobStatus;
   buyer?: string; // buyer wallet address (public)
   ticker?: string; // parsed from the job requirement
+  subject_chain?: AcpSubjectChain; // desk the ticker trades on — NOT chain_id
   size_usd?: number; // parsed from the job requirement
   price_usdc?: number; // budget agreed for the job
   usdc_collected?: number; // amount actually received on completion
@@ -101,7 +115,9 @@ const now = () => new Date().toISOString();
  */
 export async function recordJobSeen(
   job: Pick<AcpJobRecord, "job_id" | "chain_id" | "offering"> &
-    Partial<Pick<AcpJobRecord, "buyer" | "ticker" | "size_usd" | "price_usdc" | "status">>,
+    Partial<
+      Pick<AcpJobRecord, "buyer" | "ticker" | "subject_chain" | "size_usd" | "price_usdc" | "status">
+    >,
 ): Promise<AcpJobRecord> {
   const existing = await kvGet<AcpJobRecord>(kvAcpJob(job.job_id));
   const ts = now();
@@ -114,6 +130,7 @@ export async function recordJobSeen(
         status: job.status ?? "seen",
         buyer: job.buyer,
         ticker: job.ticker,
+        subject_chain: job.subject_chain,
         size_usd: job.size_usd,
         price_usdc: job.price_usdc,
         created_at: ts,
@@ -135,7 +152,18 @@ export async function recordJobSeen(
 export async function updateJobStatus(
   jobId: string,
   status: AcpJobStatus,
-  patch: Partial<Pick<AcpJobRecord, "usdc_collected" | "price_usdc" | "ticker" | "size_usd" | "buyer" | "error">> = {},
+  patch: Partial<
+    Pick<
+      AcpJobRecord,
+      | "usdc_collected"
+      | "price_usdc"
+      | "ticker"
+      | "subject_chain"
+      | "size_usd"
+      | "buyer"
+      | "error"
+    >
+  > = {},
 ): Promise<AcpJobRecord | null> {
   const existing = await kvGet<AcpJobRecord>(kvAcpJob(jobId));
   if (!existing) {
