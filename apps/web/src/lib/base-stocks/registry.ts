@@ -1,9 +1,12 @@
 /**
  * Base tokenized-stock registry — the Blue Hood "Base desk" address book.
  *
- * Scope is deliberately TINY: four Coinbase B20 tokenized stocks (NVDA, META,
- * GOOGL, AAPL) that we have independently verified end-to-end on Base mainnet
- * (chainId 8453). This is NOT a general B20 catalog — it is the allowlist of
+ * Scope is deliberately TINY: eight Coinbase B20 tokenized stocks (NVDA, META,
+ * GOOGL, AAPL, AMZN, MSFT, MSTR, TSLA) that we have independently verified
+ * end-to-end on Base mainnet (chainId 8453). Count the array, not this sentence
+ * — it said "four" for two weeks after the desk reached seven, because a prose
+ * count is a second source of truth that nothing checks.
+ * This is NOT a general B20 catalog — it is the allowlist of
  * tickers whose oracle-vs-DEX drift Blue Hood is authorized to grade. Adding a
  * ticker here is a correctness decision, not a convenience: every address below
  * was read from an AUTHORITATIVE source (Chainlink's Base feed directory for the
@@ -24,8 +27,12 @@
  *
  * Verified on-chain 2026-08-23 via `cast` (token isB20/symbol/decimals/name +
  * feed decimals/description/answer + Aerodrome pool spot); AAPL added and
- * verified the same way 2026-08-24. All four tokens currently report
- * `multiplier() == 1e18` (no rebase) and `isPaused(TRANSFER) == false`.
+ * verified the same way 2026-08-24; AMZN · MSFT · MSTR 2026-09-08; TSLA the
+ * same day. Every token in the array currently reports `multiplier() == 1e18`
+ * (no rebase) and `isPaused(TRANSFER) == false` — but do NOT encode that as an
+ * assumption anywhere: `multiplier() == 1e18` is today's reading, not a
+ * property, and a dividend changes it on a schedule someone else controls
+ * (see #434, which had to un-gate the division check for exactly this reason).
  *
  * ── ADMISSION GATE: the pool decides, NOT the feed ────────────────────────────
  * A readable Chainlink feed is NOT sufficient evidence to add a ticker, and the
@@ -82,21 +89,13 @@
  * the safety net that every other row gets. Do not "fix" this by anchoring
  * SPCX's band to its own feed.
  *
- * ── The three deferrals, and why they are three DIFFERENT things ──────────────
- * All three pass the pool floors. None can be admitted, for unrelated reasons —
+ * ── The deferrals, and why they are DIFFERENT things ─────────────────────────
+ * Both pass the pool floors. Neither can be admitted, for unrelated reasons —
  * do not collapse them into one "rejected" bucket:
  *
  *   • SPCX — NO INDEPENDENT REFERENCE EXISTS. SpaceX is not publicly traded, so
  *     nobody (us or a user auditing the record) can check the anchor. Permanent
  *     until SpaceX lists.
- *
- *   • TSLA — OUR READ IS BROKEN, THE MARKET IS FINE. Measured 2026-09-08:
- *     `dexPriceDexScreener` priced it on the `TSLAc/STC` V4 pool at $13,789.61
- *     against a $354.24 oracle (38.93×), because that pool out-ranked the real
- *     `TSLAc/USDC` Aerodrome pool on the deepest-base-side-pair sort. TSLA's own
- *     market is healthy ($195,852 liquidity, $404,994 volume, $354.87 — drift
- *     0.01%). Admissible the moment the pool-selection fix lands; nothing about
- *     the ticker needs to change.
  *
  *   • SNDK — THE BAND RECIPE DOES NOT FIT. Anchor confirmed ($1,770.23 oracle
  *     vs $1,740.00 public, 1.7%), pool excellent ($225,313 / $659,494, 72/72
@@ -112,12 +111,31 @@
  *     and a band that can do neither job is worse than no row. Revisit if SNDK
  *     settles — this is a judgement about TODAY's volatility, not the token.
  *
+ * A third deferral, TSLA, was RESOLVED 2026-09-08 and is now a row below. It is
+ * recorded here because it is the one deferral that was never about the ticker:
+ * the market was always fine, OUR READ was broken. `dexPriceDexScreener` priced
+ * it on the `TSLAc/STC` pool at $13,789.61 against a $354.24 oracle (38.9×),
+ * because that pool out-ranked the real `TSLAc/USDC` Aerodrome pool on a sort
+ * that asked only how DEEP a pool was and never what it was priced AGAINST.
+ * Fixed by the anchored-quote rule (#435); TSLA needed no change of its own.
+ * Keep this paragraph: "deferred" covered three unrelated diagnoses, and the
+ * only one that a code fix could clear is exactly the one a future reader would
+ * otherwise mistake for a verdict on the asset.
+ *
  * ⚠️ Symbol-matching is actively dangerous here, not merely sloppy. Base carries
  * live counterfeits using the exact `<TICKER>c` symbol: "TSLAc" at
  * `0xb5be29124d8a97eb2df434444dd68c00b6c43fd7` and `0x8b012624874c556dadfa5c2b2de0b4eee4c3c1ef`,
  * "AMZNc" at `0xd6aace315732c354a2c89e222699f2a467b7abf7` — all `isB20() == false`,
  * all `decimals == 18`, with padded names like "Tesla Inc. ". Real B20 stocks
  * carry the `0xb2000000…` vanity prefix AND answer `isB20() == true`.
+ *
+ * ⚠️ …but `isB20() == true` is NOT the same claim as "this is a tokenized
+ * stock", and the difference is measurable. `0xB200000000000000000000CfCD1d711EEf213b01`
+ * is **"StudentCoin" (STC), 18 decimals, a memecoin** — and the factory answers
+ * `isB20(STC) == true`. It is the counter-token of the pool that priced TSLAc
+ * at $15,424 (see the TSLA note above). So a hypothetical "only quote against
+ * B20 assets" rule would have admitted that pool. `isB20` is one conjunct of
+ * three (∧ `decimals == 8` ∧ `symbol == "<TICKER>c"`), never a sufficient test.
  */
 import type { Address } from "viem";
 
@@ -166,7 +184,7 @@ export interface BaseStock {
 }
 
 /**
- * The seven verified Base stocks. Do NOT add a ticker here without walking the
+ * The verified Base stocks. Do NOT add a ticker here without walking the
  * admission gate in the file header — an unverified row is a silent wrong-price
  * risk, and a thin-pool row is track-record noise. Both are worse than a
  * shorter list.
@@ -286,6 +304,38 @@ export const BASE_STOCKS: readonly BaseStock[] = [
     // catches the smallest realistic break comfortably: a 10² decimals error
     // lands at $1.40 (25× below the floor) or $13,983 (18.6× above the ceiling).
     saneBand: { lo: 35, hi: 750 },
+    admittedAt: "2026-09-08",
+  },
+  {
+    // The fourth of six candidates, admitted the same day the anchored-quote
+    // rule (#435) shipped — it was deferred hours earlier for a bug in OUR read,
+    // never for anything about the ticker. Re-measured after the fix, during US
+    // market hours:
+    //
+    // Pool evidence (Aerodrome TSLAc/USDC `0x469337fd…a7bb`): $611,434
+    // liquidity, $677,725 24h volume, 72h scanned with 0 zero-volume and 0
+    // flat-close hours. DEX $367.61 vs oracle $368.96 — drift -0.367%.
+    //
+    // ⚠️ TSLAc is the ticker that proves depth is not a safety property, so do
+    // not "simplify" the pool sort back to deepest-wins. Ranked by liquidity on
+    // admission day, the runners-up behind the real USDC pool were LiTesla/TSLAc
+    // ($407,864), STONKER/TSLAc ($281,656) and **TSLAc/STC ($267,810, which
+    // prices TSLAc at $15,424)**. The day before, that STC pool was the DEEPER
+    // of the two base-side pairs and won — same code, same ticker, opposite
+    // answer, 24h apart. The anchor rule is what makes today's correct answer a
+    // guarantee instead of a coin-flip.
+    ticker: "TSLA",
+    name: "Tesla Inc.",
+    token: "0xb2000000000000000000001e800a7f5189430cD0",
+    symbol: "TSLAc",
+    chainlinkFeed: "0xFaf869185383a24F8cb00e27BdA6b63B9905DCb4",
+    chainlinkHeartbeat: 86400,
+    // Band anchor: oracle share price $368.96, read 2026-09-08, checked against
+    // an independent public quote of $367.79 (0.32%). Standard [anchor/4,
+    // anchor*4] — no widening needed: the 52-week range $297.38–$498.83 sits
+    // 3.2× above the floor and 3.0× below the ceiling, and a 10² decimals error
+    // lands ~25× outside either edge.
+    saneBand: { lo: 92, hi: 1476 },
     admittedAt: "2026-09-08",
   },
 ] as const;
