@@ -108,7 +108,10 @@ function pt(
     hour,
     at: `${hour.slice(0, 4)}-${hour.slice(4, 6)}-${hour.slice(6, 8)}T${hour.slice(8, 10)}:00:00Z`,
     is_open: false,
-    session: "closed",
+    // A real closed session, not the word "closed" — `MarketSession` has no such
+    // member, and a fixture that invents one would be asserting a shape the
+    // archive cannot hold. Caught by `tsc`, which `tsx` had happily skipped.
+    session: "weekend",
     rows: tickers.map((ticker) => ({
       ticker,
       oracle_usd: 100,
@@ -289,13 +292,24 @@ check(
 
 console.log("\n── 5. The deadband is a measurement floor, not a firing threshold ──\n");
 
+// Read through `number`-typed bindings ON PURPOSE. All three are `const` number
+// literals, so TypeScript narrows them to `0.5`, `2` and `1` and then rejects
+// `0.5 !== 2` as a comparison "with no overlap" (TS2367). That would leave the
+// check compiling ONLY in the state it is meant to report — fuse the constants
+// and the types match, tsc goes quiet, and the guard finally builds just in time
+// to fail. A check that cannot be compiled while the invariant holds is not a
+// check. Widening keeps it a runtime assertion, which is what it always was.
+const deadband: number = DEADBAND_ABS_PCT;
+const driftFires: number = DRIFT_MIN_ABS_PCT;
+const arbFires: number = ARB_MIN_ABS_PCT;
+
 check(
   `DEADBAND_ABS_PCT (${DEADBAND_ABS_PCT}) is NOT fused to DRIFT_MIN_ABS_PCT (${DRIFT_MIN_ABS_PCT})`,
-  DEADBAND_ABS_PCT !== DRIFT_MIN_ABS_PCT,
+  deadband !== driftFires,
 );
 check(
   `DEADBAND_ABS_PCT (${DEADBAND_ABS_PCT}) is NOT fused to ARB_MIN_ABS_PCT (${ARB_MIN_ABS_PCT})`,
-  DEADBAND_ABS_PCT !== ARB_MIN_ABS_PCT,
+  deadband !== arbFires,
 );
 check(
   "the deadband sits BELOW both firing thresholds (a floor, not a bar)",
