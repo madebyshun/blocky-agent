@@ -38,6 +38,7 @@ import {
   rowLiquidityView,
   type RowLiquidity,
 } from "@/lib/blue-hood/detail-support";
+import TickerChart from "@/components/blue-hood/TickerChart";
 
 const BORDER = "#1A1A2E";
 const SURFACE = "#0B0D13";
@@ -163,6 +164,14 @@ export default function TickerDetailPanel({
             contract ↗
           </a>
         </div>
+        {/* PRICE HISTORY is on BOTH branches, unlike liquidity/holders. Those
+            depend on an RH-only tool; this reads the permanent archive, which
+            both desks write. A Base row showing no chart while an RH row shows
+            one would repeat the overcorrection warned about in this file's
+            header — a block empty for a reason the data does not have. */}
+        <Section label="// PRICE HISTORY">
+          <TickerChart ticker={ticker} chain={chain} />
+        </Section>
         <Section label="// LIQUIDITY">
           {plan.liquidity === "row" ? (
             <RowLiquidityBlock chain={chain} row={rowLiquidity} note={plan.liquidityNote} />
@@ -211,6 +220,11 @@ export default function TickerDetailPanel({
           contract ↗
         </a>
       </div>
+
+      {/* PRICE HISTORY — archive-sourced, so it renders on every desk. */}
+      <Section label="// PRICE HISTORY">
+        <TickerChart ticker={ticker} chain={chain} />
+      </Section>
 
       {/* LIQUIDITY */}
       <Section label="// LIQUIDITY">
