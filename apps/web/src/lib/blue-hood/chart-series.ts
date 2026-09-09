@@ -30,8 +30,12 @@
  *   • 1,169 of 1,177 archived rows carry both an oracle and a DEX price, and
  *     EVERY ONE of them sits in dex/oracle ∈ [0.9940, 1.0121]. So the ~11 days
  *     written before #435 landed contain no unanchored-pool contamination, and
- *     this chart needs no "pre-fix" caveat band. TSLA was the 39.5× case and
- *     TSLA was never on the desk, so it never entered the archive.
+ *     this chart needs no "pre-fix" caveat band. TSLA was the 39.5× case, and
+ *     it was not on the desk for any of those 13 days — so the pre-#435 code
+ *     never wrote a TSLA row. It was admitted 2026-09-09 (#436), i.e. AFTER the
+ *     anchored-quote fix, so every TSLA row in the archive is anchored from the
+ *     first one. State it that way rather than "TSLA was never on the desk":
+ *     that sentence was true when written and stopped being true the same day.
  *   • |drift| max = 0.81%, p50 = 0.17%, and 92.4% of all 1,026 graded rows are
  *     BELOW 0.5%. Nothing has ever crossed even the 1% open-market arb line.
  *     This is why {@link DEADBAND_ABS_PCT} is not decoration — see its header.
@@ -517,8 +521,10 @@ export function chartNote(s: ChartSeries): string | null {
   }
   // Leading absence first, and never as a "break". A window wider than the
   // archive, or a ticker admitted mid-window, is the expected shape of a young
-  // desk — production has three tickers in exactly that state right now (AMZN,
-  // MSFT, MSTR, admitted 20260908). Phrasing it as missing data would put a
+  // desk — production has FOUR tickers in exactly that state right now (AMZN,
+  // MSFT, MSTR admitted 20260908, TSLA 20260909). That count is a reading, not
+  // a property: it goes up on every admission, so re-derive it from the archive
+  // rather than trusting this comment. Phrasing it as missing data would put a
   // warning on every one of their charts for something nobody did wrong, and a
   // warning that is always on is a warning nobody reads.
   if (s.counts.gap_hours === 0 && s.counts.lead_in_hours > 0) {
