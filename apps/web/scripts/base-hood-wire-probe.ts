@@ -7,12 +7,17 @@
  * to see answered before the PR, each DEMONSTRATED (a real blocked/allowed case)
  * rather than merely present in the code:
  *
- *   GATE 1 — multiplier/pause guard blocks an arrow VIA can_fire.
- *     A suppressed BaseStockQuote (paused / bad-multiplier, `can_fire:false`)
- *     maps to a snapshot row that is UNGRADEABLE (verdict INSUFFICIENT_DATA AND
- *     drift_pct null), and `detectCandidate` / `detectArrow` return null for it.
- *     A healthy quote with the SAME shape but `can_fire:true` DOES yield a
- *     candidate — so the block is meaningful, not "everything returns null".
+ *   GATE 1 — multiplier/pause/identity guard blocks an arrow VIA can_fire.
+ *     A suppressed BaseStockQuote (paused / bad-multiplier / share-price
+ *     identity mismatch, `can_fire:false`) maps to a snapshot row that is
+ *     UNGRADEABLE (verdict INSUFFICIENT_DATA AND drift_pct null), and
+ *     `detectCandidate` / `detectArrow` return null for it. A healthy quote with
+ *     the SAME shape but `can_fire:true` DOES yield a candidate — so the block is
+ *     meaningful, not "everything returns null".
+ *     The identity case (#224-residue) additionally asserts the verdict rides
+ *     the row as a warning on EVERY branch, green ones included: a marker that
+ *     appears only on failure cannot distinguish "never broke" from "stopped
+ *     checking", which is the defect #224-residue exists to close.
  *
  *   GATE 2 — dead-pool liveness gate applies to Base (pool vol > 0, as for RH).
  *     A healthy Base drift row with `volume_24h_usd === 0` is dropped by
@@ -43,6 +48,7 @@ import {
 } from "../src/lib/base-stocks/base-poller";
 import {
   readBaseStockQuote,
+  verifySharePriceIdentity,
   type BaseStockQuote,
 } from "../src/lib/base-stocks/b20-quote";
 import { BASE_STOCKS, findBaseStock } from "../src/lib/base-stocks/registry";
@@ -77,11 +83,19 @@ const OPEN_MARKET = {
  * A healthy, gradeable NVDA-shaped BaseStockQuote. Share $215, DEX $225 ⟹ drift
  * +4.65% (well over the 2% drift floor), deep pool, real volume, all gates green.
  * Overrides let each gate craft the exact case it needs.
+ *
+ * #224-residue — `share_price_identity` is DERIVED by calling the production
+ * verifier on the fixture's own post-override price triple, never hardcoded to
+ * `"ok"`. A hardcoded verdict would make this probe assert that the wiring
+ * carries a constant, which stays green even if the identity stops being
+ * computed — the exact shape of the defect #224-residue exists to close. Derived,
+ * a case that overrides the multiplier or nulls a price gets the verdict
+ * production would compute for it.
  */
 function healthyQuote(over: Partial<BaseStockQuote> = {}): BaseStockQuote {
   const share = 215;
   const dex = 225;
-  return {
+  const q: BaseStockQuote = {
     ticker: "NVDA",
     token: "0xb20000000000000000000078ee7ce2fE4908108C",
     share_price_usd: share,
@@ -107,8 +121,20 @@ function healthyQuote(over: Partial<BaseStockQuote> = {}): BaseStockQuote {
     multiplier_ok: true,
     can_fire: true,
     suppressed_reason: null,
+    // Placeholder — overwritten below from the FINAL field values. Present only
+    // because the field is required (and required on purpose: tsc refusing is
+    // stronger than a reviewer noticing).
+    share_price_identity: { status: "unchecked", detail: "not yet derived", multiplier_x: null, expected_share_usd: null },
     ...over,
   };
+  if (over.share_price_identity === undefined) {
+    q.share_price_identity = verifySharePriceIdentity({
+      share_price_usd: q.share_price_usd,
+      total_return_value_usd: q.total_return_value_usd,
+      multiplier: q.multiplier === null ? null : BigInt(q.multiplier),
+    });
+  }
+  return q;
 }
 
 /** Minimal Arrow for grader routing (gate 4). `chain` decides RH vs Base. */
@@ -173,7 +199,46 @@ function gate1_multiplierPauseGuard() {
   check("bad-multiplier → detectCandidate() null (no arrow)", detectCandidate(badMultRow) === null);
   check("bad-multiplier → detectArrow() null (no arrow)", detectArrow(badMultRow) === null);
 
-  // (c) CONTRAST: the SAME healthy quote, can_fire:true, DOES produce a candidate.
+  // (c) IDENTITY MISMATCH (#224-residue, hazard #2). Constructed as the actual
+  //     bug shape: a 1.02e18 multiplier (post-dividend) with the TOTAL-RETURN
+  //     value left sitting in the share field — i.e. the division skipped. That
+  //     is arithmetically invisible while every live multiplier is 1e18, which
+  //     is exactly why it has to be a continuous runtime check and why the case
+  //     has to be constructed here rather than waited for.
+  //
+  //     The mismatch verdict is DERIVED (healthyQuote calls the production
+  //     verifier), so this case cannot go vacuous: if the identity ever stopped
+  //     firing on this triple, the assert below catches it before the wiring
+  //     asserts do.
+  const idMismatch = healthyQuote({
+    multiplier: "1020000000000000000",
+    multiplier_is_unit: false,
+    // share_price_usd stays 215 == total_return_value_usd ⟹ 215 ≠ 215/1.02.
+    can_fire: false,
+    suppressed_reason: "share_price_identity_mismatch",
+  });
+  check("identity mismatch → fixture really is a mismatch (case not vacuous)",
+    idMismatch.share_price_identity.status === "mismatch",
+    idMismatch.share_price_identity.detail ?? idMismatch.share_price_identity.status);
+  const idRow = baseQuoteToSnapshot(idMismatch, "NVIDIA Corporation", CLOSED_MARKET, 0);
+  check("identity mismatch → verdict INSUFFICIENT_DATA", idRow.verdict === "INSUFFICIENT_DATA", idRow.verdict);
+  check("identity mismatch → drift_pct null (even though the quote had one)", idRow.drift_pct === null,
+    `quote.drift=${idMismatch.drift_pct?.toFixed(2)}% → row.drift=${idRow.drift_pct}`);
+  check("identity mismatch → warnings carry base_identity_mismatch",
+    idRow.warnings.includes("base_identity_mismatch"), JSON.stringify(idRow.warnings));
+  check("identity mismatch → warnings also carry the suppression reason",
+    idRow.warnings.includes("base_suppressed_share_price_identity_mismatch"), JSON.stringify(idRow.warnings));
+  check("identity mismatch → detectArrow() null (no arrow)", detectArrow(idRow) === null);
+
+  // (c2) UNCHECKED is NOT a pass — it must still be marked on the row it rode in
+  //      on. The bad-multiplier row above is exactly that case (multiplier 0 ⟹
+  //      nothing to divide by), and it must NOT be labelled ok.
+  check("bad-multiplier → identity verdict is 'unchecked', not 'ok'",
+    badMult.share_price_identity.status === "unchecked", badMult.share_price_identity.status);
+  check("bad-multiplier → row carries base_identity_unchecked (not inferred from the sibling gate)",
+    badMultRow.warnings.includes("base_identity_unchecked"), JSON.stringify(badMultRow.warnings));
+
+  // (d) CONTRAST: the SAME healthy quote, can_fire:true, DOES produce a candidate.
   //     Without this, "everything returns null" would pass gate 1 vacuously.
   const healthy = healthyQuote();
   const healthyRow = baseQuoteToSnapshot(healthy, "NVIDIA Corporation", CLOSED_MARKET, 0);
@@ -183,6 +248,10 @@ function gate1_multiplierPauseGuard() {
   const cand = detectCandidate(healthyRow);
   check("healthy → detectCandidate() returns a DRIFT candidate", cand?.type === "drift", cand ? cand.type : "null");
   check("healthy → detectArrow() returns a candidate (all gates pass)", detectArrow(healthyRow) !== null);
+  // The per-cycle LIVENESS marker: a green row must still say the check ran.
+  // Without this, "identity ok" and "identity never computed" look identical.
+  check("healthy → row carries base_identity_ok (the check ran, on a GREEN row)",
+    healthyRow.warnings.includes("base_identity_ok"), JSON.stringify(healthyRow.warnings));
 
   // Sanity on the verdict helper itself: sign convention matches rh-stock-arb.
   check("baseVerdict: closed + drift -3% (afterhours) ⟹ AFTERHOURS_DRIFT",
