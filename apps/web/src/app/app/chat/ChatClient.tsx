@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import WalletBar     from "@/components/WalletBar";
 import { ChatProvider, useChat } from "@/app/chat/ChatContext";
 import { useAppChrome, type DrawerNavItem, type DrawerRecent } from "@/app/app/AppChrome";
 
@@ -35,7 +34,6 @@ function relativeTime(ms: number): string {
 function ChatShell() {
   const {
     artifactsPanelOpen,
-    onWalletChange, walletRefresh,
     createNewTask, tasks, selectTask, deleteTask, activeTaskId,
     setInput,
     credits, isUnlimited, holderTier, walletReady,
@@ -122,10 +120,11 @@ function ChatShell() {
 
   return (
     <>
-      {/* Hidden wallet detector — always mounted so onWalletChange fires on load */}
-      <div className="hidden">
-        <WalletBar onWalletChange={onWalletChange} refreshTrigger={walletRefresh} />
-      </div>
+      {/* No hidden wallet detector. A <WalletBar> used to be mounted here
+          off-screen for the sole purpose of firing `onWalletChange` into
+          ChatContext on load; the provider reads `useWallet()` itself now, so
+          the connected wallet no longer depends on an invisible component
+          being rendered. */}
 
       {/* No <Navbar /> — /app/layout.tsx provides the side navigation */}
 

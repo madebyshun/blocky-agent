@@ -13,7 +13,7 @@ export default function BerylDoc() {
       <DocHeader
         eyebrow="Base Protocol"
         title="Beryl / B20"
-        lead="B20 is Base's native standard for compliant tokenized assets — enforced by a Rust precompile in the node, not EVM bytecode. Enabled by the Beryl upgrade, with mainnet activation scheduled for July 8, 2026 (the exact go-live is gated on-chain by the ActivationRegistry)."
+        lead="B20 is Base's native standard for compliant tokenized assets — enforced by a Rust precompile in the node, not EVM bytecode. Enabled by the Beryl upgrade, and gated on-chain by the ActivationRegistry rather than by a calendar date."
       />
 
       <H2 id="what-is-b20">What is B20?</H2>
@@ -27,11 +27,31 @@ export default function BerylDoc() {
         environment itself, activated by the <strong>Beryl</strong> network upgrade.
       </P>
 
+      {/* No date here, on purpose. This callout used to read "Mainnet: scheduled
+          July 8, 2026" — future tense, on a public page, about a day that had
+          been and gone 61 days earlier. Worse, it was a THIRD date: the code
+          gate uses June 25 (BERYL_TS in lib/b20/registry-logs.ts) and the chat
+          system prompt said June 25 too, so the docs disagreed with the product
+          in both directions at once.
+
+          And it was measurably false at the time it was rewritten. The
+          ActivationRegistry (0x8453…0001) answers isActivated() on-chain;
+          reading it on 2026-09-06 returned asset:true, stablecoin:true for
+          mainnet AND sepolia. So this box told a reader "not live yet" and then
+          linked them to the B20 Hub, which correctly showed it live — one click
+          apart.
+
+          A promise with a date in it rots SILENTLY: the string never changes,
+          only the calendar does, so no type-check and no test can fail on it.
+          Name the authority instead of the day, and the sentence stays true
+          whenever it is read. */}
       <Callout color="#4FC3F7" title="Beryl Activation">
-        Mainnet: scheduled July 8, 2026 (exact go-live gated on-chain by the ActivationRegistry).
-        {" "}Base Sepolia: already active.
-        {" "}Use the <a href="/app/b20" className="underline">B20 Hub</a> to inspect tokens, check roles,
-        and browse the on-chain registry.
+        Activation is gated on-chain by the <strong>ActivationRegistry</strong>{" "}
+        (<code className="text-slate-300">0x8453…0001</code>), which can flip up to ~1h after the
+        Beryl hardfork lands on a network — so the registry, not a scheduled date, is the
+        authority.
+        {" "}Use the <a href="/app/b20" className="underline">B20 Hub</a> to see the live status,
+        inspect tokens, check roles, and browse the on-chain registry.
       </Callout>
 
       <H2 id="variants">Two Variants</H2>

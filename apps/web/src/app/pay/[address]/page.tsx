@@ -196,10 +196,29 @@ function OrderPay({ id, payToParam, amountParam, label }: {
             {finalTx && <a href={`https://basescan.org/tx/${finalTx}`} target="_blank" rel="noopener noreferrer" className="block font-mono text-[10px] text-slate-500 mt-1">tx ↗</a>}
           </div>
         ) : !B20_ENABLED ? (
-          <button disabled className="w-full font-mono text-[12px] font-bold py-2.5 rounded-xl opacity-60 cursor-not-allowed"
-            style={{ background: "#1A1A2E", color: "#94a3b8" }}>
-            B20 payments go live June 25
-          </button>
+          /* This is the most exposed of the three stale-date strings this
+             commit removes, and the only PUBLIC one: /pay/<id> is the link a
+             merchant sends to a customer, so this button is what someone
+             trying to hand over money actually sees.
+
+             It read "B20 payments go live June 25" — future tense, disabled,
+             74 days after that date had passed. A payer following a shared
+             link hit a dead control quoting a deadline the product had already
+             missed, with no hint of what to do instead and no way to tell
+             whether the link was broken or the feature simply absent.
+
+             No date now: the flag gates the payment code, so the flag is what
+             may speak about it. And the amount, id and description above are
+             still real and still worth showing — the request is legible even
+             when this rail cannot settle it — so this says what is off and
+             hands the payer back to the merchant rather than dead-ending. */
+          <div className="rounded-xl p-3 font-mono text-[11px] text-slate-400 leading-relaxed"
+            style={{ border: "1px solid #F59E0B30", background: "#F59E0B0d" }}>
+            <span className="text-[#F59E0B] font-bold">Can&apos;t be paid here.</span>{" "}
+            On-chain USDC settlement is not enabled for this link. The amount and
+            reference above are the real request — ask the merchant how
+            they&apos;d like to receive it.
+          </div>
         ) : !tokenReady ? (
           <div className="font-mono text-[10px] text-slate-500 leading-relaxed rounded-xl p-3" style={{ border: "1px solid #1A1A2E", background: "#0d0d12" }}>
             B20 USDC token address is not configured yet. Check back shortly.

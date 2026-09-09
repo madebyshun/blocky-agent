@@ -120,7 +120,7 @@ function SyncCard() {
 export default function SettingsPanel({ section }: { section: SettingsSection }) {
   const {
     holderTier,
-    walletAddr, onWalletChange, walletRefresh, triggerWalletRefresh,
+    walletAddr, triggerWalletRefresh,
     credits, countdown, isUnlimited, daily,
   } = useChat();
 
@@ -145,7 +145,7 @@ export default function SettingsPanel({ section }: { section: SettingsSection })
             title="Account"
             subtitle="Your wallet is the identity behind credits, cross-device sync and on-chain actions."
           />
-          <WalletBar onWalletChange={onWalletChange} refreshTrigger={walletRefresh} />
+          <WalletBar />
 
           {/* Network + explorer — only meaningful once connected. */}
           {walletAddr && (

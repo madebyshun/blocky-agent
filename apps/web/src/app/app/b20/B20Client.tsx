@@ -945,12 +945,14 @@ function LaunchTab({ onScanToken, network, setNetwork }: { onScanToken: (addr: s
       });
       const prep = await prepRes.json();
       if (!prep.ok) throw new Error(prep.error || "Prepare failed");
+      // No date in the message. `berylLive` is `now >= activation` against a
+      // hardcoded timestamp (api/b20/prepare), so on mainnet it has been true
+      // since 2026-06-25 and this branch is unreachable there. If it ever fires
+      // again it means the timestamp moved, and quoting the OLD date would be
+      // actively misleading. The real gate is `notActivated` above — an on-chain
+      // isActivated() read — which is what actually blocks the button.
       if (!prep.berylLive) {
-        throw new Error(
-          network === "mainnet"
-            ? "Mainnet Beryl activates June 25, 2026 18:00 UTC"
-            : "B20 factory not active on this network yet",
-        );
+        throw new Error("B20 factory is not active on this network yet.");
       }
 
       if (currentChainId !== net.chainId) {

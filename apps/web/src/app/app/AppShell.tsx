@@ -250,37 +250,51 @@ function AppSideNav() {
         </a>
       </div>
 
-      {/* Grouped nav */}
-      <nav className="flex-1 overflow-y-auto py-2">
-        {/* New chat sits ABOVE the product groups: it is the page's primary
-            action and must never require scrolling past 12 nav rows to reach.
-            Recents stay below the groups — they are the unbounded list, so
-            they get the scroll space rather than pushing the nav off-screen. */}
-        {contextual?.newChat && (
-          <div className="px-2 pb-1">
-            <button
-              onClick={() => contextual.newChat?.()}
-              title={collapsed ? "New chat" : undefined}
-              className={`group w-full flex items-center h-9 rounded-lg transition-colors ${
-                collapsed ? "justify-center" : "gap-3 px-3"
-              }`}
-              style={{ background: "#4FC3F712" }}
-              onMouseEnter={e => { e.currentTarget.style.background = "#4FC3F71f"; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "#4FC3F712"; }}
-            >
-              <svg className="w-4 h-4 text-[#4FC3F7] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              {!collapsed && (
-                <>
-                  <span className="font-mono text-[12px] text-[#4FC3F7] flex-1 text-left tracking-wide">New chat</span>
-                  <span className="font-mono text-[9px] text-slate-600 group-hover:text-slate-400 transition-colors">⌘N</span>
-                </>
-              )}
-            </button>
-          </div>
-        )}
+      {/* New chat — PINNED, outside the scroll container.
+          It used to be the first child of <nav> below, which meant the comment
+          that lived here ("must never require scrolling past 12 nav rows to
+          reach") described an intention the layout did not implement: one
+          `overflow-y-auto` held the button, all 12 nav rows AND the unbounded
+          Recents list, so scrolling down to an older conversation carried the
+          primary action off the top of the sidebar.
 
+          Only this row is lifted out, and the nav groups below are deliberately
+          left scrolling. At the expanded width the groups need roughly
+          4 labels (28px) + 12 rows (36px) ≈ 544px, and on a 800px-tall window
+          the 56px header, the credit chip and the account/home/language/collapse
+          footer already claim ~260px — so a `shrink-0` around the groups would
+          clip the last ones with no way to reach them, which is strictly worse
+          than scrolling to them. A single 36px button never has that problem. */}
+      {contextual?.newChat && (
+        <div className="shrink-0 px-2 pt-2 pb-1">
+          <button
+            onClick={() => contextual.newChat?.()}
+            title={collapsed ? "New chat" : undefined}
+            className={`group w-full flex items-center h-9 rounded-lg transition-colors ${
+              collapsed ? "justify-center" : "gap-3 px-3"
+            }`}
+            style={{ background: "#4FC3F712" }}
+            onMouseEnter={e => { e.currentTarget.style.background = "#4FC3F71f"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "#4FC3F712"; }}
+          >
+            <svg className="w-4 h-4 text-[#4FC3F7] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            {!collapsed && (
+              <>
+                <span className="font-mono text-[12px] text-[#4FC3F7] flex-1 text-left tracking-wide">New chat</span>
+                <span className="font-mono text-[9px] text-slate-600 group-hover:text-slate-400 transition-colors">⌘N</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Grouped nav + recents — the scrolling region. `min-h-0` is load-bearing:
+          without it a flex child refuses to shrink below its content height and
+          the overflow lands on the whole sidebar instead, taking the pinned rows
+          with it. */}
+      <nav className={`flex-1 min-h-0 overflow-y-auto pb-2 ${contextual?.newChat ? "" : "pt-2"}`}>
         {NAV_GROUPS.map((group, gi) => (
           <div key={group.id} className={gi > 0 ? "mt-1" : ""}>
             {collapsed

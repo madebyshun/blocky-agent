@@ -2,31 +2,23 @@
 
 // PanelHost — shared shell for the "promoted panel" Control pages
 // (/app/skills, /app/connectors, /app/cron). Those pages reuse the very same
-// components that render as tabs inside Blue Chat, so they need the same two
-// things the chat surface provides:
+// components that render as tabs inside Blue Chat, so they need what the chat
+// surface provides: <ChatProvider>, because SkillsPanel + CronPanel call
+// useChat() (setInput / crons CRUD). ConnectorsPanel doesn't, but wrapping it
+// is harmless.
 //
-//   1. <ChatProvider> — SkillsPanel + CronPanel call useChat() (setInput /
-//      crons CRUD). ConnectorsPanel doesn't, but wrapping it is harmless.
-//   2. A hidden <WalletBar> detector — drives onWalletChange so the provider
-//      resolves the connected wallet and reads the RIGHT wallet-scoped data
-//      (e.g. that wallet's Scheduled tasks), matching what chat shows.
+// There used to be a second requirement here — a hidden <WalletBar> mounted
+// off-screen purely to fire `onWalletChange` so the provider would resolve the
+// connected wallet and read the RIGHT wallet-scoped data (that wallet's
+// Scheduled tasks). ChatProvider now reads `useWallet()` itself, so the wallet
+// is resolved by being inside the wagmi tree rather than by a component being
+// on screen. Do not reintroduce a detector: an invisible component that exists
+// to keep a duplicate of someone else's state in sync is the bug, not the fix.
 //
 // It also renders the same title/subtitle header the chat tabs use, so a
 // promoted panel looks like a first-class page rather than a bare embed.
 
-import { ChatProvider, useChat } from "@/app/chat/ChatContext";
-import WalletBar from "@/components/WalletBar";
-
-// Mounts inside ChatProvider so it can feed the connected wallet back into the
-// context (kept off-screen — it's a detector, not UI).
-function WalletDetector() {
-  const { onWalletChange, walletRefresh } = useChat();
-  return (
-    <div className="hidden">
-      <WalletBar onWalletChange={onWalletChange} refreshTrigger={walletRefresh} />
-    </div>
-  );
-}
+import { ChatProvider } from "@/app/chat/ChatContext";
 
 export default function PanelHost({
   title,
@@ -39,7 +31,6 @@ export default function PanelHost({
 }) {
   return (
     <ChatProvider>
-      <WalletDetector />
       <div className="flex flex-col h-full bg-[#050508] overflow-hidden">
         {/* Page header — mirrors ChatClient's non-chat tab header. */}
         <div className="flex items-center px-5 sm:px-6 h-14 border-b border-[#1A1A2E] flex-shrink-0">

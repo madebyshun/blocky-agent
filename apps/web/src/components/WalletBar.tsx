@@ -1,64 +1,31 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import {
-  fetchBlueBalance,
-  getTierInfo,
-  getCredits,
-  GUEST_DAILY,
-  TierInfo,
-} from "@/lib/credits";
+import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { WalletPickerModal } from "@/components/WalletPicker";
 
-interface WalletBarProps {
-  onWalletChange?: (address: string | undefined, tier: TierInfo) => void;
-  refreshTrigger?: number; // increment to force balance re-fetch
-}
-
-function fmtCredits(n: number) {
-  if (n >= 10_000) return (n / 1000).toFixed(1) + "k";
-  return n.toLocaleString();
-}
-
-export default function WalletBar({ onWalletChange, refreshTrigger = 0 }: WalletBarProps) {
+/**
+ * WalletBar — "who is connected", and the connect/disconnect control.
+ *
+ * DELIBERATELY NOT A BALANCE. This used to render `<credits> cr` beside the
+ * address, fetched from `/api/credits/balance/[address]` on its own. That put
+ * the same number on screen three times from two independent fetches — the
+ * sidebar chip and the Settings ▸ Credits pane both read ChatContext's copy,
+ * while this one read its own — so the two could disagree while both claimed to
+ * be your balance, and a failed fetch here silently fell back to a *different*
+ * rail (the legacy localStorage daily quota) without saying so. Settings ▸
+ * Credits is the one place that owns the number; this component owns identity.
+ *
+ * It also no longer reports the wallet upward. There was an `onWalletChange`
+ * prop that ChatContext used as its ONLY route to the connected address, which
+ * meant two invisible copies of this component had to stay mounted for chat to
+ * know who you were. ChatContext reads `useWallet()` directly now.
+ */
+export default function WalletBar() {
   // Single wallet surface — address/label/connect/disconnect all come from the
   // shared hook, so the picker + label match every other connect UI.
   const { address, isConnected, label, disconnect, isPending } = useWallet();
-
-  const [tier,    setTier]    = useState<TierInfo>({ tier: "Guest", blueBalance: 0, dailyCr: GUEST_DAILY, discount: 0, color: "#4FC3F7" });
-  const [credits, setCredits] = useState(0);
-  // Ledger balance fetched from /api/credits/balance/[address] — same source
-  // as the dashboard + settings card. Connected wallets render this number;
-  // guests fall back to the localStorage daily quota.
-  const [ledger,  setLedger]  = useState<{ balance: number } | null>(null);
-  const [picker,  setPicker]  = useState(false);
-
-  useEffect(() => {
-    if (!address) {
-      const t = { tier: "Guest" as const, blueBalance: 0, dailyCr: GUEST_DAILY, discount: 0, color: "#4FC3F7" };
-      setTier(t);
-      setCredits(getCredits(undefined) ?? 0);
-      setLedger(null);
-      onWalletChange?.(undefined, t);
-      return;
-    }
-    (async () => {
-      const balance = await fetchBlueBalance(address);
-      const t       = getTierInfo(balance);
-      setTier(t);
-      setCredits(Math.max(0, getCredits(address) ?? 0));
-      onWalletChange?.(address, t);
-
-      try {
-        const res = await fetch(`/api/credits/balance/${address}`);
-        const d   = await res.json();
-        const bal = Number(d?.balance);
-        if (Number.isFinite(bal)) setLedger({ balance: bal });
-      } catch { /* leave previous ledger in place */ }
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, refreshTrigger]);
+  const [picker, setPicker] = useState(false);
 
   // ── Not connected — connect button opens the shared picker ──────────────────
   if (!isConnected || !address) {
@@ -78,18 +45,18 @@ export default function WalletBar({ onWalletChange, refreshTrigger = 0 }: Wallet
     );
   }
 
-  // ── Connected — static chip + disconnect (no popup; full detail lives in the
-  //    surrounding Settings card) ───────────────────────────────────────────
+  // ── Connected — address chip + disconnect ───────────────────────────────────
+  // The dot is a literal, not `tier.color`: getTierInfo() has returned the same
+  // primary for every wallet since the token-free move, so a variable here would
+  // imply a distinction the app no longer makes.
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 font-mono text-xs px-3 py-2 rounded-lg border border-[#1A1A2E] bg-[#0D0D14]">
-        <span className="w-2 h-2 rounded-full shrink-0"
-          style={{ background: tier.color, boxShadow: `0 0 6px ${tier.color}` }} />
-        <span className="text-slate-300">{label}</span>
-        <span className="text-slate-600">·</span>
-        <span style={{ color: "#4FC3F7" }}>
-          {fmtCredits(ledger?.balance ?? credits)} cr
-        </span>
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{ background: "#4FC3F7", boxShadow: "0 0 6px #4FC3F7" }}
+        />
+        <span className="text-slate-300 truncate">{label}</span>
       </div>
       <button
         onClick={() => disconnect()}

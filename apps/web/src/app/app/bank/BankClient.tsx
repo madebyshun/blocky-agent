@@ -32,6 +32,7 @@ import { WALLET_CHAINS, WALLET_CHAIN_ORDER, type WalletChain } from "@/lib/walle
 import { YIELD_NETWORKS, ERC20_ABI, ERC4626_ABI, VENUES } from "@/lib/yield-execution";
 import { MoveToYieldCard, SendCard } from "@/app/chat/components/ToolCards";
 import { useBasename, shortAddr } from "@/lib/useBasename";
+import Avatar from "@/components/Avatar";
 import QrScanner from "./QrScanner";
 import SwapCard, { type SellPreset } from "./SwapCard";
 import { parsePaymentQr, buildPaymentUri, type ParsedPayment } from "@/lib/payment-qr";
@@ -47,8 +48,8 @@ import StockTable from "./StockTable";
 import type { WalletHolding } from "@/lib/wallet/holdings";
 import { useWalletIdentity } from "@/lib/wallet/identity";
 // WHO is signed in, as opposed to WHAT wallet is attached — see the note at the
-// `who` derivation below for why this page needs both and why they are not the
-// same import.
+// `identityCard` derivation below for why this page needs both and why they are
+// not the same import.
 import { resolveIdentity } from "@/lib/identity/account-identity";
 import { usePrivyIdentity } from "@/lib/privy/identity-bridge";
 import { buildWalletState } from "@/lib/state";
@@ -110,41 +111,50 @@ export default function BankPage() {
   //
   // TWO different things on this page are called "identity" and they answer
   // different questions. `identity` (further down, `useWalletIdentity`) is about
-  // the WALLET — connector family, smart account, passkey. `who` is about the
-  // PERSON. Keeping the names apart is the point; conflating them is how a
-  // greeting ends up addressing someone by their connector.
+  // the WALLET — connector family, smart account, passkey. `identityCard` is
+  // about the PERSON. Keeping the names apart is the point; conflating them is
+  // how a greeting ends up addressing someone by their connector.
   //
-  // The ladder is `resolveIdentity`, imported unchanged from
+  // The ladder is `resolveIdentity`, imported from
   // lib/identity/account-identity.ts and shared with the account menu in the app
   // shell and with /signup. That is the fix: this page had its own local ladder
-  // (`name ?? fname ?? shortAddr`) with NO social rung at all, so a user who
-  // signed in with Google — and who is greeted by name in the menu directly
-  // above this header — was greeted here as `0x2266…608E`, an identifier they
+  // (`name ?? fname ?? shortAddr`), inline in four places, with NO social rung at
+  // all — so a user who signed in with Google, GitHub, Discord or email had a
+  // real name in the shell's account menu directly above this header and a raw
+  // `0x2266…608E` here, on the same screen, two inches apart: an identifier they
   // have never seen and did not choose. One ladder means the two places agree by
   // construction rather than by two copies happening to be edited together.
+  //
+  // `fname` goes THROUGH the ladder as `farcasterName` rather than being spliced
+  // in after it. This call site used to do the splice itself — `who.source ===
+  // "address" ? (fname ?? who.displayName) : …` — which produced the right
+  // string with the WRONG PROVENANCE: the card still read `source: "address"`
+  // while displaying a Farcaster handle, so every consumer that branches on
+  // `source` (the greeting below is one) was reading a label that did not
+  // describe the value beside it. The ladder now owns a `farcaster` rung at
+  // exactly the rank the splice gave it — below a Basename, above a bare
+  // address — and the label matches the value by construction.
   //
   // `usePrivyIdentity()` is a plain `useContext` and returns `null` on the
   // Privy-off tree, so this is safe to call unconditionally on both trees.
   const privy = usePrivyIdentity();
-  const who = resolveIdentity({
+  const identityCard = resolveIdentity({
     social: privy?.social ?? null,
     basename: name ?? null,
+    farcasterName: fname,
     address: acct ?? null,
     shortAddress: acct ? shortAddr(acct) : null,
   });
-  // `fname` is spliced in HERE rather than passed to `resolveIdentity` as the
-  // basename. It is a Farcaster username resolved from the address via Pinata
-  // (the effect above) — a real name, but `resolveIdentity` stamps a `source` on
-  // what it returns, and handing it a Farcaster name through the `basename` slot
-  // would label its provenance as a Basename. It keeps the rank the old local
-  // ladder gave it: below a Basename, above a bare address. `source ===
-  // "address"` is precisely "the ladder found nothing better than 0x…", which is
-  // the only case fname improves on.
+  // TRUE only when we have a name a human chose. The greeting hangs off this:
+  // "Good evening, 0x9f3a…c41d" addresses a hex string in the second person,
+  // and no fallback string fixes that — the fix is not to use the personal
+  // register when we do not know the person.
+  const isNamed = identityCard.source != null && identityCard.source !== "address";
   // Total (`string`, never null) so no consumer has to re-guess a fallback —
   // that re-guessing is how four different ladders got here in the first place.
   // The trailing `shortAddr` is `resolveIdentity`'s own last rung repeated for
-  // the nothing-connected case, and matches what the old local ladder ended on.
-  const displayName = (who.source === "address" ? (fname ?? who.displayName) : who.displayName) ?? shortAddr(acct);
+  // the nothing-connected case, where there is no address to shorten either.
+  const displayName = identityCard.displayName ?? shortAddr(acct);
 
   // ── Network ──────────────────────────────────────────────────────────────
   // Base MAINNET is the default and must stay that way. This used to default to
@@ -830,12 +840,40 @@ export default function BankPage() {
       allMissions.push({ priority: "good", icon: "✅", text: `$${usd(inYield)} supplied — withdrawable any time`, action: "Withdraw", onAction: () => openAction("withdraw"), color: "#34D399" });
     if (ethBal != null && ethBal < 0.005)
       allMissions.push({ priority: "warn", icon: "⛽", text: "ETH too low for gas fees", action: "Get ETH", onAction: () => openAction("convert"), color: "#F59E0B" });
-    // "Try" used to call `openAction("orders")`. With B20_ENABLED off that
-    // opened the action modal onto a panel whose tab had been filtered out of
-    // TABS and whose body had no branch — a modal containing a close button and
-    // nothing else. It now scrolls to a tab that always exists.
-    if (new Date() >= new Date("2026-06-25"))
-      allMissions.push({ priority: "info", icon: "⚡", text: "Beryl live — B20 payments + faster L1 withdrawals", action: "Try", onAction: () => setView("orders"), color: "#4FC3F7" });
+    // A fourth mission used to sit here:
+    //
+    //   if (new Date() >= new Date("2026-06-25"))
+    //     "⚡ Beryl live — B20 payments + faster L1 withdrawals"  [Try]
+    //
+    // It is gone, for two reasons that compound.
+    //
+    // 1. THE CLAIM IS FALSE IN PRODUCTION. B20 payments are gated on
+    //    `NEXT_PUBLIC_B20_ENABLED` (lib/orders.ts), and that variable is not
+    //    set in the production project — measured, 42 vars, not one of them
+    //    this. So the wallet asserted a capability the build had compiled out.
+    //    Same family as #143/#166: advertising something the product cannot do.
+    //
+    //    The root cause is the gate itself. A CALENDAR DATE cannot know whether
+    //    a feature shipped — it only knows that a day someone once expected it
+    //    on has passed. The flag knows. Anything that announces B20 must be
+    //    gated on `B20_ENABLED`, never on a date.
+    //
+    // 2. IT WAS NOT A MISSION. Per this list's own definition four lines up, a
+    //    mission is advice about the user's position. This was a product
+    //    announcement, and a date-gated one, so from 2026-06-25 it was
+    //    unconditionally true forever: a permanent banner holding one of only
+    //    three slots, still calling a 74-day-old upgrade news.
+    //
+    // Those two hid each other. Because it never changed, it read as furniture
+    // and nobody re-checked the claim; because the claim was in an "info" chip
+    // rather than a control, nothing failed when it was wrong. The `Try` button
+    // led to OrdersPanel, which — being honestly gated on the flag — told the
+    // user the opposite in the same click: B20 settlement "goes live June 25",
+    // future tense, 74 days after that date. Two surfaces, one flag, opposite
+    // stories. OrdersPanel's copy is fixed in this commit too.
+    //
+    // When B20 actually ships, the place to say so is OrdersPanel, gated on
+    // B20_ENABLED, where the feature lives.
   }
   const topMissions = allMissions.slice(0, 3);
   // Gated on the BALANCE READ, not on `total`.
@@ -1091,32 +1129,81 @@ export default function BankPage() {
       {/* ── MAIN ────────────────────────────────────────────────────────── */}
       <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
 
-        {/* Header h-14: greeting + trust chips */}
+        {/* Header h-14: identity + trust chips.
+            The greeting is CONDITIONAL, which is the whole fix. It used to read
+            `Good {greeting}, {name ?? fname ?? shortAddr(acct)}` unconditionally,
+            so a wallet with no Basename — the common case, and the ONLY case for
+            anyone who signed in with Google/GitHub/Discord/email — got
+            "Good evening, 0x9f3a…c41d": a time-of-day pleasantry aimed at a hex
+            string. Two separate defects were stacked there:
+
+              1. the name lookup skipped `social` entirely (see identityCard
+                 above), so the app knew the person's name and didn't ask; and
+              2. the personal register was used even when nothing personal was
+                 known, which no fallback string can repair.
+
+            Named  → greet them, and say what the address is underneath.
+            Unnamed → no greeting. The address is the heading, because that IS
+            the identity, and the second line offers the way to get a name. */}
         <div className="px-4 sm:px-5 h-14 flex items-center justify-between gap-3 border-b border-[#1A1A2E] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            <Identicon address={acct} />
+            {/* Same <Avatar> as the shell account menu, from the same seed, so
+                one person is one colour everywhere. It falls back to the address
+                gradient — pixel-for-pixel what the local `Identicon` drew, since
+                avatarHues() keeps that component's exact hex slices for anything
+                shaped like an address — when there are no initials. So the
+                unnamed case is visually unchanged and only the named case gains
+                anything. `Identicon` itself is gone; see the note by AssetPill. */}
+            <Avatar
+              photoUrl={identityCard.photoUrl}
+              initials={identityCard.initials}
+              colorSeed={identityCard.colorSeed}
+              size={32}
+            />
             <div className="min-w-0">
-              <p className="font-mono text-[13px] text-white">
-                Good {greeting}, <span className="text-[#4FC3F7]">{displayName}</span>
-              </p>
-              {/* The same `trustChips`, and `sm:hidden` against the row's
-                  `hidden sm:flex` — complementary, so exactly one of the two is
-                  ever on screen. It used to be the literal string
-                  "{net.short} · Non-custodial · You hold the keys", which put
-                  BOTH of those claims twice inside one 56px bar at `sm` and up.
-                  Worse, this copy was always plain grey while the chip beside it
-                  turns amber on testnet: the header said "Sepolia" calmly and
-                  "Sepolia" alarmingly, 200px apart, and the calm one was wrong.
-                  It carries the warn colour now, because below `sm` it is the
-                  only carrier.
+              {/* CONDITIONAL, which is what the note above describes. An
+                  unconditional greeting under that note would be a comment
+                  documenting behaviour the code does not have — and the
+                  behaviour it documents is the correct one. Unnamed, the
+                  address IS the heading, which is also why the second line
+                  below does not repeat it. */}
+              {isNamed ? (
+                <p className="font-mono text-[13px] text-white truncate">
+                  Good {greeting}, <span className="text-[#4FC3F7]">{identityCard.displayName}</span>
+                </p>
+              ) : (
+                <p className="font-mono text-[13px] text-white truncate">{displayName}</p>
+              )}
+              {/* Second line — TWO jobs, and they do not share a width rule:
 
-                  "You hold the keys" went with it. It is not a fourth claim —
-                  it is "Non-custodial" restated in plain English, and a synonym
-                  is still a copy. */}
+                  · the ADDRESS, but only when the heading is a name. That is
+                    the "say what the address is underneath" half of the note
+                    above; unnamed it would print the heading twice.
+                  · the `trustChips`, but only below `sm`, against the row's
+                    `hidden sm:flex` — complementary, so each chip is on screen
+                    exactly once. This was the literal string
+                    "{net.short} · Non-custodial · You hold the keys", which put
+                    BOTH of those claims twice inside one 56px bar at `sm` and
+                    up. Worse, that copy was always plain grey while the chip
+                    beside it turns amber on testnet: the header said "Sepolia"
+                    calmly and "Sepolia" alarmingly, 200px apart, and the calm
+                    one was wrong. It carries the warn colour now, because below
+                    `sm` it is the only carrier.
+
+                    "You hold the keys" went with it. It is not a fourth claim —
+                    it is "Non-custodial" restated in plain English, and a
+                    synonym is still a copy.
+
+                  Two <p> at every width, never three: the address rides WITH the
+                  chips below `sm` and stands alone above it. `h-14` does not fit
+                  a third line, and the earlier draft of this block emitted one. */}
               <p className="font-mono text-[9px] truncate sm:hidden"
                 style={{ color: trustChips.some(c => c.warn) ? "#F59E0B" : "#475569" }}>
-                {trustChips.map(c => c.label).join(" · ")}
+                {[...(isNamed ? [shortAddr(acct)] : []), ...trustChips.map(c => c.label)].join(" · ")}
               </p>
+              {isNamed && (
+                <p className="font-mono text-[9px] text-slate-600 truncate hidden sm:block">{shortAddr(acct)}</p>
+              )}
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 shrink-0">
@@ -1399,8 +1486,11 @@ export default function BankPage() {
                     saw a lit chip reading `@shun` in the slot whose unlit text
                     is "No Basename" — the chip asserting a Basename that does
                     not exist. Exactly the defect the passkey chip had two
-                    paragraphs up. They still get greeted by name: `displayName`
-                    splices `fname` in at the `source === "address"` rung. */}
+                    paragraphs up. They still get greeted by name: `fname` is a
+                    rung of its own on the shared ladder (`source: "farcaster"`),
+                    ranked below a Basename and above a bare address, so the
+                    header can use the name without this chip having to claim it
+                    came from the Basename registry. */}
                 <IdentityChip label={name ?? "No Basename"} active={!!name} color="#4FC3F7" />
                 {/* "Non-custodial" was a sixth chip here. It is a CONSTANT in a
                     row of five per-user derivations — its own note used to say
@@ -1483,7 +1573,12 @@ export default function BankPage() {
               <div className="rounded-2xl border border-[#1A1A2E] bg-[#0a0a0f] p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
-                    <img src="/logomark.svg" alt="" className="w-4 h-4 opacity-90" />
+                    {/* No `opacity-90`. The mark is a clipped JPEG whose bars
+                        are cut-outs, so fading it does not soften a logo — it
+                        blends the brand blue toward the card and lets the card
+                        bleed through the counters. Full opacity, rounded to the
+                        artwork's own corner. */}
+                    <img src="/logomark.svg" alt="" aria-hidden className="w-4 h-4 rounded-sm" />
                     <span className="font-mono text-[9px] text-slate-500 tracking-widest">AI MISSION CONTROL</span>
                   </div>
                   <button onClick={() => setChatOpen(o => !o)}
@@ -2037,7 +2132,7 @@ export default function BankPage() {
           <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#1A1A2E] shrink-0"
             style={{ background: "#4FC3F708" }}>
             <div className="flex items-center gap-2">
-              <img src="/logomark.svg" alt="BlueAgent" className="w-5 h-5" />
+              <img src="/logomark.svg" alt="" aria-hidden className="w-5 h-5 rounded-md" />
               <span className="font-mono text-[11px] text-[#4FC3F7] font-bold">BlueAgent</span>
               <span className="font-mono text-[9px] text-slate-600">Wallet mode</span>
             </div>
@@ -2049,8 +2144,20 @@ export default function BankPage() {
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {chatMessages.length === 0 && (
               <div className="space-y-1.5">
-                <div className="font-mono text-[10px] text-slate-600 mb-2">Ask anything about your wallet:</div>
-                {["What's my best yield option?", "How do I send USDC?", "Show my balance breakdown"].map(q => (
+                {/* These three are the assistant's ACTUAL brief, copied off the
+                    system prompt above ("balances, sending and receiving on
+                    Base, and withdrawing supplied funds"), not a wish list.
+
+                    The first one used to be "What's my best yield option?" — a
+                    question the very same prompt instructs the model to refuse:
+                    "Do not recommend yield strategies or quote APYs — this
+                    wallet no longer offers them." The product offered a chip
+                    and then declined to answer it. That is the #143/#166 defect
+                    (advertising a capability the model does not have) in its
+                    smallest possible form, and it survived the Earn removal
+                    because the prompt was updated and the chips were not. */}
+                <div className="font-mono text-[10px] text-slate-600 mb-2">Balances, sending, and withdrawals on {net.short}:</div>
+                {["Show my balance breakdown", "How do I send USDC?", "How do I withdraw supplied funds?"].map(q => (
                   <button key={q} onClick={() => sendChat(q)}
                     className="w-full text-left font-mono text-[10px] px-2 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
                     style={{ background: "#0d0d12", border: "1px solid #1A1A2E" }}>
@@ -2092,22 +2199,39 @@ export default function BankPage() {
         </div>
       )}
 
-      {/* ── FAB: simple toggle, moves up when chat open ───────────────────── */}
+      {/* ── FAB: simple toggle, moves up when chat open ─────────────────────
+          The plate is DARK in both states. It used to flip to `#4FC3F7` when
+          closed — i.e. exactly when the logomark is the thing on it — and that
+          is the reported logo-background bug, for a reason that is a property of
+          the asset rather than a matter of taste:
+
+          `/logomark.svg` is a JPEG (no alpha) clipped by an SVG path, and that
+          path punches the mark's two vertical bars out as HOLES. So the negative
+          space of the logo is transparent and whatever sits behind it becomes
+          part of the mark. On the cyan plate the bars rendered cyan-on-blue —
+          the logo's own counters filled with a colour it never contains — while
+          on every other surface in the app (all dark) they read as intended.
+
+          Same reason the img carries `rounded-md`: the artwork is a rounded
+          square with a ~24% radius, so square corners clip the curve. Every
+          other `/logomark.svg` in this repo is already wrapped in a `rounded-*`;
+          the three in this file were the exceptions. */}
       <button
         onClick={() => setChatOpen(o => !o)}
         className="fixed z-[65] w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all hover:shadow-[0_0_24px_#4FC3F750]"
         style={{
           right: "16px",
           bottom: chatOpen ? "444px" : "16px",
-          background: chatOpen ? "#050508" : "#4FC3F7",
-          color: chatOpen ? "#4FC3F7" : "#050508",
+          background: "#050508",
+          color: "#4FC3F7",
           border: "2px solid #4FC3F7",
-          transition: "bottom 0.2s ease, background 0.15s ease",
+          transition: "bottom 0.2s ease",
         }}
+        aria-label={chatOpen ? "Close BlueAgent" : "Ask BlueAgent"}
       >
         {chatOpen
           ? <span className="text-base leading-none">✕</span>
-          : <img src="/logomark.svg" alt="BlueAgent" className="w-6 h-6" />
+          : <img src="/logomark.svg" alt="" aria-hidden className="w-7 h-7 rounded-md" />
         }
       </button>
 
@@ -2117,19 +2241,18 @@ export default function BankPage() {
 
 // ── UI primitives ─────────────────────────────────────────────────────────────
 
-function Identicon({ address }: { address?: string }) {
-  const hue = (s: string, fallback: number) => {
-    const n = parseInt(s, 16);
-    return Number.isFinite(n) ? n % 360 : fallback;
-  };
-  const a = address ?? "0x000000";
-  const h1 = hue(a.slice(2, 6), 200);
-  const h2 = hue(a.slice(-4), 280);
-  return (
-    <span className="w-8 h-8 rounded-full shrink-0 border border-[#1A1A2E]"
-      style={{ background: `linear-gradient(135deg, hsl(${h1} 70% 55%), hsl(${h2} 70% 45%))` }} />
-  );
-}
+// `Identicon` lived here — an address-seeded two-hue gradient swatch. Its one
+// call site was the header avatar, now <Avatar>, which draws the SAME gradient
+// from the SAME hues for an address (avatarHues() keeps Identicon's exact
+// `parseInt(slice, 16) % 360` on anything matching /^0x[0-9a-f]{40}$/), and a
+// photo or initials when the account actually has a name. So this is not a
+// swatch that was replaced by a different swatch: it is the bottom rung of a
+// ladder, extracted so the wallet and the shell account menu share it.
+//
+// Deleted rather than left behind, on the same rule as `AssetRow` below: it
+// went dead IN this branch, so it is this branch's to remove. A local copy of
+// a shared primitive is how the wallet grew its own identity chain in the first
+// place — the bug this change exists to fix.
 
 function AssetPill({ label, value, color }: { label: string; value: string; color: string }) {
   return (

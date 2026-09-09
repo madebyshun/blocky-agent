@@ -147,18 +147,35 @@ export interface SocialAccount {
  * Resolve the identity ladder.
  *
  * Order is by how much the user recognises it, not by how much data it carries:
- * the name you signed up with beats a Basename, which beats a raw address. A
- * social account is preferred even when a wallet is connected, because on the
- * embedded-wallet path the wallet is an implementation detail of the login.
+ * the name you signed up with beats a Basename, beats a Farcaster handle, beats
+ * a raw address. A social account is preferred even when a wallet is connected,
+ * because on the embedded-wallet path the wallet is an implementation detail of
+ * the login.
+ *
+ * ⚠️ CALL THIS RATHER THAN RE-DERIVING. The wallet page used to run its own
+ * `basename ?? farcaster ?? shortAddress` chain, which skipped `social`
+ * entirely — so a user who signed up with Google was greeted by name in the
+ * sidebar account menu and by `0x9f3a…c41d` on the wallet, two inches apart, on
+ * the same screen. The ladder is only worth having if there is one of it.
  */
 export function resolveIdentity(input: {
   social: SocialAccount | null;
   basename: string | null;
+  /**
+   * A Farcaster username resolved FROM THE ADDRESS (a hub lookup), as opposed to
+   * `social.provider === "farcaster"`, which means the user signed in with it.
+   * Optional, and below `basename` on purpose: this is a Base wallet, so the
+   * Base-native name wins when both exist.
+   *
+   * It sits ABOVE `address` because that rung's whole failure mode is greeting a
+   * hex string as if it were a person. Any real name beats that.
+   */
+  farcasterName?: string | null;
   address: string | null;
   /** Pre-shortened 0x… from useWallet, so the truncation rule lives in one place. */
   shortAddress: string | null;
 }): AccountIdentity {
-  const { social, basename, address, shortAddress } = input;
+  const { social, basename, farcasterName, address, shortAddress } = input;
 
   if (social) {
     const name = social.name || social.handle || (social.email ? emailName(social.email) : null);
@@ -184,6 +201,17 @@ export function resolveIdentity(input: {
       initials: initialsFrom(basename.replace(/\.base\.eth$/i, "")),
       colorSeed: address ?? basename,
       source: "basename",
+    };
+  }
+
+  if (farcasterName) {
+    return {
+      displayName: farcasterName,
+      secondary: shortAddress,
+      photoUrl: null,
+      initials: initialsFrom(farcasterName),
+      colorSeed: address ?? farcasterName,
+      source: "farcaster",
     };
   }
 
