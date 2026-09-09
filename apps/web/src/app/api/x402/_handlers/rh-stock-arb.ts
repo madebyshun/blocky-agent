@@ -59,11 +59,17 @@ export default async function handler(req: Request): Promise<Response> {
         chainlink: chainlink ?? null,
         dex: dex ?? null,
         market,
+        // #227 — `no_usd_anchored_pool` is NOT "no pool found". Pools exist;
+        // they are all quoted against something that is not a dollar, so there
+        // is no USD spot to arb against. Saying "no pool" there would send an
+        // agent looking for liquidity that is sitting right in front of it.
         note: !chainlink && !dex
-          ? "Neither Chainlink feed nor a DEX pool available for this ticker."
+          ? "Neither Chainlink feed nor a USD-anchored DEX pool available for this ticker."
           : !chainlink
             ? "No Chainlink feed available for this ticker."
-            : "No DEX pool found for this token on Robinhood Chain.",
+            : primary.selection === "no_usd_anchored_pool"
+              ? `Token has ${primary.pool_count} pool(s) on Robinhood Chain but none quoted against USDG or WETH ($${primary.unanchored_tvl_usd.toFixed(0)} unanchored TVL). A stock-vs-stock pool is an exchange rate, not a USD price, so no arb verdict is possible.`
+              : "No DEX pool found for this token on Robinhood Chain.",
         data_sources: [
           chainlink ? "Chainlink AggregatorV3 on-chain (RH Chain)" : null,
           dex ? "api.geckoterminal.com (RH Chain)" : null,
@@ -102,15 +108,24 @@ export default async function handler(req: Request): Promise<Response> {
     // downgrades any verdict's confidence).
     const feed_abnormal_stale = market.is_open && chainlink.age_seconds > FEED_FRESH_MAX_AGE_INHOURS_SECONDS;
 
-    // Warnings: `thin_dex_pool` now considers TOTAL token liquidity (all
-    // pools summed), not just the primary pool. Otherwise a $21M
-    // bankr-robinhood WETH pool + a $850k USDG pool would trigger a
-    // dust warning when the token is objectively deep — that would blind
-    // downstream consumers (and Blue Hood's dust gate) to real depth.
+    // Warnings: `thin_dex_pool` considers token liquidity summed across pools,
+    // not just the primary pool. Otherwise a $21M bankr-robinhood WETH pool + a
+    // $850k USDG pool would trigger a dust warning when the token is objectively
+    // deep — that would blind downstream consumers (and Blue Hood's dust gate)
+    // to real depth. Both of those are anchor-quoted (WETH, USDG), so they still
+    // count after #227.
+    //
+    // #227 — `total_tvl_usd` is now ANCHORED-ONLY. That is a deliberate
+    // narrowing of a field that already ships in this paid response: depth
+    // against another stock is not depth you can exit into dollars, so it must
+    // not silence a thin-pool warning. `unanchored_tvl_usd` is emitted
+    // alongside so the excluded liquidity stays visible instead of vanishing —
+    // a consumer that sees the total drop can see exactly where it went.
     const warnings: string[] = [];
     if (!market.is_open) warnings.push(`market_closed_session_${market.session}: Chainlink is frozen on the last regular-hours print; DEX keeps trading 24/7. Verdict reflects post-close drift, NOT arb.`);
     if (feed_abnormal_stale) warnings.push(`feed_abnormally_stale: Chainlink last updated ${chainlink.age_seconds}s ago while market is OPEN — expected <${FEED_FRESH_MAX_AGE_INHOURS_SECONDS}s. Treat verdict as low-confidence.`);
-    if (primary.total_tvl_usd < 5_000) warnings.push(`thin_dex_pool: only $${primary.total_tvl_usd.toFixed(0)} TVL across all ${primary.pool_count} pool(s) — spot may be dominated by a single trade.`);
+    if (primary.total_tvl_usd < 5_000) warnings.push(`thin_dex_pool: only $${primary.total_tvl_usd.toFixed(0)} TVL across ${primary.anchored_pool_count} USD-anchored pool(s) of ${primary.pool_count} total — spot may be dominated by a single trade.`);
+    if (primary.anchored_pool_count < primary.pool_count) warnings.push(`unanchored_liquidity_excluded: $${primary.unanchored_tvl_usd.toFixed(0)} sits in ${primary.pool_count - primary.anchored_pool_count} pool(s) quoted against neither USDG nor WETH. That is an exchange rate in another token, not a dollar market, so it is excluded from TVL and from spot.`);
 
     return Response.json({
       tool: "rh-stock-arb",
@@ -137,8 +152,11 @@ export default async function handler(req: Request): Promise<Response> {
         // explicitly — the naming makes the semantics unambiguous.
         tvl_usd: dex.reserve_usd,
         primary_pool_tvl_usd: dex.reserve_usd,
+        // #227 — anchored-only. `unanchored_tvl_usd` accounts for the rest.
         total_tvl_usd: primary.total_tvl_usd,
+        unanchored_tvl_usd: primary.unanchored_tvl_usd,
         pool_count: primary.pool_count,
+        anchored_pool_count: primary.anchored_pool_count,
         one_side_usd: dex.one_side_usd,
         volume_24h_usd: dex.volume_24h_usd,
         change_24h_pct: dex.change_24h,

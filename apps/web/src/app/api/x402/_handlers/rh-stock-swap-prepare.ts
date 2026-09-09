@@ -90,7 +90,13 @@ export default async function handler(req: Request): Promise<Response> {
       poolsForToken(token.contract),
       resolvePrimaryPool(token.contract, { preferUsdgQuote: denomIn === "USDG" }),
     ]);
-    const pool_spot_usd = primary.pool?.price_usd ?? gtPools[0]?.price_usd ?? null;
+    // #227 — the `?? gtPools[0]?.price_usd` tail that used to close this line
+    // was a second entrance around the anchored selector, and it mattered most
+    // HERE: `spot_usd` sets `amountOutMinimum` on calldata the user signs. A
+    // spot read off an unanchored pool is an exchange rate in some other token,
+    // and it becomes the floor protecting a real swap. Null → the oracle path
+    // below, or a 502; both are honest, neither signs anything.
+    const pool_spot_usd = primary.pool?.price_usd ?? null;
     const chainlink_spot_usd = oracle && !oracle.is_stale ? oracle.price_usd : null;
     const spot_usd = pool_spot_usd ?? chainlink_spot_usd;
     const spot_source: "pool" | "chainlink" | null =
@@ -108,6 +114,8 @@ export default async function handler(req: Request): Promise<Response> {
         const ethQuote = await chainlinkLatest(RH_CHAINLINK_ETH_USD, 86400);
         let weth_usd: number | null = ethQuote?.price_usd ?? null;
         if (!weth_usd) {
+          // anchor-exempt(#227): the predicate IS the anchor (WETH on one side), and
+          // what we read off it is WETH's OWN usd price, not the stock's.
           const wethPool = gtPools.find((p) => p.base_token === ROBINHOOD_MAINNET_VERIFIED_WETH9.toLowerCase() || p.quote_token === ROBINHOOD_MAINNET_VERIFIED_WETH9.toLowerCase());
           weth_usd = wethPool?.counterparty_token_price_usd ?? wethPool?.price_usd ?? null;
         }
@@ -128,7 +136,10 @@ export default async function handler(req: Request): Promise<Response> {
     }
 
     // Additional slip from trade impact on the actual pool (xy=k first-order).
-    const one_side_usd = primary.pool?.one_side_usd ?? ((gtPools[0]?.reserve_usd ?? 0) / 2);
+    // #227 — see `pool_spot_usd`. 0 is the correct unknown: the guards below
+    // are all `one_side_usd > 0`, so an unread depth adds no impact term rather
+    // than an impact term computed from the wrong pool.
+    const one_side_usd = primary.pool?.one_side_usd ?? 0;
     const notional_usd = denomIn === "USDG"
       ? (side === "buy" ? amount : expected_out)
       : (expected_out * (spot_usd ?? 0));

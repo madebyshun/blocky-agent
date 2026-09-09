@@ -81,9 +81,27 @@ export default async function handler(req: Request): Promise<Response> {
       poolsForToken(token.contract),
       resolvePrimaryPool(token.contract, { preferUsdgQuote: denom === "USDG" }),
     ]);
-    const pool_spot_usd = primary.pool?.price_usd ?? gtPools[0]?.price_usd ?? null;
-    const chainlink_spot_usd = oracle && !oracle.is_stale ? oracle.price_usd : null;
-    const spot_usd = pool_spot_usd ?? chainlink_spot_usd;
+    // #227 — dropped a `?? gtPools[0]?.price_usd` tail that bypassed the
+    // anchored selector and priced a RECURRING swap off the deepest pool of any
+    // quote asset. See `resolvePrimaryPool`'s header.
+    const pool_spot_usd = primary.pool?.price_usd ?? null;
+
+    // #227 — a price basis must be FINITE and POSITIVE, not merely non-null.
+    // `chainlinkLatest` does not check the sign or magnitude of the aggregator's
+    // `answer`, so a broken feed reporting 0 arrives here as `price_usd: 0`.
+    // Zero is not null, so it passed the `!== null` test this line used to use,
+    // made `expected_out` Infinity, and threw a RangeError inside `BigInt()`
+    // further down — a 500, not the 502 this handler documents. It did fail
+    // CLOSED (no calldata built, no schedule persisted), so this is a contract
+    // bug rather than a fund leak, but the 502's `detail` below claims an
+    // invariant that the `=== null` predicate did not actually enforce.
+    // Scoped to this handler on purpose: `chainlinkLatest` has other callers and
+    // widening its return contract does not belong in a fund-touching PR.
+    const usable = (n: number | null | undefined): n is number =>
+      typeof n === "number" && Number.isFinite(n) && n > 0;
+
+    const chainlink_spot_usd = oracle && !oracle.is_stale && usable(oracle.price_usd) ? oracle.price_usd : null;
+    const spot_usd = usable(pool_spot_usd) ? pool_spot_usd : chainlink_spot_usd;
     const pool_oracle_delta_pct = (pool_spot_usd !== null && chainlink_spot_usd !== null && chainlink_spot_usd > 0)
       ? +(((pool_spot_usd - chainlink_spot_usd) / chainlink_spot_usd) * 100).toFixed(4)
       : null;
@@ -96,20 +114,47 @@ export default async function handler(req: Request): Promise<Response> {
       } else {
         const ethQuote = await chainlinkLatest(RH_CHAINLINK_ETH_USD, 86400);
         const weth_usd = ethQuote?.price_usd ?? null;
-        if (weth_usd) {
+        if (usable(weth_usd)) {
           amountInHuman = amountUsd / weth_usd;
           expected_out = (amountInHuman * weth_usd) / spot_usd;
         }
       }
     }
 
+    // #227 — refuse instead of signing an unprotected swap.
+    //
+    // This used to fall through with `amountOutMinimum = 0n` whenever the price
+    // was unknown: a swap floor of ZERO, on calldata handed to a caller and on a
+    // schedule a cron worker re-executes every period. Anchoring
+    // `resolvePrimaryPool` makes `expected_out === null` MORE reachable (a token
+    // whose only liquidity is against another stock is now correctly unpriced
+    // rather than priced off an exchange rate), so leaving the 0n tail would have
+    // widened a money-safety hole while fixing a pricing one.
+    //
+    // Same shape as rh-stock-swap-prepare's 502 above: refuse before building
+    // calldata AND before the KV persist, so no unpriceable schedule is ever
+    // registered for the worker to pick up.
+    if (!usable(expected_out)) {
+      return Response.json({
+        tool: "rh-rwa-dca",
+        ticker: token.ticker,
+        error: "Cannot compute an expected_out at this time (no USD-anchored pool spot + no usable oracle).",
+        detail: "A DCA schedule is not registered without a price basis: every period's min_out would be unprotected.",
+        pool_selection: primary.selection,
+        anchored_pool_count: primary.anchored_pool_count,
+        network: RH_CHAIN,
+        timestamp,
+      }, { status: 502 });
+    }
+
     // Include trade-impact so cron-executed periods don't revert either.
-    const one_side_usd = primary.pool?.one_side_usd ?? ((gtPools[0]?.reserve_usd ?? 0) / 2);
+    // #227 — 0 is the correct unknown; the guard below is `one_side_usd > 0`.
+    const one_side_usd = primary.pool?.one_side_usd ?? 0;
     const trade_impact_pct = (one_side_usd > 0 && amountUsd > 0) ? (100 * amountUsd / (one_side_usd + amountUsd)) : 0;
-    const expected_after_impact = expected_out !== null ? expected_out * (1 - trade_impact_pct / 100) : null;
-    const min_out = expected_after_impact !== null ? expected_after_impact * (1 - slippageBps / 10000) : null;
+    const expected_after_impact = expected_out * (1 - trade_impact_pct / 100);
+    const min_out = expected_after_impact * (1 - slippageBps / 10000);
     const amountIn = BigInt(Math.round(amountInHuman * Math.pow(10, quoteDecimals)));
-    const amountOutMinimum = min_out !== null ? BigInt(Math.max(0, Math.floor(min_out * Math.pow(10, token.decimals)))) : 0n;
+    const amountOutMinimum = BigInt(Math.max(0, Math.floor(min_out * Math.pow(10, token.decimals))));
     const deadline = BigInt(nowUnix + 300);
 
     // Build first-run tx calldata (V3-only; V4-only pairs return null with note).
@@ -176,7 +221,7 @@ export default async function handler(req: Request): Promise<Response> {
         min_out_per_period: min_out,
         trade_impact_pct,
         one_side_usd_used: one_side_usd,
-        estimated_total_over_schedule: expected_out !== null ? expected_out * totalPeriods : null,
+        estimated_total_over_schedule: expected_out * totalPeriods,
       },
       first_run: {
         route: built.route,
