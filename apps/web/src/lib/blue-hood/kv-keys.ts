@@ -449,3 +449,51 @@ export function yyyymmdd(d: Date): string {
 export function yyyymmddhh(d: Date): string {
   return `${yyyymmdd(d)}${String(d.getUTCHours()).padStart(2, "0")}`;
 }
+
+// ── 2.3 ACP paid offering — per-job ledger + revenue proof ───────────────────
+//
+// The B2B revenue pillar: when another agent hires Blue Hood via a Virtuals ACP
+// job, the seller adapter (cron-poll) records the job's lifecycle HERE. Two jobs
+// this ledger does:
+//   1. IDEMPOTENCY — a submit lock (kvSetNX) so a job is fulfilled AT MOST once
+//      even if two cron ticks race or a tick retries. Existential: a double
+//      submit could burn escrow / confuse the buyer.
+//   2. REVENUE PROOF + ungraduation early-warning — count completed jobs + sum
+//      USDC collected (the "provable revenue" $IN has and Blue Agent lacked), and
+//      track the CONSECUTIVE-EXPIRE streak so we warn BEFORE ACP's 10-in-a-row
+//      auto-ungraduation, not after.
+//
+// All under `bh:acp:` so the offering can be prefix-scanned/flushed in isolation.
+
+/** One ACP job's full record (state machine + economics). Keyed by on-chain job id. */
+export const kvAcpJob = (jobId: string) => `bh:acp:job:${jobId}`;
+
+/** SET of every job id we've ever seen — enumeration source for the revenue endpoint. */
+export const KV_ACP_JOB_INDEX = "bh:acp:job:index";
+
+/** Atomic submit lock (kvSetNX). Won ⇒ this tick is the sole fulfiller of the job. */
+export const kvAcpSubmitLock = (jobId: string) => `bh:acp:lock:submit:${jobId}`;
+
+/** Poll-cycle overlap guard — one ACP poll runs at a time (mirrors KV_POLL_LOCK). */
+export const KV_ACP_POLL_LOCK = "bh:acp:poll:lock";
+
+/**
+ * Capped, newest-first list of TERMINAL outcomes ("completed" | "rejected" |
+ * "expired"). The consecutive-expire streak = the leading run of "expired" here.
+ * Recomputable from truth (no counter that can drift), one read to evaluate.
+ */
+export const KV_ACP_TERMINAL_LOG = "bh:acp:terminal";
+
+/** Keep a job record long enough to be a durable revenue receipt. */
+export const TTL_ACP_JOB = 60 * 60 * 24 * 90; // 90d
+/** A job never needs re-submitting after a day; lock can expire to bound KV. */
+export const TTL_ACP_SUBMIT_LOCK = 60 * 60 * 24; // 24h
+/** One poll cycle should finish well within this; matches the 2-minute cron cadence. */
+export const TTL_ACP_POLL_LOCK = 60 * 3; // 3 min
+/** Bounds on the two growing structures. */
+export const ACP_TERMINAL_LOG_MAX = 30;
+export const ACP_JOB_INDEX_MAX = 1000;
+/** Warn the operator at this streak — a 4-job buffer under ACP's hard limit. */
+export const ACP_EXPIRE_STREAK_WARN = 6;
+/** ACP auto-ungraduates a graduated agent at this many consecutive expirations. */
+export const ACP_EXPIRE_STREAK_DANGER = 10;

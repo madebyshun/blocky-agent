@@ -22,6 +22,7 @@ describing a cadence nothing ran at.
 | `/api/cron/blue-hood/alert-drain` | `*/2 * * * *` | every 2 min | drains the pending-alert queue to watchlist subscribers (Telegram DM + Web Push). Auth: `Authorization: Bearer $CRON_SECRET`. |
 | `/api/cron/blue-hood/archive-watch` | `7 * * * *` | hourly, at :07 | watchdog over the arrow archive — detects holes in the series and reports them rather than silently backfilling. Auth: `Authorization: Bearer $CRON_SECRET`. |
 | `/api/cron/user-tasks` | `*/5 * * * *` | every 5 min | Blue Chat background scheduled tasks — fires the tasks a user switched to Background so they run with the tab closed. Unrelated to Blue Hood; here for the whole-app view. Auth: `Authorization: Bearer $CRON_SECRET`. |
+| `/api/cron/acp-poll` | `*/2 * * * *` | every 2 min | one Virtuals ACP seller poll cycle for paid Offering #1 (`execution-plan`): connect → hydrate active jobs → act by status → stop. **Costs ZERO KV reads until the operator wires the offering** — `runAcpPollCycle()` reads only `ACP_WALLET_ADDRESS` / `ACP_WALLET_ID` / `ACP_SIGNER_PRIVATE_KEY` from env and returns `skipped:"acp_not_configured"` before touching KV or importing the SDK, so this row does not spend against the Upstash budget that has suspended the database three times (#148). Auth: `Authorization: Bearer $CRON_SECRET`. |
 
 The `/api/cron/feed/daily` row was removed on 2026-09-02 when Blue Feed was
 retired and its cron deleted from `vercel.json`. `research-loop` was labelled
